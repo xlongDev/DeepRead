@@ -42,6 +42,12 @@ pub struct StoredAnnotation {
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// Record-level merge timestamp (sync §51); None for pre-v3 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Tombstone: the record was deleted here and must not resurrect on merge.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -52,6 +58,8 @@ pub struct StoredBookmark {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -114,7 +122,7 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
         })?;
 
     let mut statement = conn
-        .prepare("SELECT id, cfi, color, note, excerpt FROM annotations WHERE book_hash = ?1 ORDER BY rowid")
+        .prepare("SELECT id, cfi, color, note, excerpt, updated_at, deleted FROM annotations WHERE book_hash = ?1 ORDER BY rowid")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query annotations").with_cause(err))?;
     let annotations = statement
         .query_map([hash], |row| {
@@ -124,6 +132,8 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
                 color: row.get(2)?,
                 note: row.get(3)?,
                 excerpt: row.get(4)?,
+                updated_at: row.get(5)?,
+                deleted: row.get(6)?,
             })
         })
         .map_err(|err| {
@@ -135,7 +145,7 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
         })?;
 
     let mut statement = conn
-        .prepare("SELECT id, cfi, label, created_at FROM bookmarks WHERE book_hash = ?1 ORDER BY created_at, rowid")
+        .prepare("SELECT id, cfi, label, created_at, deleted FROM bookmarks WHERE book_hash = ?1 ORDER BY created_at, rowid")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query bookmarks").with_cause(err))?;
     let bookmarks = statement
         .query_map([hash], |row| {
@@ -144,6 +154,7 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
                 cfi: row.get(1)?,
                 label: row.get(2)?,
                 created_at: row.get(3)?,
+                deleted: row.get(4)?,
             })
         })
         .map_err(|err| {
@@ -208,22 +219,31 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
     }
     for annotation in &state.annotations {
         tx.execute(
-            "INSERT INTO annotations (id, book_hash, cfi, color, note, excerpt) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO annotations (id, book_hash, cfi, color, note, excerpt, updated_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 annotation.id,
                 hash,
                 annotation.cfi,
                 annotation.color,
                 annotation.note,
-                annotation.excerpt
+                annotation.excerpt,
+                annotation.updated_at,
+                annotation.deleted
             ],
         )
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save annotation").with_cause(err))?;
     }
     for bookmark in &state.bookmarks {
         tx.execute(
-            "INSERT INTO bookmarks (id, book_hash, cfi, label, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![bookmark.id, hash, bookmark.cfi, bookmark.label, bookmark.created_at],
+            "INSERT INTO bookmarks (id, book_hash, cfi, label, created_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                bookmark.id,
+                hash,
+                bookmark.cfi,
+                bookmark.label,
+                bookmark.created_at,
+                bookmark.deleted
+            ],
         )
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save bookmark").with_cause(err))?;
     }
@@ -290,12 +310,15 @@ mod tests {
                 color: "#f5d76e".into(),
                 note: None,
                 excerpt: Some("被高亮的句子".into()),
+                updated_at: Some("2026-09-09T00:00:00Z".into()),
+                deleted: false,
             }],
             bookmarks: vec![StoredBookmark {
                 id: "bm1".into(),
                 cfi: "epubcfi(/6/4)".into(),
                 label: Some("第一章".into()),
                 created_at: "2026-09-09T00:00:00Z".into(),
+                deleted: false,
             }],
             updated_at: "2026-09-09T00:00:00Z".into(),
         }

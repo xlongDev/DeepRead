@@ -314,7 +314,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         }
         if (restored) {
           setAnnotations(restored.annotations)
-          for (const record of restored.annotations) {
+          for (const record of restored.annotations.filter((a) => !a.deleted)) {
             await adapter.createAnnotation(toDomainAnnotation(record, book.bookId))
           }
           setBookmarks(restored.bookmarks)
@@ -481,6 +481,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       cfi: selection.cfi,
       color: HIGHLIGHT_COLOR,
       excerpt: selection.text.slice(0, 500),
+      updatedAt: new Date().toISOString(),
     }
     await adapter.createAnnotation(toDomainAnnotation(record, book.bookId))
     setAnnotations((current) => [...current, record])
@@ -494,7 +495,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     const record = annotations.find((a) => a.cfi === activeAnnotation)
     if (!record) return
     await adapter.removeAnnotation(record.id)
-    setAnnotations((current) => current.filter((a) => a.id !== record.id))
+    // Keep a tombstone so other devices never resurrect this annotation.
+    setAnnotations((current) =>
+      current.map((a) =>
+        a.id === record.id ? { ...a, deleted: true, updatedAt: new Date().toISOString() } : a,
+      ),
+    )
     setActiveAnnotation(null)
     scheduleSave()
   }
@@ -635,7 +641,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     if (!current) return
     const existing = bookmarks.find((b) => b.cfi === current.cfi)
     if (existing) {
-      setBookmarks((list) => list.filter((b) => b.id !== existing.id))
+      setBookmarks((list) => list.map((b) => (b.id === existing.id ? { ...b, deleted: true } : b)))
     } else {
       setBookmarks((list) => [
         ...list,
@@ -646,7 +652,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }
 
   const removeBookmark = (id: string): void => {
-    setBookmarks((list) => list.filter((b) => b.id !== id))
+    setBookmarks((list) => list.map((b) => (b.id === id ? { ...b, deleted: true } : b)))
     scheduleSave()
   }
 
@@ -666,7 +672,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
   const theme = READER_THEMES[themeIndex] ?? READER_THEMES[0]!
   const percent = Math.round(progress.fraction * 1000) / 10
-  const bookmarkedHere = progress.cfi !== null && bookmarks.some((b) => b.cfi === progress.cfi)
+  const liveBookmarks = bookmarks.filter((b) => !b.deleted)
+  const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
 
   const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
     items.map((item) => (
@@ -984,8 +991,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             </>
           )}
 
-          {bookmarks.length > 0 && <p className="reader-section-label">书签</p>}
-          {bookmarks.map((bookmark) => (
+          {liveBookmarks.length > 0 && <p className="reader-section-label">书签</p>}
+          {liveBookmarks.map((bookmark) => (
             <div key={bookmark.id} className="bookmark-row">
               <button
                 type="button"
@@ -1006,7 +1013,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             </div>
           ))}
 
-          {toc.length === 0 && searchResults.length === 0 && bookmarks.length === 0 ? (
+          {toc.length === 0 && searchResults.length === 0 && liveBookmarks.length === 0 ? (
             <p className="reader-toc-empty">这本书没有目录信息。</p>
           ) : (
             renderTocItems(toc, 0)

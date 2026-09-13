@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpenText,
+  Cloud,
   Gear,
   ListBullets,
   MagnifyingGlass,
@@ -22,6 +23,7 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { SyncDrawer } from './SyncDrawer'
 
 const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {
   unsupported: '暂时不认识这个文件格式。目前支持 EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown。',
@@ -169,6 +171,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [sort, setSort] = useState<SortKey>(sortFromStorage)
   const [view, setView] = useState<ViewMode>(viewFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [syncOpen, setSyncOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
   const [appTheme, setAppTheme] = useState<AppTheme>(
     () => (localStorage.getItem('deepread.app-theme') as AppTheme | null) ?? 'pure-white',
@@ -447,6 +450,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
           aria-label="打开设置"
         >
           <Gear size={17} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="chrome-button library-settings-button"
+          onClick={() => setSyncOpen(true)}
+          title="云同步(WebDAV)"
+          aria-label="打开云同步"
+        >
+          <Cloud size={17} weight="regular" aria-hidden />
         </button>
       </header>
 
@@ -742,6 +754,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         <div className="drop-overlay" aria-hidden>
           <div className="drop-overlay-card">松开导入到书架</div>
         </div>
+      )}
+
+      {syncOpen && (
+        <SyncDrawer onRestored={() => void loadBooks()} onClose={() => setSyncOpen(false)} />
       )}
 
       {settingsOpen && (

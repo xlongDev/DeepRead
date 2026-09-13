@@ -40,6 +40,7 @@ export const ErrorCodes = {
   bookOpenFailed: 'BOOK_OPEN_FAILED',
   bookParseFailed: 'BOOK_PARSE_FAILED',
   ttsProviderError: 'TTS_PROVIDER_ERROR',
+  syncProviderError: 'SYNC_PROVIDER_ERROR',
 } as const satisfies Record<string, ErrorCode>
 
 export type KnownErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]

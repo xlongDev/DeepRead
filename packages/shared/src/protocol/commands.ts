@@ -39,6 +39,14 @@ export const COMMAND = {
   cardsRemove: 'cards.remove',
   cardsReview: 'cards.review',
   ttsAudio: 'tts.audio',
+  cloudConfigGet: 'cloud.config.get',
+  cloudConfigSave: 'cloud.config.save',
+  cloudConfigTest: 'cloud.config.test',
+  cloudConfigClear: 'cloud.config.clear',
+  cloudWebdavGet: 'cloud.webdav.get',
+  cloudWebdavPut: 'cloud.webdav.put',
+  cloudBackup: 'cloud.backup',
+  cloudRestore: 'cloud.restore',
   secretSet: 'secret.set',
   secretGet: 'secret.get',
   secretDelete: 'secret.delete',
@@ -68,6 +76,10 @@ export interface AnnotationRecord {
   readonly color: string
   readonly note?: string
   readonly excerpt?: string
+  /** Record-level merge timestamp (sync §51); absent for pre-v3 rows. */
+  readonly updatedAt?: ISO8601
+  /** Tombstone: deleted on this device; kept so sync never resurrects it. */
+  readonly deleted?: boolean
 }
 
 /** One bookmark: a named CFI anchor in the book. */
@@ -76,6 +88,8 @@ export interface BookmarkRecord {
   readonly cfi: string
   readonly label?: string
   readonly createdAt: ISO8601
+  /** Tombstone: deleted on this device; kept so sync never resurrects it. */
+  readonly deleted?: boolean
 }
 
 /** Per-book reader state, persisted keyed by the hash of the book file. */
@@ -415,6 +429,73 @@ export interface TtsAudioResponse {
   readonly cached: boolean
 }
 
+/** WebDAV cloud configuration (non-secret half; password lives in the keychain). */
+export interface CloudConfig {
+  readonly endpoint: string
+  readonly username: string
+}
+
+export interface CloudConfigGetResponse {
+  readonly config: CloudConfig | null
+  readonly deviceId: string
+  readonly deviceName: string
+}
+
+export interface CloudConfigSaveRequest {
+  readonly endpoint: string
+  readonly username: string
+  readonly password: string
+}
+
+export interface CloudConfigSaveResponse {
+  readonly config: CloudConfig
+}
+
+/** Probe credentials; empty password reuses the stored one. */
+export interface CloudConfigTestRequest {
+  readonly endpoint: string
+  readonly username: string
+  readonly password: string
+}
+
+export interface CloudConfigTestResponse {
+  readonly ok: boolean
+}
+
+export interface CloudConfigClearResponse {
+  readonly cleared: boolean
+}
+
+/** Raw WebDAV transport used by the frontend merge engine (spec §50-§53). */
+export interface CloudWebdavGetRequest {
+  readonly path: string
+}
+
+export interface CloudWebdavGetResponse {
+  /** null when the remote document does not exist yet. */
+  readonly body: string | null
+}
+
+export interface CloudWebdavPutRequest {
+  readonly path: string
+  readonly body: string
+}
+
+export interface CloudWebdavPutResponse {
+  readonly ok: boolean
+}
+
+/** Snapshot the SQLite database and upload it to WebDAV (spec §126/§53). */
+export interface CloudBackupResponse {
+  readonly remotePath: string
+  readonly bytes: number
+  readonly checksum: string
+}
+
+export interface CloudRestoreResponse {
+  readonly restored: boolean
+}
+
 /** The single source of truth for command request/response shapes. */
 export interface CommandMap {
   [COMMAND.systemPing]: {
@@ -522,6 +603,38 @@ export interface CommandMap {
     readonly request: TtsAudioRequest
     readonly response: TtsAudioResponse
   }
+  [COMMAND.cloudConfigGet]: {
+    readonly request: undefined
+    readonly response: CloudConfigGetResponse
+  }
+  [COMMAND.cloudConfigSave]: {
+    readonly request: CloudConfigSaveRequest
+    readonly response: CloudConfigSaveResponse
+  }
+  [COMMAND.cloudConfigTest]: {
+    readonly request: CloudConfigTestRequest
+    readonly response: CloudConfigTestResponse
+  }
+  [COMMAND.cloudConfigClear]: {
+    readonly request: undefined
+    readonly response: CloudConfigClearResponse
+  }
+  [COMMAND.cloudWebdavGet]: {
+    readonly request: CloudWebdavGetRequest
+    readonly response: CloudWebdavGetResponse
+  }
+  [COMMAND.cloudWebdavPut]: {
+    readonly request: CloudWebdavPutRequest
+    readonly response: CloudWebdavPutResponse
+  }
+  [COMMAND.cloudBackup]: {
+    readonly request: undefined
+    readonly response: CloudBackupResponse
+  }
+  [COMMAND.cloudRestore]: {
+    readonly request: undefined
+    readonly response: CloudRestoreResponse
+  }
   [COMMAND.aiArtifactSet]: {
     readonly request: AiArtifactSetRequest
     readonly response: AiArtifactSetResponse
@@ -570,9 +683,11 @@ const annotationRecordSchema = z.object({
   color: z.string().min(1).max(32),
   note: z.string().max(4000).optional(),
   excerpt: z.string().max(2000).optional(),
+  updatedAt: iso8601.optional(),
+  deleted: z.boolean().optional(),
 })
 
-const readerStatePayloadSchema = z.object({
+export const readerStatePayloadSchema = z.object({
   progress: z
     .object({ cfi: z.string().min(1).max(2048), fraction: z.number().min(0).max(1) })
     .nullable(),
@@ -584,13 +699,14 @@ const readerStatePayloadSchema = z.object({
         cfi: z.string().min(1).max(2048),
         label: z.string().max(200).optional(),
         createdAt: iso8601,
+        deleted: z.boolean().optional(),
       }),
     )
     .max(2000),
   updatedAt: iso8601,
 })
 
-const libraryBookSchema = z.object({
+export const libraryBookSchema = z.object({
   hash: bookHash,
   fileName: z.string().min(1).max(512),
   format: z.string().min(1).max(16),
@@ -794,6 +910,54 @@ export const ttsAudioResponseSchema = z.object({
   cached: z.boolean(),
 })
 
+const webdavEndpoint = z.string().url().max(512)
+const webdavPath = z
+  .string()
+  .min(1)
+  .max(1024)
+  .refine((value) => !value.includes('\\'), {
+    message: 'path must not contain backslashes',
+  })
+
+export const cloudConfigGetResponseSchema = z.object({
+  config: z.object({ endpoint: webdavEndpoint, username: z.string().min(1).max(256) }).nullable(),
+  deviceId: z.string().min(8).max(64),
+  deviceName: z.string().min(1).max(128),
+})
+export const cloudConfigSaveRequestSchema = z.object({
+  endpoint: webdavEndpoint,
+  username: z.string().min(1).max(256),
+  password: z.string().min(1).max(512),
+})
+export const cloudConfigSaveResponseSchema = z.object({
+  config: z.object({ endpoint: webdavEndpoint, username: z.string().min(1).max(256) }),
+})
+export const cloudConfigTestRequestSchema = z.object({
+  endpoint: webdavEndpoint,
+  username: z.string().min(1).max(256),
+  password: z.string().max(512),
+})
+export const cloudConfigTestResponseSchema = z.object({ ok: z.literal(true) })
+export const cloudConfigClearResponseSchema = z.object({ cleared: z.literal(true) })
+export const cloudWebdavGetRequestSchema = z.object({ path: webdavPath })
+export const cloudWebdavGetResponseSchema = z.object({
+  body: z
+    .string()
+    .max(64 * 1024 * 1024)
+    .nullable(),
+})
+export const cloudWebdavPutRequestSchema = z.object({
+  path: webdavPath,
+  body: z.string().max(64 * 1024 * 1024),
+})
+export const cloudWebdavPutResponseSchema = z.object({ ok: z.literal(true) })
+export const cloudBackupResponseSchema = z.object({
+  remotePath: z.string().min(1).max(1024),
+  bytes: z.number().int().min(0),
+  checksum: z.string().length(64),
+})
+export const cloudRestoreResponseSchema = z.object({ restored: z.literal(true) })
+
 /** Minimal structural interface any zod schema satisfies — keeps the map version-proof. */
 export interface ResponseValidator<T> {
   parse(value: unknown): T
@@ -832,6 +996,14 @@ export const responseValidators: {
   [COMMAND.cardsRemove]: cardsRemoveResponseSchema,
   [COMMAND.cardsReview]: cardsReviewResponseSchema,
   [COMMAND.ttsAudio]: ttsAudioResponseSchema,
+  [COMMAND.cloudConfigGet]: cloudConfigGetResponseSchema,
+  [COMMAND.cloudConfigSave]: cloudConfigSaveResponseSchema,
+  [COMMAND.cloudConfigTest]: cloudConfigTestResponseSchema,
+  [COMMAND.cloudConfigClear]: cloudConfigClearResponseSchema,
+  [COMMAND.cloudWebdavGet]: cloudWebdavGetResponseSchema,
+  [COMMAND.cloudWebdavPut]: cloudWebdavPutResponseSchema,
+  [COMMAND.cloudBackup]: cloudBackupResponseSchema,
+  [COMMAND.cloudRestore]: cloudRestoreResponseSchema,
 }
 
 export const requestValidators: { [K in CommandName]: ResponseValidator<unknown> | undefined } = {
@@ -865,4 +1037,12 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.cardsRemove]: cardsRemoveRequestSchema,
   [COMMAND.cardsReview]: cardsReviewRequestSchema,
   [COMMAND.ttsAudio]: ttsAudioRequestSchema,
+  [COMMAND.cloudConfigGet]: undefined,
+  [COMMAND.cloudConfigSave]: cloudConfigSaveRequestSchema,
+  [COMMAND.cloudConfigTest]: cloudConfigTestRequestSchema,
+  [COMMAND.cloudConfigClear]: undefined,
+  [COMMAND.cloudWebdavGet]: cloudWebdavGetRequestSchema,
+  [COMMAND.cloudWebdavPut]: cloudWebdavPutRequestSchema,
+  [COMMAND.cloudBackup]: undefined,
+  [COMMAND.cloudRestore]: undefined,
 }

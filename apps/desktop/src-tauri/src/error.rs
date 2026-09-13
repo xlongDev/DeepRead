@@ -28,6 +28,7 @@ pub enum ErrorCode {
     BookUnsupportedFormat,
     AiProviderError,
     TtsProviderError,
+    SyncProviderError,
 }
 
 impl ErrorCode {
@@ -45,6 +46,7 @@ impl ErrorCode {
             Self::BookUnsupportedFormat => "BOOK_UNSUPPORTED_FORMAT",
             Self::AiProviderError => "AI_PROVIDER_ERROR",
             Self::TtsProviderError => "TTS_PROVIDER_ERROR",
+            Self::SyncProviderError => "SYNC_PROVIDER_ERROR",
         }
     }
 }

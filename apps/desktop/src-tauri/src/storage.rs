@@ -110,6 +110,19 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX idx_cards_book ON cards(book_hash);
     CREATE INDEX idx_cards_due ON cards(due_at);
     "#,
+    // v3 — Phase 6 cloud sync: record-level timestamps + tombstones so the
+    // merge engine can union annotations/bookmarks across devices, plus a
+    // small key/value store for sync settings (device id, WebDAV endpoint).
+    r#"
+    ALTER TABLE annotations ADD COLUMN updated_at TEXT;
+    ALTER TABLE annotations ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE bookmarks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+
+    CREATE TABLE app_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {
@@ -677,6 +690,31 @@ pub fn restore_from(live: &mut Connection, path: &Path, checksum: &str) -> Resul
     drop(source);
     migrate(live)?;
     Ok(true)
+}
+
+// ---------- App settings (small key/value store) ----------
+
+pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, AppError> {
+    match conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    ) {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => {
+            Err(AppError::new(ErrorCode::StorageIo, "failed to read setting").with_cause(err))
+        }
+    }
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+        rusqlite::params![key, value],
+    )
+    .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save setting").with_cause(err))?;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

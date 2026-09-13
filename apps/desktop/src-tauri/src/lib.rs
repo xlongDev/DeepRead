@@ -6,6 +6,7 @@
 
 mod ai;
 mod cards;
+mod cloud;
 mod commands;
 mod dictionary;
 mod error;
@@ -98,6 +99,14 @@ pub fn run() {
             cards::cards_remove,
             cards::cards_review,
             tts::command_tts_audio,
+            cloud::cloud_config_get,
+            cloud::cloud_config_save,
+            cloud::cloud_config_test,
+            cloud::cloud_config_clear,
+            cloud::cloud_webdav_get,
+            cloud::cloud_webdav_put,
+            cloud::cloud_backup,
+            cloud::cloud_restore,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
