@@ -36,11 +36,13 @@ pub struct AiProviderConfig {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_model: Option<String>,
 }
 
 fn load_providers(conn: &Connection) -> Vec<AiProviderConfig> {
     let mut statement = match conn.prepare(
-        "SELECT id, name, base_url, model, embedding_model FROM ai_providers ORDER BY rowid",
+        "SELECT id, name, base_url, model, embedding_model, tts_model FROM ai_providers ORDER BY rowid",
     ) {
         Ok(statement) => statement,
         Err(_) => return Vec::new(),
@@ -53,6 +55,7 @@ fn load_providers(conn: &Connection) -> Vec<AiProviderConfig> {
                 base_url: row.get(2)?,
                 model: row.get(3)?,
                 embedding_model: row.get(4)?,
+                tts_model: row.get(5)?,
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -61,14 +64,15 @@ fn load_providers(conn: &Connection) -> Vec<AiProviderConfig> {
 
 fn upsert_provider(conn: &Connection, provider: &AiProviderConfig) -> Result<(), AppError> {
     conn.execute(
-        "INSERT OR REPLACE INTO ai_providers (id, name, base_url, model, embedding_model)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO ai_providers (id, name, base_url, model, embedding_model, tts_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             provider.id,
             provider.name,
             provider.base_url,
             provider.model,
-            provider.embedding_model
+            provider.embedding_model,
+            provider.tts_model
         ],
     )
     .map_err(|err| {
@@ -77,9 +81,9 @@ fn upsert_provider(conn: &Connection, provider: &AiProviderConfig) -> Result<(),
     Ok(())
 }
 
-fn provider_by_id(conn: &Connection, id: &str) -> Result<Option<AiProviderConfig>, AppError> {
+pub fn provider_by_id(conn: &Connection, id: &str) -> Result<Option<AiProviderConfig>, AppError> {
     conn.query_row(
-        "SELECT id, name, base_url, model, embedding_model FROM ai_providers WHERE id = ?1",
+        "SELECT id, name, base_url, model, embedding_model, tts_model FROM ai_providers WHERE id = ?1",
         [id],
         |row| {
             Ok(AiProviderConfig {
@@ -88,6 +92,7 @@ fn provider_by_id(conn: &Connection, id: &str) -> Result<Option<AiProviderConfig
                 base_url: row.get(2)?,
                 model: row.get(3)?,
                 embedding_model: row.get(4)?,
+                tts_model: row.get(5)?,
             })
         },
     )
@@ -815,6 +820,7 @@ mod tests {
             base_url: "https://api.deepseek.com/v1".into(),
             model: "deepseek-v4-pro".into(),
             embedding_model: None,
+            tts_model: None,
         };
         assert!(load_providers(&conn).is_empty());
         upsert_provider(&conn, &provider).unwrap();

@@ -92,6 +92,7 @@ export function AiDrawer({
     baseUrl: '',
     model: '',
     embeddingModel: '',
+    ttsModel: '',
     apiKey: '',
   })
   const [messages, setMessages] = useState<readonly ChatUiMessage[]>([])
@@ -152,6 +153,7 @@ export function AiDrawer({
       activeId ?? `cfg-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
     try {
       const embeddingModel = configForm.embeddingModel.trim()
+      const ttsModel = configForm.ttsModel.trim()
       const response = await invokeCommand('ai.config.save', {
         provider: {
           id,
@@ -159,6 +161,7 @@ export function AiDrawer({
           baseUrl: configForm.baseUrl.trim(),
           model: configForm.model.trim(),
           ...(embeddingModel ? { embeddingModel } : {}),
+          ...(ttsModel ? { ttsModel } : {}),
         },
         apiKey: configForm.apiKey.trim(),
       })
@@ -168,7 +171,14 @@ export function AiDrawer({
       ])
       setActiveId(response.provider.id)
       setShowConfig(false)
-      setConfigForm({ name: '', baseUrl: '', model: '', embeddingModel: '', apiKey: '' })
+      setConfigForm({
+        name: '',
+        baseUrl: '',
+        model: '',
+        embeddingModel: '',
+        ttsModel: '',
+        apiKey: '',
+      })
       setError(null)
     } catch (saveError) {
       setError(toAppError(saveError).message)
@@ -729,6 +739,14 @@ export function AiDrawer({
               value={configForm.embeddingModel}
               onChange={(event) =>
                 setConfigForm((form) => ({ ...form, embeddingModel: event.target.value }))
+              }
+            />
+            <input
+              className="ai-input"
+              placeholder="TTS 模型(可选,用于云端朗读)"
+              value={configForm.ttsModel}
+              onChange={(event) =>
+                setConfigForm((form) => ({ ...form, ttsModel: event.target.value }))
               }
             />
             <input

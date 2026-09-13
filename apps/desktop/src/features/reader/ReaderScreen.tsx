@@ -5,6 +5,8 @@ import {
   BookOpen,
   BookmarkSimple,
   Copy,
+  GraduationCap,
+  Headphones,
   Highlighter,
   List,
   MagnifyingGlass,
@@ -42,6 +44,8 @@ import {
 import type { RepairChange } from '@deepread/reader-adapter'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { AiDrawer } from './AiDrawer'
+import { LearningDrawer } from './LearningDrawer'
+import { TtsDrawer } from './TtsDrawer'
 import type { OpenedBook } from '../../lib/book-import'
 
 const READER_THEMES: readonly { readonly label: string; readonly theme: ReaderTheme }[] = [
@@ -168,6 +172,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     accepted: ReadonlySet<string>
   } | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
+  const [ttsOpen, setTtsOpen] = useState(false)
+  const [learningOpen, setLearningOpen] = useState(false)
+  const sectionIndexRef = useRef(0)
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [rebuildPattern, setRebuildPattern] = useState(
     () => localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '',
@@ -215,6 +222,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   useEffect(() => {
     callbacksRef.current = {
       onRelocate: (location) => {
+        if (location.sectionIndex !== undefined) sectionIndexRef.current = location.sectionIndex
         const fraction =
           typeof location.fraction === 'number' && Number.isFinite(location.fraction)
             ? location.fraction
@@ -445,6 +453,25 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     })
     setTocOpen(false)
   }
+
+  /** TTS 听书:当前 section 的纯文本(朗读起点为章首)。 */
+  const ttsGetSectionText = useCallback(async (): Promise<string> => {
+    const adapter = adapterRef.current
+    if (!adapter) return ''
+    return adapter.getSectionText(sectionIndexRef.current)
+  }, [])
+
+  /** TTS 听书:跳到下一个 section;全书结束时返回 false。 */
+  const ttsAdvanceSection = useCallback(async (): Promise<boolean> => {
+    const adapter = adapterRef.current
+    if (!adapter) return false
+    const count = await adapter.getSectionCount()
+    const next = sectionIndexRef.current + 1
+    if (next >= count) return false
+    await adapter.goToSection(next)
+    sectionIndexRef.current = next
+    return true
+  }, [])
 
   const addHighlight = async (): Promise<void> => {
     const adapter = adapterRef.current
@@ -720,10 +747,38 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         <button
           type="button"
           className={`chrome-button${aiOpen ? ' is-active' : ''}`}
-          onClick={() => setAiOpen((open) => !open)}
+          onClick={() => {
+            setAiOpen((open) => !open)
+            setTtsOpen(false)
+            setLearningOpen(false)
+          }}
           title="AI 助手"
         >
           <Sparkle size={18} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`chrome-button${ttsOpen ? ' is-active' : ''}`}
+          onClick={() => {
+            setTtsOpen((open) => !open)
+            setAiOpen(false)
+            setLearningOpen(false)
+          }}
+          title="朗读 / 听书"
+        >
+          <Headphones size={18} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`chrome-button${learningOpen ? ' is-active' : ''}`}
+          onClick={() => {
+            setLearningOpen((open) => !open)
+            setAiOpen(false)
+            setTtsOpen(false)
+          }}
+          title="学习(卡片 / 测验 / 错题本)"
+        >
+          <GraduationCap size={18} weight="regular" aria-hidden />
         </button>
         <button
           type="button"
@@ -1048,6 +1103,26 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             setToc(await adapter.getTableOfContents())
           }}
           onClose={() => setAiOpen(false)}
+        />
+      )}
+
+      {ttsOpen && (
+        <TtsDrawer
+          bookHash={book.hash}
+          bookTitle={title}
+          getSectionText={ttsGetSectionText}
+          advanceSection={ttsAdvanceSection}
+          onClose={() => setTtsOpen(false)}
+        />
+      )}
+
+      {learningOpen && (
+        <LearningDrawer
+          bookHash={book.hash}
+          bookTitle={title}
+          annotations={annotations}
+          getChapterText={ttsGetSectionText}
+          onClose={() => setLearningOpen(false)}
         />
       )}
 

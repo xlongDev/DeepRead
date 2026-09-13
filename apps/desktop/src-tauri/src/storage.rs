@@ -88,6 +88,28 @@ const MIGRATIONS: &[&str] = &[
         dict_path         TEXT NOT NULL
     );
     "#,
+    // v2 — Phase 5: learning cards (SM-2 lite state on the row) + per-provider
+    // TTS model (spec §31: the TTS model configures independently of chat).
+    r#"
+    ALTER TABLE ai_providers ADD COLUMN tts_model TEXT;
+
+    CREATE TABLE cards (
+        id            TEXT PRIMARY KEY,
+        book_hash     TEXT NOT NULL REFERENCES books(hash) ON DELETE CASCADE,
+        front         TEXT NOT NULL,
+        back          TEXT NOT NULL,
+        source        TEXT NOT NULL,
+        cfi           TEXT,
+        ease          REAL NOT NULL DEFAULT 2.5,
+        interval_days REAL NOT NULL DEFAULT 0,
+        reps          INTEGER NOT NULL DEFAULT 0,
+        lapses        INTEGER NOT NULL DEFAULT 0,
+        due_at        TEXT NOT NULL,
+        created_at    TEXT NOT NULL
+    );
+    CREATE INDEX idx_cards_book ON cards(book_hash);
+    CREATE INDEX idx_cards_due ON cards(due_at);
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {

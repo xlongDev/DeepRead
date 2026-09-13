@@ -39,6 +39,7 @@ export const ErrorCodes = {
   bookUnsupportedFormat: 'BOOK_UNSUPPORTED_FORMAT',
   bookOpenFailed: 'BOOK_OPEN_FAILED',
   bookParseFailed: 'BOOK_PARSE_FAILED',
+  ttsProviderError: 'TTS_PROVIDER_ERROR',
 } as const satisfies Record<string, ErrorCode>
 
 export type KnownErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]

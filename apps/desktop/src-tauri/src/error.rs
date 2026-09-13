@@ -27,6 +27,7 @@ pub enum ErrorCode {
     BookOpenFailed,
     BookUnsupportedFormat,
     AiProviderError,
+    TtsProviderError,
 }
 
 impl ErrorCode {
@@ -43,6 +44,7 @@ impl ErrorCode {
             Self::BookOpenFailed => "BOOK_OPEN_FAILED",
             Self::BookUnsupportedFormat => "BOOK_UNSUPPORTED_FORMAT",
             Self::AiProviderError => "AI_PROVIDER_ERROR",
+            Self::TtsProviderError => "TTS_PROVIDER_ERROR",
         }
     }
 }

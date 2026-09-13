@@ -41,6 +41,8 @@ export interface EngineLocation {
   readonly fraction: number | undefined
   readonly tocLabel: string | undefined
   readonly location: { readonly current: number; readonly total: number } | undefined
+  /** Kernel spine index of the section now on screen (TTS/听书 navigation). */
+  readonly sectionIndex: number | undefined
 }
 
 export interface EngineSelection {
@@ -126,6 +128,7 @@ export class FoliateAdapter implements ReaderEngine {
         fraction,
         tocLabel: detail.tocItem?.label,
         location: detail.location,
+        sectionIndex: typeof detail.index === 'number' ? detail.index : undefined,
       })
     })
     view.addEventListener('load', (event) => {
@@ -398,6 +401,37 @@ export class FoliateAdapter implements ReaderEngine {
 
   async previousPage(): Promise<void> {
     await this.#requireView().prev()
+  }
+
+  /** Total kernel spine sections (TTS 听书 uses this to detect book end). */
+  async getSectionCount(): Promise<number> {
+    return this.#requireView().book.sections.length
+  }
+
+  /**
+   * Jump to a spine section by index and wait until its document is actually
+   * mounted, so a follow-up `getSectionText(index)` reads the right content.
+   */
+  async goToSection(index: number): Promise<void> {
+    const view = this.#requireView()
+    await view.goTo(index)
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (view.renderer.getContents().some((content) => content.index === index)) return
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+
+  /**
+   * Plain text of one mounted section (current section when index omitted).
+   * Returns '' when the section document is not mounted yet.
+   */
+  async getSectionText(index?: number): Promise<string> {
+    const view = this.#requireView()
+    const contents = view.renderer.getContents()
+    const content =
+      (index !== undefined ? contents.find((item) => item.index === index) : undefined) ??
+      contents[0]
+    return content?.doc.body.textContent ?? ''
   }
 
   async search(query: string): Promise<readonly SearchResult[]> {

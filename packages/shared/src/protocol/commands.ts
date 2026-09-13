@@ -34,6 +34,11 @@ export const COMMAND = {
   aiArtifactSet: 'ai.artifact.set',
   storageBackup: 'storage.backup',
   storageRestore: 'storage.restore',
+  cardsList: 'cards.list',
+  cardsAdd: 'cards.add',
+  cardsRemove: 'cards.remove',
+  cardsReview: 'cards.review',
+  ttsAudio: 'tts.audio',
   secretSet: 'secret.set',
   secretGet: 'secret.get',
   secretDelete: 'secret.delete',
@@ -157,6 +162,8 @@ export interface AiProviderConfig {
   readonly model: string
   /** Embedding model for RAG; defaults to the chat model when absent. */
   readonly embeddingModel?: string
+  /** Speech-synthesis model for cloud TTS (spec §31: configured separately). */
+  readonly ttsModel?: string
 }
 
 export interface AiConfigListResponse {
@@ -271,7 +278,6 @@ export interface AiArtifactSetResponse {
 export interface StorageBackupRequest {
   readonly path: string
 }
-
 export interface StorageBackupResponse {
   readonly bytes: number
   readonly checksum: string
@@ -323,6 +329,90 @@ export interface ReaderStateSetRequest {
 
 export interface ReaderStateSetResponse {
   readonly savedAt: ISO8601
+}
+
+/** One learning card (flashcard, quiz item or mistake) with SM-2-lite state. */
+export type CardSource = 'highlight' | 'quiz' | 'mistake'
+
+export interface LearningCard {
+  readonly id: string
+  readonly bookHash: string
+  readonly front: string
+  readonly back: string
+  readonly source: CardSource
+  readonly cfi?: string
+  readonly ease: number
+  readonly intervalDays: number
+  readonly reps: number
+  readonly lapses: number
+  readonly dueAt: ISO8601
+  readonly createdAt: ISO8601
+}
+
+export interface CardsListRequest {
+  readonly bookHash?: string
+}
+
+export interface CardsListResponse {
+  readonly cards: readonly LearningCard[]
+}
+
+export interface NewCardInput {
+  readonly id: string
+  readonly front: string
+  readonly back: string
+  readonly source: CardSource
+  readonly cfi?: string
+  readonly dueAt: ISO8601
+}
+
+export interface CardsAddRequest {
+  readonly bookHash: string
+  readonly cards: readonly NewCardInput[]
+}
+
+export interface CardsAddResponse {
+  readonly added: number
+  readonly savedAt: ISO8601
+}
+
+export interface CardsRemoveRequest {
+  readonly id: string
+}
+
+export interface CardsRemoveResponse {
+  readonly removed: boolean
+}
+
+/** The frontend schedules (SM-2 lite, `@deepread/shared/srs`); the backend stores. */
+export interface CardsReviewRequest {
+  readonly id: string
+  readonly ease: number
+  readonly intervalDays: number
+  readonly reps: number
+  readonly lapses: number
+  readonly dueAt: ISO8601
+}
+
+export interface CardsReviewResponse {
+  readonly dueAt: ISO8601
+}
+
+/**
+ * Cloud speech synthesis through the provider proxy (spec §44). Returns the
+ * path of a cached audio file (keyed by a hash of the request) that the
+ * webview plays via the asset protocol.
+ */
+export interface TtsAudioRequest {
+  readonly configId: string
+  readonly text: string
+  readonly voice: string
+  readonly speed?: number
+}
+
+export interface TtsAudioResponse {
+  readonly path: string
+  readonly cached: boolean
 }
 
 /** The single source of truth for command request/response shapes. */
@@ -411,6 +501,26 @@ export interface CommandMap {
   [COMMAND.storageRestore]: {
     readonly request: StorageRestoreRequest
     readonly response: StorageRestoreResponse
+  }
+  [COMMAND.cardsList]: {
+    readonly request: CardsListRequest
+    readonly response: CardsListResponse
+  }
+  [COMMAND.cardsAdd]: {
+    readonly request: CardsAddRequest
+    readonly response: CardsAddResponse
+  }
+  [COMMAND.cardsRemove]: {
+    readonly request: CardsRemoveRequest
+    readonly response: CardsRemoveResponse
+  }
+  [COMMAND.cardsReview]: {
+    readonly request: CardsReviewRequest
+    readonly response: CardsReviewResponse
+  }
+  [COMMAND.ttsAudio]: {
+    readonly request: TtsAudioRequest
+    readonly response: TtsAudioResponse
   }
   [COMMAND.aiArtifactSet]: {
     readonly request: AiArtifactSetRequest
@@ -529,6 +639,7 @@ const aiProviderConfigSchema = z.object({
   baseUrl: z.string().url().max(512),
   model: z.string().min(1).max(128),
   embeddingModel: z.string().min(1).max(128).optional(),
+  ttsModel: z.string().min(1).max(128).optional(),
 })
 
 export const aiConfigListResponseSchema = z.object({
@@ -620,6 +731,69 @@ export const secretGetResponseSchema = z.object({ value: z.string().nullable() }
 export const secretDeleteRequestSchema = z.object({ key: z.string().min(4).max(128) })
 export const secretDeleteResponseSchema = z.object({ deleted: z.boolean() })
 
+const cardSourceSchema = z.enum(['highlight', 'quiz', 'mistake'])
+
+export const cardsListRequestSchema = z.object({ bookHash: bookHash.optional() })
+export const learningCardSchema = z.object({
+  id: z.string().min(1).max(128),
+  bookHash: bookHash,
+  front: z.string().min(1).max(2000),
+  back: z.string().min(1).max(4000),
+  source: cardSourceSchema,
+  cfi: z.string().min(1).max(2048).optional(),
+  ease: z.number().min(1).max(10),
+  intervalDays: z.number().min(0).max(365),
+  reps: z.number().int().min(0).max(100_000),
+  lapses: z.number().int().min(0).max(100_000),
+  dueAt: iso8601,
+  createdAt: iso8601,
+})
+export const cardsListResponseSchema = z.object({
+  cards: z.array(learningCardSchema).max(50_000),
+})
+export const cardsAddRequestSchema = z.object({
+  bookHash: bookHash,
+  cards: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(128),
+        front: z.string().min(1).max(2000),
+        back: z.string().min(1).max(4000),
+        source: cardSourceSchema,
+        cfi: z.string().min(1).max(2048).optional(),
+        dueAt: iso8601,
+      }),
+    )
+    .min(1)
+    .max(200),
+})
+export const cardsAddResponseSchema = z.object({
+  added: z.number().int().min(0).max(200),
+  savedAt: iso8601,
+})
+export const cardsRemoveRequestSchema = z.object({ id: z.string().min(1).max(128) })
+export const cardsRemoveResponseSchema = z.object({ removed: z.boolean() })
+export const cardsReviewRequestSchema = z.object({
+  id: z.string().min(1).max(128),
+  ease: z.number().min(1).max(10),
+  intervalDays: z.number().min(0).max(365),
+  reps: z.number().int().min(0).max(100_000),
+  lapses: z.number().int().min(0).max(100_000),
+  dueAt: iso8601,
+})
+export const cardsReviewResponseSchema = z.object({ dueAt: iso8601 })
+
+export const ttsAudioRequestSchema = z.object({
+  configId: z.string().min(8).max(64),
+  text: z.string().min(1).max(5000),
+  voice: z.string().min(1).max(64),
+  speed: z.number().min(0.25).max(4).optional(),
+})
+export const ttsAudioResponseSchema = z.object({
+  path: z.string().min(1).max(4096),
+  cached: z.boolean(),
+})
+
 /** Minimal structural interface any zod schema satisfies — keeps the map version-proof. */
 export interface ResponseValidator<T> {
   parse(value: unknown): T
@@ -653,6 +827,11 @@ export const responseValidators: {
   [COMMAND.secretSet]: secretDeleteResponseSchema,
   [COMMAND.secretGet]: secretGetResponseSchema,
   [COMMAND.secretDelete]: secretDeleteResponseSchema,
+  [COMMAND.cardsList]: cardsListResponseSchema,
+  [COMMAND.cardsAdd]: cardsAddResponseSchema,
+  [COMMAND.cardsRemove]: cardsRemoveResponseSchema,
+  [COMMAND.cardsReview]: cardsReviewResponseSchema,
+  [COMMAND.ttsAudio]: ttsAudioResponseSchema,
 }
 
 export const requestValidators: { [K in CommandName]: ResponseValidator<unknown> | undefined } = {
@@ -681,4 +860,9 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.secretGet]: secretGetRequestSchema,
   [COMMAND.secretDelete]: secretDeleteRequestSchema,
   [COMMAND.aiConfigList]: undefined,
+  [COMMAND.cardsList]: cardsListRequestSchema,
+  [COMMAND.cardsAdd]: cardsAddRequestSchema,
+  [COMMAND.cardsRemove]: cardsRemoveRequestSchema,
+  [COMMAND.cardsReview]: cardsReviewRequestSchema,
+  [COMMAND.ttsAudio]: ttsAudioRequestSchema,
 }

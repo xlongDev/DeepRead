@@ -5,6 +5,7 @@
 //! unit-testable without a Tauri runtime.
 
 mod ai;
+mod cards;
 mod commands;
 mod dictionary;
 mod error;
@@ -14,6 +15,7 @@ mod secrets;
 mod state;
 mod storage;
 mod timestamps;
+mod tts;
 
 use log::{info, warn};
 use tauri::Emitter;
@@ -35,6 +37,14 @@ pub fn run() {
                 if let Err(err) = app.asset_protocol_scope().allow_file(&book.path) {
                     log::warn!("failed to re-allow asset path {}: {err}", book.path);
                 }
+            }
+            // Cached TTS audio is served to the webview the same way.
+            let tts_cache = tts::cache_dir(&base);
+            if let Err(err) = app
+                .asset_protocol_scope()
+                .allow_directory(&tts_cache, false)
+            {
+                log::warn!("failed to allow tts cache {}: {err}", tts_cache.display());
             }
             app.manage(storage::Db(std::sync::Mutex::new(conn)));
 
@@ -83,6 +93,11 @@ pub fn run() {
             ai::ai_artifact_set,
             storage::storage_backup,
             storage::storage_restore,
+            cards::cards_list,
+            cards::cards_add,
+            cards::cards_remove,
+            cards::cards_review,
+            tts::command_tts_audio,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,

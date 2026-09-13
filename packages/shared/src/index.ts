@@ -1,6 +1,7 @@
 export * from './types'
 export * from './errors'
 export * from './logger'
+export * from './srs'
 export * from './protocol/commands'
 export * from './protocol/events'
 export * from './protocol/errors'
