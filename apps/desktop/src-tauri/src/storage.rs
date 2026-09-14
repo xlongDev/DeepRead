@@ -631,10 +631,13 @@ pub fn backup_to(conn: &Connection, dest_path: &Path) -> Result<u64, AppError> {
             AppError::new(ErrorCode::StorageIo, "failed to create backup directory").with_cause(err)
         })?;
     }
-    let sql = format!(
-        "VACUUM INTO '{}'",
-        dest_path.to_string_lossy().replace('\\', "/")
-    );
+    // VACUUM INTO takes a literal, not a parameter — escape quotes so a path
+    // containing an apostrophe (common in home-dir names) cannot break the SQL.
+    let escaped = dest_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('\'', "''");
+    let sql = format!("VACUUM INTO '{escaped}'");
     conn.execute_batch(&sql).map_err(|err| {
         AppError::new(ErrorCode::StorageIo, "failed to write backup").with_cause(err)
     })?;

@@ -88,7 +88,7 @@ fn getrandom_fill(buffer: &mut [u8]) {
                 .as_nanos()
                 .to_le_bytes(),
         );
-        hasher.update(buffer);
+        hasher.update(&*buffer);
         let digest = hasher.finalize();
         buffer.copy_from_slice(&digest[..buffer.len()]);
     }

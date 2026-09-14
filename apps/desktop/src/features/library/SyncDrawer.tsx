@@ -15,6 +15,7 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
   const [form, setForm] = useState({ endpoint: '', username: '', password: '' })
   const [busy, setBusy] = useState<'test' | 'save' | 'sync' | 'backup' | 'restore' | null>(null)
   const [report, setReport] = useState<SyncReport | null>(null)
+  const [confirmRestore, setConfirmRestore] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -96,9 +97,11 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
 
   const restore = (): Promise<void> =>
     withBusy('restore', async () => {
-      if (!window.confirm('将从云端备份恢复整个数据库,本机现有的进度与批注会被覆盖。继续?')) {
+      if (!confirmRestore) {
+        setConfirmRestore(true)
         return
       }
+      setConfirmRestore(false)
       await invokeCommand('cloud.restore', undefined)
       setMessage('已从云端备份恢复。')
       onRestored()
@@ -177,8 +180,13 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
               <button type="button" disabled={busy !== null} onClick={() => void backup()}>
                 {busy === 'backup' ? '备份中…' : '备份数据库'}
               </button>
-              <button type="button" disabled={busy !== null} onClick={() => void restore()}>
-                {busy === 'restore' ? '恢复中…' : '从云端恢复'}
+              <button
+                type="button"
+                className={confirmRestore ? 'is-danger' : ''}
+                disabled={busy !== null}
+                onClick={() => void restore()}
+              >
+                {busy === 'restore' ? '恢复中…' : confirmRestore ? '确认覆盖本机?' : '从云端恢复'}
               </button>
               <button type="button" disabled={busy !== null} onClick={() => void logout()}>
                 退出
