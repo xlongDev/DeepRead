@@ -10,6 +10,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
+import { check, type Update } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { toAppError, type AppInfo, type LibraryBook } from '@deepread/shared'
 import { extractCover } from '@deepread/reader-adapter'
@@ -178,6 +180,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   )
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
+  const [update, setUpdate] = useState<Update | null>(null)
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null)
+  const [updateBusy, setUpdateBusy] = useState(false)
 
   useEffect(() => {
     document.documentElement.dataset['appTheme'] = appTheme
@@ -360,6 +365,52 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       setBackupBusy(false)
     }
   }, [])
+
+  const IGNORED_VERSION_KEY = 'deepread.update.ignored'
+
+  const checkForUpdates = useCallback(async (): Promise<void> => {
+    setUpdateBusy(true)
+    setUpdateMsg(null)
+    try {
+      const ignored = localStorage.getItem(IGNORED_VERSION_KEY)
+      const found = await check()
+      if (found === null) {
+        setUpdate(null)
+        setUpdateMsg('当前已是最新版本。')
+      } else if (found.version === ignored) {
+        setUpdate(null)
+        setUpdateMsg(`已忽略版本 ${ignored},同一版本不再提示。`)
+      } else {
+        setUpdate(found)
+        setUpdateMsg(`发现新版本 ${found.version}。`)
+      }
+    } catch (checkError) {
+      // Honest failure (spec §132): no update source configured or offline.
+      setUpdateMsg(toAppError(checkError).message)
+    } finally {
+      setUpdateBusy(false)
+    }
+  }, [])
+
+  const installUpdate = useCallback(async (): Promise<void> => {
+    const found = update
+    if (!found) return
+    setUpdateBusy(true)
+    setUpdateMsg('正在下载并安装,完成后将自动重启…')
+    try {
+      await found.downloadAndInstall()
+      await relaunch()
+    } catch (installError) {
+      setUpdateMsg(toAppError(installError).message)
+      setUpdateBusy(false)
+    }
+  }, [update])
+
+  const ignoreUpdate = useCallback((): void => {
+    if (update) localStorage.setItem(IGNORED_VERSION_KEY, update.version)
+    setUpdate(null)
+    setUpdateMsg(`已忽略版本 ${update?.version}。`)
+  }, [update])
 
   const runRestore = useCallback(async (reload: () => void): Promise<void> => {
     const selected = await open({
@@ -802,6 +853,23 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               </button>
             </div>
             {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+            <p className="settings-section-label">更新</p>
+            <div className="segmented">
+              <button type="button" onClick={() => void checkForUpdates()} disabled={updateBusy}>
+                {updateBusy ? '检查中…' : '检查更新'}
+              </button>
+              {update !== null && (
+                <button type="button" onClick={() => void installUpdate()} disabled={updateBusy}>
+                  下载并安装
+                </button>
+              )}
+              {update !== null && (
+                <button type="button" onClick={ignoreUpdate} disabled={updateBusy}>
+                  忽略此版本
+                </button>
+              )}
+            </div>
+            {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
             <p className="settings-section-label">书架偏好(自动保存)</p>
             <p className="ai-privacy">
               排序与视图选择自动记忆;AI 服务在阅读器内的 ✦ 助手里配置(密钥存入系统钥匙串)。

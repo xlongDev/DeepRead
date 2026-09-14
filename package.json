@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Deepread — a local-first, cross-platform AI ebook reader (Personal Reading OS)",
+  "description": "Deepread \u2014 a local-first, cross-platform AI ebook reader (Personal Reading OS)",
   "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": ">=22"
@@ -22,7 +22,8 @@
     "cargo:fmt": "cargo fmt --all",
     "cargo:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
     "fixtures": "bash scripts/make-fixtures.sh",
-    "postinstall": "node scripts/copy-pdfjs-assets.mjs"
+    "postinstall": "node scripts/copy-pdfjs-assets.mjs",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "oxlint": "1.82.0",

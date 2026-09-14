@@ -200,24 +200,47 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     settingsRef.current = { viewMode, fontSize, lineHeight, fontFamily, themeIndex }
   }, [viewMode, fontSize, lineHeight, fontFamily, themeIndex])
 
+  const saveNow = useCallback((): void => {
+    if (!isTauriRuntime()) return
+    void invokeCommand('reader.state.set', {
+      bookHash: book.hash,
+      state: {
+        progress: progressRef.current,
+        annotations: annotationsRef.current,
+        bookmarks: bookmarksRef.current,
+        updatedAt: new Date().toISOString(),
+      },
+    }).catch(() => {
+      // # ponytail: save failures surface on reopen; a retry queue belongs to
+      // the sync engine (Phase 6), not to the reading path.
+    })
+  }, [book.hash])
+
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      if (!isTauriRuntime()) return
-      void invokeCommand('reader.state.set', {
-        bookHash: book.hash,
-        state: {
-          progress: progressRef.current,
-          annotations: annotationsRef.current,
-          bookmarks: bookmarksRef.current,
-          updatedAt: new Date().toISOString(),
-        },
-      }).catch(() => {
-        // # ponytail: save failures surface on reopen; a retry queue belongs to
-        // the sync engine (Phase 6), not to the reading path.
-      })
-    }, SAVE_DEBOUNCE_MS)
-  }, [book.hash])
+    saveTimerRef.current = setTimeout(saveNow, SAVE_DEBOUNCE_MS)
+  }, [saveNow])
+
+  // Crash recovery (spec §128): the debounce can lose up to SAVE_DEBOUNCE_MS
+  // of progress on a force-quit — flush when the page hides or is backgrounded.
+  useEffect(() => {
+    const flush = (): void => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      saveNow()
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [saveNow])
 
   useEffect(() => {
     callbacksRef.current = {

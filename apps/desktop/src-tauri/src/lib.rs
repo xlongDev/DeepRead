@@ -25,12 +25,14 @@ use tauri::Emitter;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             use tauri::Manager;
             // NOTE: Builder::setup REPLACES any previous closure — keep every
             // startup step inside this single closure.
             let base = app.path().app_data_dir()?;
-            let conn = storage::open_db(&library::database_path(&base))?;
+            let conn = storage::open_db_with_recovery(&library::database_path(&base))?;
             storage::import_legacy(&conn, &base)?;
             // Asset-protocol scope is in-memory only: re-allow every stored
             // book on startup so covers and reading keep working after restart.

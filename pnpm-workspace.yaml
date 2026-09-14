@@ -9,3 +9,6 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - marked@18.0.12
+
+overrides:
+  ansi-regex: ^6.1.0

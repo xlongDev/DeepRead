@@ -37,6 +37,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzREY4QzJCQUYyMzAxNUQKUldSZEFTT3ZLNHpmbzcvQmhTZzFWanQvbE4wN1h0ZzZNT1lZSS9JMlNVVzlrQVlPcmhOVHRucUMK",
+      "endpoints": [
+        "https://deepread-updates.example.invalid/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
   }
 }

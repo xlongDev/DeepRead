@@ -4,11 +4,11 @@
 
 技术栈:**Tauri 2 · Rust · React 19 · TypeScript(strict)· Vite · Vitest**。完整工程规范见仓库根目录的《全平台 AI 电子书阅读器|工程实施版》。
 
-## 当前状态:Phase 1 · 内核里程碑 ✅
+## 当前状态:Phase 8 · 生产化收尾 ✅(Phase 0-7 全部完成)
 
-已完成:monorepo 骨架、类型安全 IPC、统一错误系统、Logger、Design Token 系统、CI 全门禁,以及 **foliate-js 唯一渲染内核的完整接入**(ADR-0006):真实 EPUB/PDF 已在浏览器 E2E 中验证渲染、翻页、目录、CFI 进度锚点、选区划线。
+Phase 0-7 已全部落地并逐一验证(ADR-0007 为跨平台验证矩阵):核心阅读与高级排版、AI 助手(RAG/引用/摘要/角色图谱)、学习工具(闪卡/测验/错题本/间隔重复)、TTS 与多角色听书(系统语音 + 云端缓存)、WebDAV 多设备同步(记录级合并 + 冲突保留双方)、云端备份恢复。
 
-书架(Phase 1):桌面端经系统对话框导入 → Rust 流式哈希入册(文件**留在原位**,经 asset 协议流式读取)→ 列表/移除;阅读器支持书签与全书搜索。阅读进度、划线、书签按书籍哈希持久化(Rust 端)。
+Phase 8 生产化:更新器(minisign 公钥校验,应用内检查/安装/忽略)、数据库损坏隔离重建(§127)、强制退出进度冲刷(§128)、依赖漏洞清零、`node scripts/release.mjs` 发布管线(GitHub Actions 矩阵构建,OS 签名可插拔——无证书时产物为 ad-hoc,拿到证书后 secrets 填空即生效,见 [docs/release.md](docs/release.md))。
 
 格式支持(只列真实验证过的能力,不伪造):
 
@@ -79,14 +79,14 @@ cargo test --workspace
 
 ## Roadmap
 
-| Phase | 内容                                                       | 状态    |
-| ----- | ---------------------------------------------------------- | ------- |
-| 0     | 工程骨架 / 协议 / 错误 / Logger / Tokens / CI              | ✅ 当前 |
-| 1     | Core Reader:导入、书架、EPUB/TXT/PDF、进度、书签、批注     | ⬜      |
-| 2     | Premium Reading:Liquid Glass、主题、排版、双页、选择工具栏 | ⬜      |
-| 3     | AI Foundation:Provider、流式、RAG、引用                    | ⬜      |
-| 4     | AI Book Intelligence:精修、Diff、摘要、角色、知识图谱      | ⬜      |
-| 5     | TTS / Learning:多角色语音、闪卡、测验、间隔重复            | ⬜      |
-| 6     | Cloud:账号、同步、冲突、WebDAV、备份                       | ⬜      |
-| 7     | Cross Platform:macOS / Windows / Linux / Android / iOS     | ⬜      |
-| 8     | Production:更新器、崩溃恢复、安全审计、发布管线            | ⬜      |
+| Phase | 内容                                                                   | 状态              |
+| ----- | ---------------------------------------------------------------------- | ----------------- |
+| 0     | 工程骨架 / 协议 / 错误 / Logger / Tokens / CI                          | ✅                |
+| 1     | Core Reader:导入、书架、EPUB/TXT/PDF、进度、书签、批注                 | ✅                |
+| 2     | Premium Reading:Liquid Glass、主题、排版、双页、选择工具栏             | ✅                |
+| 3     | AI Foundation:Provider、流式、RAG、引用                                | ✅                |
+| 4     | AI Book Intelligence:精修、Diff、摘要、角色、知识图谱                  | ✅                |
+| 5     | TTS / Learning:多角色语音、闪卡、测验、间隔重复                        | ✅                |
+| 6     | Cloud:同步、冲突、WebDAV、备份                                         | ✅                |
+| 7     | Cross Platform:macOS / Windows / iOS 已验证,Linux 待 CI,Android 已出包 | ✅*               |
+| 8     | Production:更新器、崩溃恢复、安全审计、发布管线                        | ✅(OS 签名待证书) |
