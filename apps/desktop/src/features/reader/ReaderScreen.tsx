@@ -105,6 +105,17 @@ const PARAGRAPH_MARGIN_OPTIONS: readonly {
   { label: '标准', value: 0.8 },
   { label: '宽松', value: 1.4 },
 ]
+// 字重档位:覆盖正文级元素,标题不受影响;undefined = 原书字重。
+const FONT_WEIGHT_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number | undefined
+  readonly cssWeight: number
+}[] = [
+  { label: '原书', value: undefined, cssWeight: 400 },
+  { label: '常规', value: 400, cssWeight: 400 },
+  { label: '中等', value: 500, cssWeight: 500 },
+  { label: '加粗', value: 700, cssWeight: 700 },
+]
 const FONT_FAMILY_OPTIONS: readonly {
   readonly label: string
   readonly value: string | undefined
@@ -133,8 +144,9 @@ const VIEW_MODE_OPTIONS: readonly { readonly label: string; readonly value: View
   { label: '双页', value: 'dual' },
   { label: '滚动', value: 'scroll' },
 ]
-type PageTurnStyle = 'slide' | 'cover' | 'flip' | 'fade'
+type PageTurnStyle = 'none' | 'slide' | 'cover' | 'flip' | 'fade'
 const PAGE_TURN_OPTIONS: readonly { readonly label: string; readonly value: PageTurnStyle }[] = [
+  { label: '无', value: 'none' },
   { label: '滑动', value: 'slide' },
   { label: '覆盖', value: 'cover' },
   { label: '仿真', value: 'flip' },
@@ -151,6 +163,7 @@ interface TypographySettings {
   fontSize?: number
   lineHeight?: number | undefined
   fontFamily?: string | undefined
+  fontWeight?: number | undefined
   themeIndex?: number
   pageMargin?: number
   paragraphMargin?: number | undefined
@@ -235,12 +248,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const callbacksRef = useRef<EngineCallbacks>({})
   const handleReaderKeyRef = useRef<(event: KeyboardEvent) => void>(() => {})
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const chromeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 最近一次指针活动的时刻:chrome 自动隐藏以它为基准。 */
+  const lastChromeActivityRef = useRef(0)
+  /** chrome 显隐函数的 ref:内核回调(constant closure)经它调用最新版本。 */
+  const showChromeRef = useRef<() => void>(() => {})
+  const hideChromeRef = useRef<() => void>(() => {})
+  const chromeVisibleRef = useRef(true)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const progressRef = useRef<{ cfi: string; fraction: number } | null>(null)
   const annotationsRef = useRef<readonly AnnotationRecord[]>([])
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
-  const overlayOpenRef = useRef(false)
   const openPanelRef = useRef<'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null>(
     null,
   )
@@ -252,6 +269,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     fontSize: storedTypography.fontSize ?? 16,
     lineHeight: storedTypography.lineHeight,
     fontFamily: storedTypography.fontFamily,
+    fontWeight: storedTypography.fontWeight,
     themeIndex: storedTypography.themeIndex ?? 0,
     pageMargin: storedTypography.pageMargin ?? 72,
     paragraphMargin: storedTypography.paragraphMargin,
@@ -285,6 +303,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [pageMargin, setPageMargin] = useState<number>(() => storedTypography.pageMargin ?? 72)
   const [paragraphMargin, setParagraphMargin] = useState<number | undefined>(
     () => storedTypography.paragraphMargin,
+  )
+  const [fontWeight, setFontWeight] = useState<number | undefined>(
+    () => storedTypography.fontWeight,
   )
   const [themeIndex, setThemeIndex] = useState(() => storedTypography.themeIndex ?? 0)
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
@@ -368,10 +389,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     bookmarksRef.current = bookmarks
   }, [bookmarks])
 
-  useEffect(() => {
-    overlayOpenRef.current = openPanel !== null || selection !== null || activeAnnotation !== null
-  }, [openPanel, selection, activeAnnotation])
-
   // 内核回调(constant closure)需要读到最新的面板状态。
   useEffect(() => {
     openPanelRef.current = openPanel
@@ -383,11 +400,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       fontSize,
       lineHeight,
       fontFamily,
+      fontWeight,
       themeIndex,
       pageMargin,
       paragraphMargin,
     }
-  }, [viewMode, fontSize, lineHeight, fontFamily, themeIndex, pageMargin, paragraphMargin])
+  }, [viewMode, fontSize, lineHeight, fontFamily, fontWeight, themeIndex, pageMargin, paragraphMargin])
 
   const saveNow = useCallback((): void => {
     if (!isTauriRuntime()) return
@@ -459,12 +477,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         }
         setActiveAnnotation(null)
         setSelection(sel)
-        setChromeVisible(true)
+        // 点按/翻页(空选区)不打扰 chrome 的显隐节奏;真正划选文本才唤起。
+        if (sel !== null) showChromeRef.current()
       },
       onShowAnnotation: (cfi) => {
         setSelection(null)
         setActiveAnnotation(cfi)
-        setChromeVisible(true)
+        showChromeRef.current()
       },
       onTapZone: (zone) => {
         if (openPanelRef.current !== null) {
@@ -474,10 +493,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         }
         if (Date.now() - panelClosedAtRef.current < 600) return
         if (zone === 'center') {
-          setChromeVisible((visible) => !visible)
+          // 中间点按是唯一的手动开关:隐藏时唤起并按常规节奏自动收起。
+          if (chromeVisibleRef.current) hideChromeRef.current()
+          else showChromeRef.current()
           return
         }
-        // 点按翻页与键盘/翻页钮同路:同样播放翻页动画。
+        // 点按翻页与键盘/翻页钮同路:同样播放翻页动画,且不唤起工具栏。
         turnPageRef.current(zone === 'left' ? 'prev' : 'next')
       },
     }
@@ -536,7 +557,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   // double-mount and leaked a second kernel view into the host.
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current)
     const adapter = new FoliateAdapter(hostRef.current ?? document.body, {
       onRelocate: (location) => callbacksRef.current.onRelocate?.(location),
       onSelection: (sel) => callbacksRef.current.onSelection?.(sel),
@@ -571,6 +591,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           fontSize: settingsRef.current.fontSize,
           lineHeight: settingsRef.current.lineHeight,
           fontFamily: settingsRef.current.fontFamily,
+          fontWeight: settingsRef.current.fontWeight,
           margin: settingsRef.current.pageMargin,
           paragraphMargin: settingsRef.current.paragraphMargin,
         })
@@ -698,20 +719,59 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
   }, [themeIndex])
 
-  const showChrome = useCallback(() => {
+  // chrome 显隐的统一节奏:任何显示路径只置可见 + 记活动时刻,
+  // 自动隐藏由下方 effect 统一负责(可见且无浮层 → 距最后活动 2.5s 收起)。
+  const showChrome = useCallback((): void => {
+    lastChromeActivityRef.current = Date.now()
     setChromeVisible(true)
-    if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current)
-    chromeTimerRef.current = setTimeout(() => {
-      if (!overlayOpenRef.current) setChromeVisible(false)
-    }, CHROME_TIMEOUT_MS)
   }, [])
+
+  const hideChrome = useCallback((): void => {
+    setChromeVisible(false)
+  }, [])
+
+  useEffect(() => {
+    showChromeRef.current = showChrome
+    hideChromeRef.current = hideChrome
+    chromeVisibleRef.current = chromeVisible
+  }, [showChrome, hideChrome, chromeVisible])
+
+  // chrome 自动隐藏:可见且无任何浮层(面板/选区/批注)时收起;指针活动
+  // 会刷新计时。翻页、点按翻页区都不在此列——沉浸阅读不被翻页打断。
+  useEffect(() => {
+    if (!chromeVisible || openPanel !== null || selection !== null || activeAnnotation !== null) {
+      return
+    }
+    const schedule = (): ReturnType<typeof setTimeout> =>
+      setTimeout(
+        () => setChromeVisible(false),
+        Math.max(0, CHROME_TIMEOUT_MS - (Date.now() - lastChromeActivityRef.current)),
+      )
+    let timer = schedule()
+    const onActivity = (): void => {
+      clearTimeout(timer)
+      lastChromeActivityRef.current = Date.now()
+      timer = schedule()
+    }
+    window.addEventListener('pointermove', onActivity)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pointermove', onActivity)
+    }
+  }, [chromeVisible, openPanel, selection, activeAnnotation])
+
+  // 开书即进入常规节奏:工具栏短暂可见后自动收起。
+  useEffect(() => {
+    if (phase === 'reading') showChrome()
+  }, [phase, showChrome])
 
   /**
    * 翻页动画(View Transitions):内核瞬时换页,浏览器对书页层做新旧快照
    * 分层过渡(.reader-host 携带 view-transition-name,顶栏/底栏/面板静止)。
    * 旧方案的"整体 host 加 class 再翻页"在时序上脆弱且背景一起动,被感知为
    * 整页重绘闪烁;VT 由内核截图,没有时序问题。不支持 VT 的内核(旧
-   * WKWebView/webkitgtk)或滚动模式退化为瞬时翻页。
+   * WKWebView/webkitgtk)、"无"动画档或滚动模式退化为瞬时翻页。
+   * 翻页不唤起工具栏:沉浸阅读时翻页不应打断 chrome 的显隐节奏。
    */
   const turnPage = useCallback(
     async (dir: 'next' | 'prev'): Promise<void> => {
@@ -722,14 +782,20 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       const documentVt = document as unknown as {
         startViewTransition?: (update: () => Promise<void> | void) => { finished: Promise<unknown> }
       }
+      const startViewTransition = documentVt.startViewTransition
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      if (typeof documentVt.startViewTransition === 'function' && !reducedMotion && viewMode !== 'scroll') {
+      const animate =
+        pageTurnStyle !== 'none' &&
+        startViewTransition !== undefined &&
+        !reducedMotion &&
+        viewMode !== 'scroll'
+      if (animate) {
         const root = document.documentElement
         root.dataset.turnStyle = pageTurnStyle
         root.dataset.turnDir = dir
         vtDepthRef.current += 1
         try {
-          const transition = documentVt.startViewTransition(flip)
+          const transition = startViewTransition(flip)
           await transition.finished.catch(() => {})
         } catch {
           await flip()
@@ -743,9 +809,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       } else {
         await flip()
       }
-      showChrome()
     },
-    [pageTurnStyle, viewMode, showChrome],
+    [pageTurnStyle, viewMode],
   )
 
   useEffect(() => {
@@ -796,6 +861,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     fontSize?: number
     lineHeight?: number | undefined
     fontFamily?: string | undefined
+    fontWeight?: number | undefined
     pageMargin?: number
     paragraphMargin?: number | undefined
   }): void => {
@@ -806,6 +872,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       fontSize: patch.fontSize ?? fontSize,
       lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
       fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
+      fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
       pageMargin: patch.pageMargin ?? pageMargin,
       paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
     }
@@ -813,6 +880,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     setFontSize(next.fontSize)
     setLineHeight(next.lineHeight)
     setFontFamily(next.fontFamily)
+    setFontWeight(next.fontWeight)
     setPageMargin(next.pageMargin)
     setParagraphMargin(next.paragraphMargin)
     persistTypography({
@@ -820,6 +888,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       fontSize: next.fontSize,
       lineHeight: next.lineHeight,
       fontFamily: next.fontFamily,
+      fontWeight: next.fontWeight,
       pageMargin: next.pageMargin,
       paragraphMargin: next.paragraphMargin,
     })
@@ -829,6 +898,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       fontSize: next.fontSize,
       lineHeight: next.lineHeight,
       fontFamily: next.fontFamily,
+      fontWeight: next.fontWeight,
       margin: next.pageMargin,
       paragraphMargin: next.paragraphMargin,
     })
@@ -1426,6 +1496,22 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                   type="button"
                   className={paragraphMargin === option.value ? 'is-active' : ''}
                   onClick={() => updateLayout({ paragraphMargin: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">字重</span>
+            <div className="segmented">
+              {FONT_WEIGHT_OPTIONS.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={fontWeight === option.value ? 'is-active' : ''}
+                  style={{ fontWeight: option.cssWeight }}
+                  onClick={() => updateLayout({ fontWeight: option.value })}
                 >
                   {option.label}
                 </button>

@@ -94,6 +94,11 @@ export interface ReaderLayout {
    */
   readonly paragraphMargin?: number
   /**
+   * 正文字重(400 常规 / 500 中等 / 700 加粗;标题不受影响)。
+   * Omit to keep the book's own font weights (原书排版优先).
+   */
+  readonly fontWeight?: number
+  /**
    * Font-family override for reflowable content (`serif` | `sans` | `heitı`).
    * Omit to keep the book's own fonts (原版排版优先).
    */

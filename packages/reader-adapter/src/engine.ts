@@ -102,6 +102,7 @@ function buildReaderCSS(
     lineHeight?: number
     fontFamily?: string
     paragraphMargin?: number
+    fontWeight?: number
   },
   flow: 'paginated' | 'scrolled',
   fontFaces?: string,
@@ -118,6 +119,10 @@ function buildReaderCSS(
       ? [
           `p { margin-block-start: ${layout.paragraphMargin}em !important; margin-block-end: ${layout.paragraphMargin}em !important; }`,
         ]
+      : []),
+    // 字重:覆盖正文级元素但不碰标题——标题保留书籍自己的层级。
+    ...(layout.fontWeight !== undefined
+      ? [`body, p, li, dd, blockquote, div { font-weight: ${layout.fontWeight} !important; }`]
       : []),
     ...(fontStack ? [`body { font-family: ${fontStack} !important; }`] : []),
     `html, body { background: ${theme.background} !important; color: ${theme.foreground} !important; }`,
@@ -137,6 +142,7 @@ export class FoliateAdapter implements ReaderEngine {
     lineHeight?: number
     fontFamily?: string
     paragraphMargin?: number
+    fontWeight?: number
   } = {}
   #flow: 'paginated' | 'scrolled' = 'paginated'
   #fontFaces: string | undefined
@@ -628,6 +634,7 @@ export class FoliateAdapter implements ReaderEngine {
       lineHeight: layout.lineHeight,
       fontFamily: layout.fontFamily,
       paragraphMargin: layout.paragraphMargin,
+      fontWeight: layout.fontWeight,
     }
     this.#applyStyles()
   }
