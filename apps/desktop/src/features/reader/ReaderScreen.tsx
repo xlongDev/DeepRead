@@ -35,6 +35,12 @@ import {
 } from '@deepread/shared'
 import type { ReaderTheme, TocItem } from '@deepread/reader-core'
 import {
+  countChars,
+  estimateReadingMinutes,
+  formatCharCount,
+  formatDurationLabel,
+} from '@deepread/reader-core'
+import {
   applyRepair,
   buildIndex,
   chapterSections,
@@ -82,24 +88,94 @@ const LINE_HEIGHT_OPTIONS: readonly {
   { label: '标准', value: 1.65 },
   { label: '宽松', value: 1.9 },
 ]
+// 页边距档位:内核 margin(px),同时联动栏宽(边距越大栏越窄,
+// 见 reader-adapter #maxInlineSize),宽窗口下也能感知变化。
+const PAGE_MARGIN_OPTIONS: readonly { readonly label: string; readonly value: number }[] = [
+  { label: '特窄', value: 48 },
+  { label: '标准', value: 72 },
+  { label: '宽', value: 96 },
+  { label: '特宽', value: 120 },
+]
+const PARAGRAPH_MARGIN_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number | undefined
+}[] = [
+  { label: '原书', value: undefined },
+  { label: '紧凑', value: 0.4 },
+  { label: '标准', value: 0.8 },
+  { label: '宽松', value: 1.4 },
+]
 const FONT_FAMILY_OPTIONS: readonly {
   readonly label: string
   readonly value: string | undefined
 }[] = [
   { label: '原书', value: undefined },
+  { label: '系统默认', value: 'system' },
+  { label: '宋体', value: 'songti' },
+  { label: '楷体', value: 'kaiti' },
+  { label: '黑体', value: 'heiti' },
   { label: '霞鹜文楷', value: 'wenkai' },
   { label: '衬线', value: 'serif' },
   { label: '无衬线', value: 'sans' },
 ]
+// 父窗口里的字体预览(OS 自带字体直接可用;霞鹜/导入字体只注入书内 iframe,不预览)。
+const FONT_STACK_PREVIEW: Readonly<Record<string, string>> = {
+  system: '-apple-system, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif',
+  songti: '"Songti SC", SimSun, serif',
+  kaiti: '"Kaiti SC", KaiTi, serif',
+  heiti: '"Heiti SC", SimHei, sans-serif',
+  serif: 'Georgia, serif',
+  sans: '-apple-system, "Helvetica Neue", sans-serif',
+}
 type ViewMode = 'single' | 'dual' | 'scroll'
 const VIEW_MODE_OPTIONS: readonly { readonly label: string; readonly value: ViewMode }[] = [
   { label: '单页', value: 'single' },
   { label: '双页', value: 'dual' },
   { label: '滚动', value: 'scroll' },
 ]
+type PageTurnStyle = 'slide' | 'cover' | 'flip' | 'fade'
+const PAGE_TURN_OPTIONS: readonly { readonly label: string; readonly value: PageTurnStyle }[] = [
+  { label: '滑动', value: 'slide' },
+  { label: '覆盖', value: 'cover' },
+  { label: '仿真', value: 'flip' },
+  { label: '淡入', value: 'fade' },
+]
 const CHROME_TIMEOUT_MS = 2500
 const SAVE_DEBOUNCE_MS = 800
 const MAX_SHOWN_SEARCH_RESULTS = 50
+
+/* ---------- 排版设置持久化(localStorage;Rust 侧只存进度/批注)。 ---------- */
+
+interface TypographySettings {
+  viewMode?: ViewMode
+  fontSize?: number
+  lineHeight?: number | undefined
+  fontFamily?: string | undefined
+  themeIndex?: number
+  pageMargin?: number
+  paragraphMargin?: number | undefined
+}
+
+const TYPOGRAPHY_KEY = 'deepread.reader.typography'
+let cachedTypography: TypographySettings | null = null
+
+function loadTypography(): TypographySettings {
+  if (cachedTypography === null) {
+    try {
+      cachedTypography = JSON.parse(localStorage.getItem(TYPOGRAPHY_KEY) ?? '{}') as TypographySettings
+    } catch {
+      cachedTypography = {}
+    }
+  }
+  return cachedTypography
+}
+
+function persistTypography(patch: TypographySettings): void {
+  const next = { ...loadTypography(), ...patch }
+  // 整体回写让显式 undefined(选回"原书")从存储里删掉键。
+  localStorage.setItem(TYPOGRAPHY_KEY, JSON.stringify(next))
+  cachedTypography = next
+}
 
 /** 书籍文档的 @font-face:内置霞鹜文楷 + 用户导入字体。 */
 function buildFontFacesCss(
@@ -126,17 +202,6 @@ function withAlpha(hex: string, alpha: number): string {
   const g = parseInt(value.slice(2, 4), 16)
   const b = parseInt(value.slice(4, 6), 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
-/** 中英混排字数:中日韩字符按字计,连续西文按词计。 */
-function countChars(text: string): number {
-  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/g) ?? []).length
-  const latinWords = (
-    text
-      .replace(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/g, ' ')
-      .match(/[A-Za-z0-9'’-]+/g) ?? []
-  ).length
-  return cjk + latinWords
 }
 
 interface ReaderScreenProps {
@@ -181,13 +246,19 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   )
   /** 关闭面板那一刻的时间戳:同一次点击不会再触发翻页/切换 chrome。 */
   const panelClosedAtRef = useRef(0)
+  const storedTypography = loadTypography()
   const settingsRef = useRef({
-    viewMode: 'single' as ViewMode,
-    fontSize: 16,
-    lineHeight: undefined as number | undefined,
-    fontFamily: undefined as string | undefined,
-    themeIndex: 0,
+    viewMode: storedTypography.viewMode ?? ('single' as ViewMode),
+    fontSize: storedTypography.fontSize ?? 16,
+    lineHeight: storedTypography.lineHeight,
+    fontFamily: storedTypography.fontFamily,
+    themeIndex: storedTypography.themeIndex ?? 0,
+    pageMargin: storedTypography.pageMargin ?? 72,
+    paragraphMargin: storedTypography.paragraphMargin,
   })
+  const turnPageRef = useRef<(dir: 'next' | 'prev') => void>(() => {})
+  /** 进行中的 View Transition 计数:连翻两页时根节点的动画属性不能提前清掉。 */
+  const vtDepthRef = useRef(0)
 
   const [phase, setPhase] = useState<Phase>('opening')
   const [error, setError] = useState<string | null>(null)
@@ -203,11 +274,19 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [activeAnnotation, setActiveAnnotation] = useState<string | null>(null)
   const [annotations, setAnnotations] = useState<readonly AnnotationRecord[]>([])
   const [bookmarks, setBookmarks] = useState<readonly BookmarkRecord[]>([])
-  const [viewMode, setViewMode] = useState<ViewMode>('single')
-  const [fontSize, setFontSize] = useState<number>(16)
-  const [lineHeight, setLineHeight] = useState<number | undefined>(undefined)
-  const [fontFamily, setFontFamily] = useState<string | undefined>(undefined)
-  const [themeIndex, setThemeIndex] = useState(0)
+  const [viewMode, setViewMode] = useState<ViewMode>(() => storedTypography.viewMode ?? 'single')
+  const [fontSize, setFontSize] = useState<number>(() => storedTypography.fontSize ?? 16)
+  const [lineHeight, setLineHeight] = useState<number | undefined>(
+    () => storedTypography.lineHeight,
+  )
+  const [fontFamily, setFontFamily] = useState<string | undefined>(
+    () => storedTypography.fontFamily,
+  )
+  const [pageMargin, setPageMargin] = useState<number>(() => storedTypography.pageMargin ?? 72)
+  const [paragraphMargin, setParagraphMargin] = useState<number | undefined>(
+    () => storedTypography.paragraphMargin,
+  )
+  const [themeIndex, setThemeIndex] = useState(() => storedTypography.themeIndex ?? 0)
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
   )
@@ -235,29 +314,39 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     () => ttsCoverCache.get(book.hash) ?? null,
   )
   const [fullscreen, setFullscreen] = useState(false)
-  const [turnDir, setTurnDir] = useState<'next' | 'prev' | null>(null)
   /** 当前章字数(千分位在渲染层做);null = 还没算出来。 */
   const [sectionChars, setSectionChars] = useState<number | null>(null)
-  /** 底栏统计显示偏好(进度条/字数/预计时间),自绘开关控制。 */
+  /** 全书正文统计(后台逐节统计;PDF 等固定排版为 null)。 */
+  const [bookCharStats, setBookCharStats] = useState<{
+    total: number
+    cjk: number
+  } | null>(null)
   /** 用户导入字体(fonts.list);变更后重建 @font-face 并重设引擎样式。 */
   const [customFonts, setCustomFonts] = useState<readonly ReadingFont[]>([])
   const [fontBusy, setFontBusy] = useState(false)
   /** 翻页动画:滑动/覆盖/仿真/淡入。 */
-  const [pageTurnStyle, setPageTurnStyle] = useState<'slide' | 'cover' | 'flip' | 'fade'>(
-    () => (localStorage.getItem('deepread.reader.pageTurn') as 'slide' | null) ?? 'slide',
+  const [pageTurnStyle, setPageTurnStyle] = useState<PageTurnStyle>(
+    () => (localStorage.getItem('deepread.reader.pageTurn') as PageTurnStyle | null) ?? 'slide',
   )
   const [statsSettings, setStatsSettings] = useState<{
     progress: boolean
     words: boolean
     time: boolean
+    wordsScope: 'section' | 'book'
   }>(() => {
     try {
       const stored = localStorage.getItem('deepread.reader.stats')
       return stored
-        ? { progress: true, words: true, time: true, ...(JSON.parse(stored) as object) }
-        : { progress: true, words: true, time: true }
+        ? {
+            progress: true,
+            words: true,
+            time: true,
+            wordsScope: 'section',
+            ...(JSON.parse(stored) as object),
+          }
+        : { progress: true, words: true, time: true, wordsScope: 'section' as const }
     } catch {
-      return { progress: true, words: true, time: true }
+      return { progress: true, words: true, time: true, wordsScope: 'section' as const }
     }
   })
   const sectionIndexRef = useRef(0)
@@ -289,8 +378,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [openPanel])
 
   useEffect(() => {
-    settingsRef.current = { viewMode, fontSize, lineHeight, fontFamily, themeIndex }
-  }, [viewMode, fontSize, lineHeight, fontFamily, themeIndex])
+    settingsRef.current = {
+      viewMode,
+      fontSize,
+      lineHeight,
+      fontFamily,
+      themeIndex,
+      pageMargin,
+      paragraphMargin,
+    }
+  }, [viewMode, fontSize, lineHeight, fontFamily, themeIndex, pageMargin, paragraphMargin])
 
   const saveNow = useCallback((): void => {
     if (!isTauriRuntime()) return
@@ -380,9 +477,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           setChromeVisible((visible) => !visible)
           return
         }
-        const adapter = adapterRef.current
-        if (!adapter) return
-        void (zone === 'left' ? adapter.previousPage() : adapter.nextPage())
+        // 点按翻页与键盘/翻页钮同路:同样播放翻页动画。
+        turnPageRef.current(zone === 'left' ? 'prev' : 'next')
       },
     }
   })
@@ -475,6 +571,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           fontSize: settingsRef.current.fontSize,
           lineHeight: settingsRef.current.lineHeight,
           fontFamily: settingsRef.current.fontFamily,
+          margin: settingsRef.current.pageMargin,
+          paragraphMargin: settingsRef.current.paragraphMargin,
         })
 
         let restored = null
@@ -586,10 +684,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     if (themeIndex === nightIndex) {
       const restore = lastLightIndexRef.current ?? 0
       setThemeIndex(restore)
+      persistTypography({ themeIndex: restore })
       void adapterRef.current?.setTheme(READER_THEMES[restore]?.theme ?? READER_THEMES[0]!.theme)
     } else {
       lastLightIndexRef.current = themeIndex
-      setThemeIndex(nightIndex === -1 ? 0 : nightIndex)
+      const next = nightIndex === -1 ? 0 : nightIndex
+      setThemeIndex(next)
+      persistTypography({ themeIndex: next })
       void adapterRef.current?.setTheme(
         (nightIndex === -1 ? READER_THEMES[0] : READER_THEMES[nightIndex])?.theme ??
           READER_THEMES[0]!.theme,
@@ -605,27 +706,51 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }, CHROME_TIMEOUT_MS)
   }, [])
 
-  /** 带方向感的翻页反馈:动画类上屏后再执行内核翻页,新内容带着
-   *  过渡进来——先翻后播会像没动画。 */
+  /**
+   * 翻页动画(View Transitions):内核瞬时换页,浏览器对书页层做新旧快照
+   * 分层过渡(.reader-host 携带 view-transition-name,顶栏/底栏/面板静止)。
+   * 旧方案的"整体 host 加 class 再翻页"在时序上脆弱且背景一起动,被感知为
+   * 整页重绘闪烁;VT 由内核截图,没有时序问题。不支持 VT 的内核(旧
+   * WKWebView/webkitgtk)或滚动模式退化为瞬时翻页。
+   */
   const turnPage = useCallback(
     async (dir: 'next' | 'prev'): Promise<void> => {
       const adapter = adapterRef.current
       if (!adapter) return
-      setTurnDir(dir)
-      try {
-        // 双 rAF:确保 React 已把动画 class 写入 DOM 并开始播放。
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        )
-        if (dir === 'next') await adapter.nextPage()
-        else await adapter.previousPage()
-      } finally {
-        setTimeout(() => setTurnDir(null), 320)
+      const flip = (): Promise<void> =>
+        dir === 'next' ? adapter.nextPage() : adapter.previousPage()
+      const documentVt = document as unknown as {
+        startViewTransition?: (update: () => Promise<void> | void) => { finished: Promise<unknown> }
+      }
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (typeof documentVt.startViewTransition === 'function' && !reducedMotion && viewMode !== 'scroll') {
+        const root = document.documentElement
+        root.dataset.turnStyle = pageTurnStyle
+        root.dataset.turnDir = dir
+        vtDepthRef.current += 1
+        try {
+          const transition = documentVt.startViewTransition(flip)
+          await transition.finished.catch(() => {})
+        } catch {
+          await flip()
+        } finally {
+          vtDepthRef.current -= 1
+          if (vtDepthRef.current === 0) {
+            delete root.dataset.turnStyle
+            delete root.dataset.turnDir
+          }
+        }
+      } else {
+        await flip()
       }
       showChrome()
     },
-    [showChrome],
+    [pageTurnStyle, viewMode, showChrome],
   )
+
+  useEffect(() => {
+    turnPageRef.current = (dir) => void turnPage(dir)
+  }, [turnPage])
 
   useEffect(() => {
     const onPointerMove = (): void => showChrome()
@@ -671,6 +796,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     fontSize?: number
     lineHeight?: number | undefined
     fontFamily?: string | undefined
+    pageMargin?: number
+    paragraphMargin?: number | undefined
   }): void => {
     // `in` checks, not ?? merges: an explicit undefined means "reset to the
     // book's own typography" and must win over the previous setting.
@@ -679,17 +806,31 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       fontSize: patch.fontSize ?? fontSize,
       lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
       fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
+      pageMargin: patch.pageMargin ?? pageMargin,
+      paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
     }
     setViewMode(next.viewMode)
     setFontSize(next.fontSize)
     setLineHeight(next.lineHeight)
     setFontFamily(next.fontFamily)
+    setPageMargin(next.pageMargin)
+    setParagraphMargin(next.paragraphMargin)
+    persistTypography({
+      viewMode: next.viewMode,
+      fontSize: next.fontSize,
+      lineHeight: next.lineHeight,
+      fontFamily: next.fontFamily,
+      pageMargin: next.pageMargin,
+      paragraphMargin: next.paragraphMargin,
+    })
     void adapterRef.current?.setLayout({
       flow: next.viewMode === 'scroll' ? 'scrolled' : 'paginated',
       pageMode: next.viewMode === 'dual' ? 'dual' : 'single',
       fontSize: next.fontSize,
       lineHeight: next.lineHeight,
       fontFamily: next.fontFamily,
+      margin: next.pageMargin,
+      paragraphMargin: next.paragraphMargin,
     })
   }
 
@@ -751,6 +892,22 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       cancelled = true
     }
   }, [phase, progress.location?.current])
+
+  // 全书统计:打开书后一次性后台解析(逐节 createDocument,不挂载渲染),
+  // 供"全书"字数与按字数的剩余时间估算;PDF 等固定排版为 null。
+  useEffect(() => {
+    if (phase !== 'reading') return
+    let cancelled = false
+    void adapterRef.current
+      ?.getBookCharStats()
+      .then((stats) => {
+        if (!cancelled) setBookCharStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [phase])
 
   const addHighlight = async (): Promise<void> => {
     const adapter = adapterRef.current
@@ -990,29 +1147,47 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const liveBookmarks = bookmarks.filter((b) => !b.deleted)
   const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
 
-  // 页码 / 字数 / 预计剩余阅读时间。时间按语言取每页平均用时估算,标注"约"。
+  // 页码 / 字数(本章或全书,大数用"万"单位)/ 预计剩余阅读时间。
+  // 时间用全书实测的中西文单位数加权估算(CJK ~400 字/分,西文 ~250 词/分),
+  // 对字号/边距/翻页模式不敏感;固定排版(无正文字数)退回按页估算。
   const readingStats = useMemo(() => {
     const location = progress.location
     const pages =
       location && location.total > 0
         ? { current: location.current, total: location.total }
         : null
-    const isCjk = bookLanguage === undefined || /^[a-z]{2,3}[-_]?/i.exec(bookLanguage) === null
+    const isCjk = bookLanguage === undefined || /^(zh|ja|ko)/i.test(bookLanguage)
     let timeLabel: string | null = null
-    if (pages && progress.fraction > 0) {
-      const secondsPerPage = isCjk ? 90 : 45
-      const remainingMinutes = Math.max(
-        1,
-        Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60),
+    if (bookCharStats !== null && bookCharStats.total > 0) {
+      const remaining = Math.min(1, Math.max(0, 1 - progress.fraction))
+      const minutes = estimateReadingMinutes(
+        bookCharStats.cjk * remaining,
+        (bookCharStats.total - bookCharStats.cjk) * remaining,
       )
-      timeLabel = remainingMinutes >= 60 ? '约 1 小时+' : `约剩 ${remainingMinutes} 分钟`
+      timeLabel = formatDurationLabel(minutes)
+    } else if (pages && progress.fraction > 0) {
+      const secondsPerPage = isCjk ? 90 : 45
+      timeLabel = formatDurationLabel(
+        Math.max(
+          1,
+          Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60),
+        ),
+      )
     }
+    const charsLabel =
+      statsSettings.wordsScope === 'book'
+        ? bookCharStats !== null && bookCharStats.total > 0
+          ? `全书 ${formatCharCount(bookCharStats.total)} 字`
+          : null
+        : sectionChars !== null
+          ? `本章 ${sectionChars.toLocaleString('zh-Hans-CN')} 字`
+          : null
     return {
       page: pages ? `${pages.current} / ${pages.total} 页` : null,
-      chars: sectionChars !== null ? `本章 ${sectionChars.toLocaleString('zh-Hans-CN')} 字` : null,
+      chars: charsLabel,
       time: timeLabel,
     }
-  }, [progress.location, progress.fraction, bookLanguage, sectionChars])
+  }, [progress.location, progress.fraction, bookLanguage, sectionChars, bookCharStats, statsSettings.wordsScope])
 
   const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
     items.map((item) => (
@@ -1047,7 +1222,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     >
       <div
         ref={hostRef}
-        className={`reader-host page-turn-${pageTurnStyle}${turnDir ? ` turn-${turnDir}` : ''}`}
+        className="reader-host"
       />
 
       {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
@@ -1195,6 +1370,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                   }}
                   onClick={() => {
                     setThemeIndex(index)
+                    persistTypography({ themeIndex: index })
                     void adapterRef.current?.setTheme(option.theme)
                   }}
                   aria-pressed={themeIndex === index}
@@ -1241,14 +1417,49 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               ))}
             </div>
           </div>
+          <div className="settings-row">
+            <span className="settings-label">段间距</span>
+            <div className="segmented">
+              {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={paragraphMargin === option.value ? 'is-active' : ''}
+                  onClick={() => updateLayout({ paragraphMargin: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">页边距</span>
+            <div className="segmented">
+              {PAGE_MARGIN_OPTIONS.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={pageMargin === option.value ? 'is-active' : ''}
+                  onClick={() => updateLayout({ pageMargin: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-column">
             <span className="settings-label">字体</span>
-            <div className="segmented">
+            <div className="segmented segmented-wrap">
               {FONT_FAMILY_OPTIONS.map((option) => (
                 <button
                   key={option.label}
                   type="button"
                   className={fontFamily === option.value ? 'is-active' : ''}
+                  style={
+                    option.value !== undefined && FONT_STACK_PREVIEW[option.value]
+                      ? { fontFamily: FONT_STACK_PREVIEW[option.value] }
+                      : undefined
+                  }
                   onClick={() => updateLayout({ fontFamily: option.value })}
                 >
                   {option.label}
@@ -1358,21 +1569,14 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           <div className="settings-column">
             <span className="settings-label">翻页动画</span>
             <div className="segmented">
-              {(
-                [
-                  { key: 'slide', label: '滑动' },
-                  { key: 'cover', label: '覆盖' },
-                  { key: 'flip', label: '仿真' },
-                  { key: 'fade', label: '淡入' },
-                ] as const
-              ).map((option) => (
+              {PAGE_TURN_OPTIONS.map((option) => (
                 <button
-                  key={option.key}
+                  key={option.value}
                   type="button"
-                  className={pageTurnStyle === option.key ? 'is-active' : ''}
+                  className={pageTurnStyle === option.value ? 'is-active' : ''}
                   onClick={() => {
-                    setPageTurnStyle(option.key)
-                    localStorage.setItem('deepread.reader.pageTurn', option.key)
+                    setPageTurnStyle(option.value)
+                    localStorage.setItem('deepread.reader.pageTurn', option.value)
                   }}
                 >
                   {option.label}
@@ -1543,7 +1747,23 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           <ArrowRight size={14} weight="regular" />
         </span>
         {statsSettings.words && readingStats.chars && (
-          <span className="reader-percent">{readingStats.chars}</span>
+          <button
+            type="button"
+            className="reader-count-toggle"
+            title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
+            onClick={() => {
+              setStatsSettings((current) => {
+                const next = {
+                  ...current,
+                  wordsScope: current.wordsScope === 'book' ? ('section' as const) : ('book' as const),
+                }
+                localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                return next
+              })
+            }}
+          >
+            {readingStats.chars}
+          </button>
         )}
         {statsSettings.time && readingStats.time && (
           <span className="reader-percent">{readingStats.time}</span>

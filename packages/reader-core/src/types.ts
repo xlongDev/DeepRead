@@ -89,6 +89,11 @@ export interface ReaderLayout {
    */
   readonly lineHeight?: number
   /**
+   * 段间距(p 段前后外边距,单位 em)。Omit to keep the book's own
+   * paragraph spacing (原书排版优先).
+   */
+  readonly paragraphMargin?: number
+  /**
    * Font-family override for reflowable content (`serif` | `sans` | `heitı`).
    * Omit to keep the book's own fonts (原版排版优先).
    */

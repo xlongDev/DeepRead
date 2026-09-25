@@ -54,6 +54,10 @@ class ContractProbe implements ReaderEngine {
     return Promise.resolve('')
   }
 
+  getBookCharStats() {
+    return Promise.resolve(null)
+  }
+
   createAnnotation(): Promise<void> {
     return Promise.resolve()
   }

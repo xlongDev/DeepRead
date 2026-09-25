@@ -11,17 +11,20 @@
  */
 
 import { AppError, ErrorCodes, toAppError } from '@deepread/shared'
-import type {
-  Annotation,
-  BookMetadata,
-  BookSource,
-  ReaderEngine,
-  ReaderLayout,
-  ReaderTheme,
-  ReadingLocation,
-  SearchResult,
-  TextRange,
-  TocItem,
+import {
+  countChars,
+  countCjkChars,
+  type Annotation,
+  type BookCharStats,
+  type BookMetadata,
+  type BookSource,
+  type ReaderEngine,
+  type ReaderLayout,
+  type ReaderTheme,
+  type ReadingLocation,
+  type SearchResult,
+  type TextRange,
+  type TocItem,
 } from '@deepread/reader-core'
 import type { FoliateAnnotation, FoliateTocItem, View, ViewLocation } from 'foliate-js/view.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
@@ -71,28 +74,50 @@ function titleFromName(name: string): string {
   )
 }
 
+/** 排版字体栈:键为 ReaderLayout.fontFamily 的具名档位(跨平台系统字体)。 */
+const FONT_STACKS: Readonly<Record<string, string>> = {
+  // 系统默认:跟随 OS 界面字体(macOS 苹方 / Windows 雅黑)。
+  system:
+    '-apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
+  songti: '"Songti SC", "STSong", "SimSun", "NSimSun", "Noto Serif CJK SC", serif',
+  kaiti: '"Kaiti SC", "STKaiti", "KaiTi", "BiauKai", "Noto Serif CJK SC", serif',
+  heiti: '"Heiti SC", "STHeiti", "SimHei", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
+  serif: 'Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", serif',
+  sans: '-apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif',
+}
+
+function resolveFontStack(fontFamily: string | undefined): string | undefined {
+  if (fontFamily === undefined) return undefined
+  const named = FONT_STACKS[fontFamily]
+  if (named) return named
+  if (fontFamily === 'wenkai') return '"LXGW WenKai", "Songti SC", serif'
+  // 用户导入字体:fontFamily 即字体的 display name。
+  return `"${fontFamily.replace(/["\\]/g, '')}", "PingFang SC", sans-serif`
+}
+
 function buildReaderCSS(
   theme: ReaderTheme,
-  layout: { fontSize?: number; lineHeight?: number; fontFamily?: string },
+  layout: {
+    fontSize?: number
+    lineHeight?: number
+    fontFamily?: string
+    paragraphMargin?: number
+  },
   flow: 'paginated' | 'scrolled',
   fontFaces?: string,
 ): string {
-  const fontStack =
-    layout.fontFamily === 'serif'
-      ? 'var(--font-serif, Georgia, "Songti SC", serif)'
-      : layout.fontFamily === 'sans'
-        ? 'var(--font-sans, -apple-system, "PingFang SC", sans-serif)'
-        : layout.fontFamily === 'wenkai'
-          ? '"LXGW WenKai", "Songti SC", serif'
-          : layout.fontFamily !== undefined
-            ? // 用户导入字体:fontFamily 即字体的 display name。
-              `"${layout.fontFamily.replace(/["\\]/g, '')}", "PingFang SC", sans-serif`
-            : undefined
+  const fontStack = resolveFontStack(layout.fontFamily)
   return [
     ...(fontFaces ? [fontFaces] : []),
     `html { font-size: ${layout.fontSize ?? 16}px; --theme-bg-color: ${theme.background}; }`,
     ...(layout.lineHeight !== undefined
       ? [`body { line-height: ${layout.lineHeight} !important; }`]
+      : []),
+    // 段间距:仅当用户显式选择时注入,undefined 保持原书段落排版。
+    ...(layout.paragraphMargin !== undefined
+      ? [
+          `p { margin-block-start: ${layout.paragraphMargin}em !important; margin-block-end: ${layout.paragraphMargin}em !important; }`,
+        ]
       : []),
     ...(fontStack ? [`body { font-family: ${fontStack} !important; }`] : []),
     `html, body { background: ${theme.background} !important; color: ${theme.foreground} !important; }`,
@@ -107,9 +132,27 @@ export class FoliateAdapter implements ReaderEngine {
   readonly #callbacks: EngineCallbacks
   readonly #annotationCfis = new Map<string, string>()
   #theme: ReaderTheme | null = null
-  #layout: { fontSize?: number; lineHeight?: number; fontFamily?: string } = {}
+  #layout: {
+    fontSize?: number
+    lineHeight?: number
+    fontFamily?: string
+    paragraphMargin?: number
+  } = {}
   #flow: 'paginated' | 'scrolled' = 'paginated'
   #fontFaces: string | undefined
+  #pageMargin: number | undefined
+  #bookCharStats: BookCharStats | null = null
+  #bookCharStatsComputed = false
+  readonly #onWindowResize = (): void => {
+    // 页边距改变时栏宽随之联动(max-inline-size 由视口与边距推导),
+    // 窗口缩放后必须重算,否则栏宽停留在旧尺寸上。
+    if (this.#view && !this.#view.isFixedLayout && this.#pageMargin !== undefined) {
+      this.#requireView().renderer.setAttribute(
+        'max-inline-size',
+        this.#maxInlineSize(this.#pageMargin),
+      )
+    }
+  }
   #tapTimer: ReturnType<typeof setTimeout> | undefined
   #destroyed = false
   #adapterBuiltText: { format: 'txt' | 'md'; title: string; text: string } | null = null
@@ -118,6 +161,7 @@ export class FoliateAdapter implements ReaderEngine {
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.#host = host
     this.#callbacks = callbacks
+    window.addEventListener('resize', this.#onWindowResize)
   }
 
   #applyStyles(): void {
@@ -305,6 +349,7 @@ export class FoliateAdapter implements ReaderEngine {
         : buildTextBook(text, built.title)
     await view.open(book)
     this.#adapterBuiltText = { ...built, text }
+    this.#bookCharStatsComputed = false
     this.#applyStyles()
     await view.goTo('s0')
   }
@@ -334,6 +379,7 @@ export class FoliateAdapter implements ReaderEngine {
       }),
     )
     this.#applyStyles()
+    this.#bookCharStatsComputed = false
     await view.goTo('s0')
     return view.book.sections.length
   }
@@ -346,6 +392,7 @@ export class FoliateAdapter implements ReaderEngine {
   async destroy(): Promise<void> {
     this.#destroyed = true
     clearTimeout(this.#tapTimer)
+    window.removeEventListener('resize', this.#onWindowResize)
     await this.close()
     this.#view?.remove()
     this.#view = null
@@ -454,6 +501,42 @@ export class FoliateAdapter implements ReaderEngine {
     return content?.doc.body.textContent ?? ''
   }
 
+  /**
+   * 全书正文统计:逐节 createDocument(不解码图片,不挂载渲染)在后台
+   * 计数,TXT/MD 直接取源文本;固定排版返回 null。结果缓存到本实例,
+   * replaceSource / rebuildChapters 后作废重算。
+   */
+  async getBookCharStats(): Promise<BookCharStats | null> {
+    if (this.#bookCharStatsComputed) return this.#bookCharStats
+    const countText = (text: string): BookCharStats => ({
+      total: countChars(text),
+      cjk: countCjkChars(text),
+    })
+    if (this.#adapterBuiltText) {
+      this.#bookCharStats = countText(this.#adapterBuiltText.text)
+      this.#bookCharStatsComputed = true
+      return this.#bookCharStats
+    }
+    const view = this.#requireView()
+    if (view.isFixedLayout) return null
+    let total = 0
+    let cjk = 0
+    for (const section of view.book.sections) {
+      if (section.linear === 'no' || typeof section.createDocument !== 'function') continue
+      try {
+        const doc = await section.createDocument()
+        const text = doc.body?.textContent ?? ''
+        total += countChars(text)
+        cjk += countCjkChars(text)
+      } catch {
+        // 单节解析失败不拖垮整体统计(受损章节按 0 字计)。
+      }
+    }
+    this.#bookCharStats = { total, cjk }
+    this.#bookCharStatsComputed = true
+    return this.#bookCharStats
+  }
+
   async search(query: string): Promise<readonly SearchResult[]> {
     const view = this.#requireView()
     const trimmed = query.trim()
@@ -510,6 +593,18 @@ export class FoliateAdapter implements ReaderEngine {
     this.#applyStyles()
   }
 
+  /**
+   * 栏宽上限:随页边距联动。内核的横向留白由居中 + max-inline-size 推导
+   * (margin 属性只作用于上下),所以"页边距"要可见必须同时缩栏宽——
+   * 边距越大栏越窄,宽窗口下也能感知到边距变化。
+   */
+  #maxInlineSize(margin: number | undefined): string {
+    if (margin === undefined) return '700px'
+    const columnCap = margin <= 56 ? 820 : margin <= 80 ? 700 : margin <= 104 ? 600 : 520
+    const available = window.innerWidth - margin * 2
+    return `${Math.max(480, Math.min(columnCap, available))}px`
+  }
+
   async setLayout(layout: ReaderLayout): Promise<void> {
     const view = this.#requireView()
     if (view.isFixedLayout) return
@@ -517,12 +612,11 @@ export class FoliateAdapter implements ReaderEngine {
     view.renderer.setAttribute('flow', this.#flow)
     // 内核 CSS 变量参与 calc() 长度运算,必须带 px 单位——无单位会让整条
     // grid 声明失效,列宽与上下边距全部失控(单页满宽、双页裁字)。
-    // 栏宽对齐印刷排版的舒适行长:单/滚 ~40 字,双页每栏 ~34 字。
+    // 栏宽对齐印刷排版的舒适行长,并随页边距联动(见 #maxInlineSize)。
+    this.#pageMargin = layout.margin
     view.renderer.setAttribute('margin', `${layout.margin ?? 72}px`)
-    view.renderer.setAttribute(
-      'max-inline-size',
-      `${layout.pageMode === 'dual' ? 620 : 700}px`,
-    )
+    view.renderer.setAttribute('max-inline-size', this.#maxInlineSize(layout.margin))
+    view.renderer.setAttribute('gap', layout.pageMode === 'dual' ? '4%' : '7%')
 
     // Dual page only makes sense on wide paginated surfaces; the kernel picks
     // its column count from these two attributes.
@@ -533,6 +627,7 @@ export class FoliateAdapter implements ReaderEngine {
       ...(layout.fontSize !== undefined ? { fontSize: layout.fontSize } : {}),
       lineHeight: layout.lineHeight,
       fontFamily: layout.fontFamily,
+      paragraphMargin: layout.paragraphMargin,
     }
     this.#applyStyles()
   }

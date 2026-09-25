@@ -792,11 +792,16 @@ button:disabled {
   max-width: 100%;
 }
 
+/* 选项较多的分段控件(字体列表等):允许换行。 */
+.segmented-wrap {
+  flex-wrap: wrap;
+  border-radius: var(--radius-md);
+}
+
 .segmented button {
   border: none;
   border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-text-secondary);
+  background: transparent;  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   white-space: nowrap;
   padding: 4px 11px;
@@ -950,6 +955,26 @@ button:disabled {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 字数(本章/全书):点按切换口径,视觉与相邻只读统计一致。 */
+.reader-count-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.reader-count-toggle:hover {
+  color: var(--color-text-primary);
 }
 
 .reader-opening,
@@ -2843,96 +2868,175 @@ button:disabled {
 }
 
 
-/* 翻页方向感:内核瞬时换页之上的一层过渡。默认"滑动"幅度克制(14px、
-   高透明度起步),避免整页闪烁的重绘感;覆盖/仿真/淡入见各自 keyframes。 */
-.reader-host.turn-next {
-  animation: turn-next-slide 260ms var(--ease-emphasized);
+/* ---------- Reader: page-turn animations (View Transitions) ---------- */
+
+/* 翻页动画(View Transitions):内核瞬时换页,浏览器对书页层做新旧快照
+   分层过渡——只有 .reader-host 参与动画,顶栏/底栏/面板保持静止,彻底
+   去掉旧方案"整层 host 加 class"的整页重绘闪烁与播放时序问题。
+   不支持 VT 的内核自动退化为瞬时翻页(JS 侧同时探测跳过)。 */
+.reader-host {
+  view-transition-name: book-page;
 }
 
-.reader-host.turn-prev {
-  animation: turn-prev-slide 260ms var(--ease-emphasized);
+/* 根快照不参与动画:书页层之外的 UI 变化(页码等)瞬时生效,避免整窗淡入淡出。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
 }
 
-@keyframes turn-next-slide {
-  from {
-    opacity: 0.8;
-    transform: translateX(14px);
+/* 页面滑动/翻动限制在书页框内,不压到顶栏/底栏;关闭默认的 plus-lighter
+   混合(那只在默认交叉淡化里有意义),自定义动画用普通合成。 */
+::view-transition-group(book-page) {
+  overflow: clip;
+}
+
+::view-transition-image-pair(book-page) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* 默认层级:旧页快照在新页之上——覆盖/仿真要"旧页揭走"的物理感。 */
+::view-transition-old(book-page) {
+  z-index: 2;
+}
+
+::view-transition-new(book-page) {
+  z-index: 1;
+}
+
+/* —— 滑动(push):整条纸带,旧页滑出、新页从行进方向推入 —— */
+html[data-turn-style='slide']::view-transition-old(book-page) {
+  animation: vt-slide-out 420ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+html[data-turn-style='slide']::view-transition-new(book-page) {
+  animation: vt-slide-in 420ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+html[data-turn-style='slide'][data-turn-dir='prev']::view-transition-old(book-page) {
+  animation-name: vt-slide-out-back;
+}
+
+html[data-turn-style='slide'][data-turn-dir='prev']::view-transition-new(book-page) {
+  animation-name: vt-slide-in-back;
+}
+
+@keyframes vt-slide-out {
+  to {
+    transform: translateX(-100%);
   }
 }
 
-@keyframes turn-prev-slide {
+@keyframes vt-slide-in {
   from {
-    opacity: 0.8;
-    transform: translateX(-14px);
+    transform: translateX(100%);
   }
 }
 
-/* 覆盖:新页像一页纸从行进方向压过来(位移 + 纸边投影)。 */
-.reader-host.page-turn-cover.turn-next {
-  animation: turn-next-cover 300ms var(--ease-emphasized);
-}
-
-.reader-host.page-turn-cover.turn-prev {
-  animation: turn-prev-cover 300ms var(--ease-emphasized);
-}
-
-@keyframes turn-next-cover {
-  from {
-    opacity: 0.92;
-    transform: translateX(52px);
-    box-shadow: -32px 0 56px rgba(0, 0, 0, 0.28);
+@keyframes vt-slide-out-back {
+  to {
+    transform: translateX(100%);
   }
 }
 
-@keyframes turn-prev-cover {
+@keyframes vt-slide-in-back {
   from {
-    opacity: 0.92;
-    transform: translateX(-52px);
-    box-shadow: 32px 0 56px rgba(0, 0, 0, 0.28);
+    transform: translateX(-100%);
   }
 }
 
-/* 仿真:透视翻页近似——新页绕书脊轻微掀起。 */
-.reader-host.page-turn-flip.turn-next {
-  animation: turn-next-flip 340ms var(--ease-emphasized);
+/* —— 覆盖(cover):新页原地不动,旧页像一页纸从书页上滑走(带纸边投影) —— */
+html[data-turn-style='cover']::view-transition-new(book-page) {
+  animation: none;
+}
+
+html[data-turn-style='cover']::view-transition-old(book-page) {
+  animation: vt-cover-next 380ms var(--ease-emphasized) both;
+  box-shadow: -28px 0 52px rgba(0, 0, 0, 0.22);
+}
+
+html[data-turn-style='cover'][data-turn-dir='prev']::view-transition-old(book-page) {
+  animation-name: vt-cover-prev;
+  box-shadow: 28px 0 52px rgba(0, 0, 0, 0.22);
+}
+
+@keyframes vt-cover-next {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes vt-cover-prev {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* —— 仿真(flip):3D 硬翻页,旧页绕书脊掀起,翻起过程带投影 —— */
+html[data-turn-style='flip']::view-transition-group(book-page) {
+  perspective: 2400px;
+}
+
+html[data-turn-style='flip']::view-transition-new(book-page) {
+  animation: none;
+}
+
+html[data-turn-style='flip']::view-transition-old(book-page) {
+  animation: vt-flip-next 460ms cubic-bezier(0.3, 0.1, 0.3, 1) both;
   transform-origin: left center;
+  box-shadow: 0 0 44px rgba(0, 0, 0, 0.16);
 }
 
-.reader-host.page-turn-flip.turn-prev {
-  animation: turn-prev-flip 340ms var(--ease-emphasized);
+html[data-turn-style='flip'][data-turn-dir='prev']::view-transition-old(book-page) {
+  animation-name: vt-flip-prev;
   transform-origin: right center;
 }
 
-@keyframes turn-next-flip {
+@keyframes vt-flip-next {
   from {
-    opacity: 0.85;
-    transform: perspective(1600px) rotateY(-9deg);
+    transform: rotateY(0);
+  }
+  to {
+    transform: rotateY(-104deg);
+    opacity: 0.4;
   }
 }
 
-@keyframes turn-prev-flip {
+@keyframes vt-flip-prev {
   from {
-    opacity: 0.85;
-    transform: perspective(1600px) rotateY(9deg);
+    transform: rotateY(0);
+  }
+  to {
+    transform: rotateY(104deg);
+    opacity: 0.4;
   }
 }
 
-/* 淡入:纯透明度,零位移,最安静。 */
-.reader-host.page-turn-fade.turn-next,
-.reader-host.page-turn-fade.turn-prev {
-  animation: turn-fade 240ms var(--ease-out);
+/* —— 淡入:纯透明度交叉淡化,最安静 —— */
+html[data-turn-style='fade']::view-transition-old(book-page) {
+  animation: vt-fade-out 280ms var(--ease-out) both;
 }
 
-@keyframes turn-fade {
+html[data-turn-style='fade']::view-transition-new(book-page) {
+  animation: vt-fade-in 280ms var(--ease-out) both;
+}
+
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes vt-fade-in {
   from {
-    opacity: 0.6;
+    opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .reader-host.turn-next,
-  .reader-host.turn-prev {
-    animation: none;
+  ::view-transition-old(book-page),
+  ::view-transition-new(book-page) {
+    animation: none !important;
   }
 }
 
