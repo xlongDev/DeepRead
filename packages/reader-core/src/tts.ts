@@ -97,8 +97,11 @@ export function splitDialogue(text: string): SpeechSegment[] {
 }
 
 function pushNarrator(segments: SpeechSegment[], text: string): void {
-  const trimmed = text.trim()
-  if (trimmed) segments.push({ text: trimmed, speaker: 'narrator' })
+  // 叙述与对话都按句切分,播放器才能逐句高亮(长段落整段一段会让
+  // 歌词页失去意义)。
+  for (const sentence of splitSentences(text)) {
+    segments.push({ text: sentence, speaker: 'narrator' })
+  }
 }
 
 /**

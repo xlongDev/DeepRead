@@ -39,6 +39,11 @@ export const COMMAND = {
   cardsRemove: 'cards.remove',
   cardsReview: 'cards.review',
   ttsAudio: 'tts.audio',
+  ttsEdgeAudio: 'tts.edge.audio',
+  ttsEdgeVoices: 'tts.edge.voices',
+  fontsList: 'fonts.list',
+  fontsImport: 'fonts.import',
+  fontsRemove: 'fonts.remove',
   cloudConfigGet: 'cloud.config.get',
   cloudConfigSave: 'cloud.config.save',
   cloudConfigTest: 'cloud.config.test',
@@ -429,6 +434,49 @@ export interface TtsAudioResponse {
   readonly cached: boolean
 }
 
+/**
+ * Edge read-aloud synthesis (spec §44b): same cached-audio contract as the
+ * cloud path, no API key — the Edge browser endpoint is keyless.
+ */
+export interface EdgeTtsAudioRequest {
+  readonly text: string
+  readonly voice: string
+  readonly lang?: string
+  readonly rate?: number
+}
+
+export interface EdgeTtsAudioResponse {
+  readonly path: string
+  readonly cached: boolean
+}
+
+export interface EdgeTtsVoice {
+  readonly shortName: string
+  readonly friendlyName: string
+  readonly locale: string
+  readonly gender: string
+}
+
+export interface EdgeTtsVoicesResponse {
+  readonly voices: readonly EdgeTtsVoice[]
+}
+
+/** 用户导入的阅读字体(存放在应用数据目录,经 asset protocol 提供)。 */
+export interface ReadingFont {
+  readonly id: string
+  readonly name: string
+  readonly fileName: string
+  readonly path: string
+}
+
+export interface FontImportRequest {
+  readonly path: string
+}
+
+export interface FontRemoveRequest {
+  readonly id: string
+}
+
 /** WebDAV cloud configuration (non-secret half; password lives in the keychain). */
 export interface CloudConfig {
   readonly endpoint: string
@@ -602,6 +650,26 @@ export interface CommandMap {
   [COMMAND.ttsAudio]: {
     readonly request: TtsAudioRequest
     readonly response: TtsAudioResponse
+  }
+  [COMMAND.ttsEdgeAudio]: {
+    readonly request: EdgeTtsAudioRequest
+    readonly response: EdgeTtsAudioResponse
+  }
+  [COMMAND.ttsEdgeVoices]: {
+    readonly request: undefined
+    readonly response: EdgeTtsVoicesResponse
+  }
+  [COMMAND.fontsList]: {
+    readonly request: undefined
+    readonly response: readonly ReadingFont[]
+  }
+  [COMMAND.fontsImport]: {
+    readonly request: FontImportRequest
+    readonly response: ReadingFont
+  }
+  [COMMAND.fontsRemove]: {
+    readonly request: FontRemoveRequest
+    readonly response: boolean
   }
   [COMMAND.cloudConfigGet]: {
     readonly request: undefined
@@ -910,6 +978,39 @@ export const ttsAudioResponseSchema = z.object({
   cached: z.boolean(),
 })
 
+export const edgeTtsAudioRequestSchema = z.object({
+  text: z.string().min(1).max(5000),
+  voice: z.string().min(1).max(128),
+  lang: z.string().max(16).optional(),
+  rate: z.number().min(0.25).max(4).optional(),
+})
+export const edgeTtsAudioResponseSchema = z.object({
+  path: z.string().min(1).max(4096),
+  cached: z.boolean(),
+})
+export const edgeTtsVoiceSchema = z.object({
+  shortName: z.string().min(1).max(128),
+  friendlyName: z.string().max(256),
+  locale: z.string().max(32),
+  gender: z.string().max(16),
+})
+export const edgeTtsVoicesResponseSchema = z.object({
+  voices: z.array(edgeTtsVoiceSchema),
+})
+
+export const readingFontSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(256),
+  fileName: z.string().min(1).max(256),
+  path: z.string().min(1).max(1024),
+})
+
+export const fontsListResponseSchema = z.array(readingFontSchema)
+export const fontsImportResponseSchema = readingFontSchema
+export const fontsRemoveResponseSchema = z.boolean()
+export const fontImportRequestSchema = z.object({ path: z.string().min(1).max(1024) })
+export const fontRemoveRequestSchema = z.object({ id: z.string().min(1).max(64) })
+
 const webdavEndpoint = z.string().url().max(512)
 const webdavPath = z
   .string()
@@ -996,6 +1097,11 @@ export const responseValidators: {
   [COMMAND.cardsRemove]: cardsRemoveResponseSchema,
   [COMMAND.cardsReview]: cardsReviewResponseSchema,
   [COMMAND.ttsAudio]: ttsAudioResponseSchema,
+  [COMMAND.ttsEdgeAudio]: edgeTtsAudioResponseSchema,
+  [COMMAND.ttsEdgeVoices]: edgeTtsVoicesResponseSchema,
+  [COMMAND.fontsList]: fontsListResponseSchema,
+  [COMMAND.fontsImport]: fontsImportResponseSchema,
+  [COMMAND.fontsRemove]: fontsRemoveResponseSchema,
   [COMMAND.cloudConfigGet]: cloudConfigGetResponseSchema,
   [COMMAND.cloudConfigSave]: cloudConfigSaveResponseSchema,
   [COMMAND.cloudConfigTest]: cloudConfigTestResponseSchema,
@@ -1037,6 +1143,11 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.cardsRemove]: cardsRemoveRequestSchema,
   [COMMAND.cardsReview]: cardsReviewRequestSchema,
   [COMMAND.ttsAudio]: ttsAudioRequestSchema,
+  [COMMAND.ttsEdgeAudio]: edgeTtsAudioRequestSchema,
+  [COMMAND.ttsEdgeVoices]: undefined,
+  [COMMAND.fontsList]: undefined,
+  [COMMAND.fontsImport]: fontImportRequestSchema,
+  [COMMAND.fontsRemove]: fontRemoveRequestSchema,
   [COMMAND.cloudConfigGet]: undefined,
   [COMMAND.cloudConfigSave]: cloudConfigSaveRequestSchema,
   [COMMAND.cloudConfigTest]: cloudConfigTestRequestSchema,

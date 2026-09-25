@@ -125,40 +125,55 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
       </div>
 
       <div className="ai-drawer-body">
-        <div className="ai-config">
-          <input
-            className="ai-input"
-            placeholder="WebDAV 地址,如 https://dav.jianguoyun.com/dav"
-            value={form.endpoint}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, endpoint: event.target.value }))
-            }
-          />
-          <input
-            className="ai-input"
-            placeholder="用户名"
-            autoComplete="off"
-            value={form.username}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, username: event.target.value }))
-            }
-          />
-          <input
-            className="ai-input"
-            type="password"
-            placeholder={config?.config ? '密码(留空则沿用已存的)' : '密码(存入系统钥匙串)'}
-            autoComplete="new-password"
-            value={form.password}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, password: event.target.value }))
-            }
-          />
-          <div className="segmented">
-            <button type="button" disabled={busy !== null} onClick={() => void test()}>
+        <div className="sync-fields">
+          <label className="field-label">
+            服务器地址
+            <input
+              className="field-input"
+              placeholder="https://dav.jianguoyun.com/dav"
+              value={form.endpoint}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, endpoint: event.target.value }))
+              }
+            />
+          </label>
+          <label className="field-label">
+            账户
+            <input
+              className="field-input"
+              placeholder="用户名"
+              autoComplete="off"
+              value={form.username}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, username: event.target.value }))
+              }
+            />
+          </label>
+          <label className="field-label">
+            密码
+            <input
+              className="field-input"
+              type="password"
+              placeholder={config?.config ? '留空则沿用已存的' : '存入系统钥匙串'}
+              autoComplete="new-password"
+              value={form.password}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, password: event.target.value }))
+              }
+            />
+          </label>
+          <div className="sync-actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={busy !== null}
+              onClick={() => void test()}
+            >
               {busy === 'test' ? '测试中…' : '测试连接'}
             </button>
             <button
               type="button"
+              className="btn-primary"
               disabled={busy !== null || form.endpoint.trim() === '' || form.username.trim() === ''}
               onClick={() => void save()}
             >
@@ -169,26 +184,45 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
 
         {config?.config && (
           <>
-            <p className="ai-privacy">
-              已登录 {config.config.username}({config.config.endpoint});本机设备:{config.deviceName}
-              ({config.deviceId.slice(0, 11)}…)。
-            </p>
-            <div className="segmented">
-              <button type="button" disabled={busy !== null} onClick={() => void syncNow()}>
+            <div className="sync-status">
+              <strong>
+                {config.config.username} · {config.config.endpoint}
+              </strong>
+              <span>
+                本机设备:{config.deviceName}({config.deviceId.slice(0, 11)}…)
+              </span>
+            </div>
+            <div className="sync-actions">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy !== null}
+                onClick={() => void syncNow()}
+              >
                 {busy === 'sync' ? '同步中…' : '立即同步'}
               </button>
-              <button type="button" disabled={busy !== null} onClick={() => void backup()}>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy !== null}
+                onClick={() => void backup()}
+              >
                 {busy === 'backup' ? '备份中…' : '备份数据库'}
               </button>
               <button
                 type="button"
-                className={confirmRestore ? 'is-danger' : ''}
+                className={`btn${confirmRestore ? ' is-danger' : ''}`}
                 disabled={busy !== null}
                 onClick={() => void restore()}
               >
                 {busy === 'restore' ? '恢复中…' : confirmRestore ? '确认覆盖本机?' : '从云端恢复'}
               </button>
-              <button type="button" disabled={busy !== null} onClick={() => void logout()}>
+              <button
+                type="button"
+                className="btn-ghost btn"
+                disabled={busy !== null}
+                onClick={() => void logout()}
+              >
                 退出
               </button>
             </div>

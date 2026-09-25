@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
   BookmarkSimple,
+  CaretLeft,
+  CaretRight,
   Copy,
+  CornersOut,
   GraduationCap,
   Headphones,
   Highlighter,
@@ -12,6 +15,7 @@ import {
   MagnifyingGlass,
   Minus,
   Moon,
+  SlidersHorizontal,
   Plus,
   Sparkle,
   Sun,
@@ -20,18 +24,21 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   toAppError,
   type AnnotationRecord,
   type BookmarkRecord,
   type DictionaryMeta,
+  type ReadingFont,
 } from '@deepread/shared'
 import type { ReaderTheme, TocItem } from '@deepread/reader-core'
 import {
   applyRepair,
   buildIndex,
   chapterSections,
+  extractCover,
   FoliateAdapter,
   reviewRepair,
   inflateGzip,
@@ -77,9 +84,10 @@ const LINE_HEIGHT_OPTIONS: readonly {
 ]
 const FONT_FAMILY_OPTIONS: readonly {
   readonly label: string
-  readonly value: 'serif' | 'sans' | undefined
+  readonly value: string | undefined
 }[] = [
   { label: '原书', value: undefined },
+  { label: '霞鹜文楷', value: 'wenkai' },
   { label: '衬线', value: 'serif' },
   { label: '无衬线', value: 'sans' },
 ]
@@ -92,6 +100,44 @@ const VIEW_MODE_OPTIONS: readonly { readonly label: string; readonly value: View
 const CHROME_TIMEOUT_MS = 2500
 const SAVE_DEBOUNCE_MS = 800
 const MAX_SHOWN_SEARCH_RESULTS = 50
+
+/** 书籍文档的 @font-face:内置霞鹜文楷 + 用户导入字体。 */
+function buildFontFacesCss(
+  customFonts: readonly { readonly name: string; readonly path: string }[],
+): string {
+  const rules = [
+    `@font-face { font-family: 'LXGW WenKai'; src: url('${window.location.origin}/fonts/LxgwWenkai-Regular.ttf') format('truetype'); font-display: swap; }`,
+  ]
+  for (const font of customFonts) {
+    const safeName = font.name.replace(/['"]/g, '')
+    rules.push(
+      `@font-face { font-family: '${safeName}'; src: url('${convertFileSrc(font.path)}') format('truetype'); font-display: swap; }`,
+    )
+  }
+  return rules.join('\n')
+}
+
+/** 十六进制色 → 带 alpha 的 rgba,用于给阅读主题派生磨砂面板底色。 */
+function withAlpha(hex: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex)
+  if (!match) return hex
+  const value = match[1] ?? ''
+  const r = parseInt(value.slice(0, 2), 16)
+  const g = parseInt(value.slice(2, 4), 16)
+  const b = parseInt(value.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/** 中英混排字数:中日韩字符按字计,连续西文按词计。 */
+function countChars(text: string): number {
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/g) ?? []).length
+  const latinWords = (
+    text
+      .replace(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/g, ' ')
+      .match(/[A-Za-z0-9'’-]+/g) ?? []
+  ).length
+  return cjk + latinWords
+}
 
 interface ReaderScreenProps {
   readonly book: OpenedBook
@@ -116,10 +162,13 @@ function toDomainAnnotation(record: AnnotationRecord, bookId: string) {
   }
 }
 
+const ttsCoverCache = new Map<string, string>()
+
 export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const adapterRef = useRef<FoliateAdapter | null>(null)
   const callbacksRef = useRef<EngineCallbacks>({})
+  const handleReaderKeyRef = useRef<(event: KeyboardEvent) => void>(() => {})
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const chromeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -127,11 +176,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const annotationsRef = useRef<readonly AnnotationRecord[]>([])
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
   const overlayOpenRef = useRef(false)
+  const openPanelRef = useRef<'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null>(
+    null,
+  )
+  /** 关闭面板那一刻的时间戳:同一次点击不会再触发翻页/切换 chrome。 */
+  const panelClosedAtRef = useRef(0)
   const settingsRef = useRef({
     viewMode: 'single' as ViewMode,
     fontSize: 16,
     lineHeight: undefined as number | undefined,
-    fontFamily: undefined as 'serif' | 'sans' | undefined,
+    fontFamily: undefined as string | undefined,
     themeIndex: 0,
   })
 
@@ -139,7 +193,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [error, setError] = useState<string | null>(null)
   const [title, setTitle] = useState(book.name)
   const [toc, setToc] = useState<readonly TocItem[]>([])
-  const [tocOpen, setTocOpen] = useState(false)
   const [chromeVisible, setChromeVisible] = useState(true)
   const [progress, setProgress] = useState<{
     cfi: string | null
@@ -153,8 +206,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('single')
   const [fontSize, setFontSize] = useState<number>(16)
   const [lineHeight, setLineHeight] = useState<number | undefined>(undefined)
-  const [fontFamily, setFontFamily] = useState<'serif' | 'sans' | undefined>(undefined)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [fontFamily, setFontFamily] = useState<string | undefined>(undefined)
   const [themeIndex, setThemeIndex] = useState(0)
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
@@ -171,10 +223,45 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     proposals: readonly RepairChange[]
     accepted: ReadonlySet<string>
   } | null>(null)
-  const [aiOpen, setAiOpen] = useState(false)
-  const [ttsOpen, setTtsOpen] = useState(false)
-  const [learningOpen, setLearningOpen] = useState(false)
+  // 阅读器的面板互斥:同一时刻最多一个浮层(目录/排版/AI/朗读/学习)。
+  const [openPanel, setOpenPanel] = useState<
+    'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null
+  >(null)
+  const [bookLanguage, setBookLanguage] = useState<string | undefined>(undefined)
+  const [sectionLabel, setSectionLabel] = useState<string | null>(null)
+  const [ttsMinimized, setTtsMinimized] = useState(false)
+  const [ttsActive, setTtsActive] = useState(false)
+  const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
+    () => ttsCoverCache.get(book.hash) ?? null,
+  )
+  const [fullscreen, setFullscreen] = useState(false)
+  const [turnDir, setTurnDir] = useState<'next' | 'prev' | null>(null)
+  /** 当前章字数(千分位在渲染层做);null = 还没算出来。 */
+  const [sectionChars, setSectionChars] = useState<number | null>(null)
+  /** 底栏统计显示偏好(进度条/字数/预计时间),自绘开关控制。 */
+  /** 用户导入字体(fonts.list);变更后重建 @font-face 并重设引擎样式。 */
+  const [customFonts, setCustomFonts] = useState<readonly ReadingFont[]>([])
+  const [fontBusy, setFontBusy] = useState(false)
+  /** 翻页动画:滑动/覆盖/仿真/淡入。 */
+  const [pageTurnStyle, setPageTurnStyle] = useState<'slide' | 'cover' | 'flip' | 'fade'>(
+    () => (localStorage.getItem('deepread.reader.pageTurn') as 'slide' | null) ?? 'slide',
+  )
+  const [statsSettings, setStatsSettings] = useState<{
+    progress: boolean
+    words: boolean
+    time: boolean
+  }>(() => {
+    try {
+      const stored = localStorage.getItem('deepread.reader.stats')
+      return stored
+        ? { progress: true, words: true, time: true, ...(JSON.parse(stored) as object) }
+        : { progress: true, words: true, time: true }
+    } catch {
+      return { progress: true, words: true, time: true }
+    }
+  })
   const sectionIndexRef = useRef(0)
+  const lastLightIndexRef = useRef(0)
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [rebuildPattern, setRebuildPattern] = useState(
     () => localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '',
@@ -193,8 +280,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [bookmarks])
 
   useEffect(() => {
-    overlayOpenRef.current = tocOpen || selection !== null || activeAnnotation !== null
-  }, [tocOpen, selection, activeAnnotation])
+    overlayOpenRef.current = openPanel !== null || selection !== null || activeAnnotation !== null
+  }, [openPanel, selection, activeAnnotation])
+
+  // 内核回调(constant closure)需要读到最新的面板状态。
+  useEffect(() => {
+    openPanelRef.current = openPanel
+  }, [openPanel])
 
   useEffect(() => {
     settingsRef.current = { viewMode, fontSize, lineHeight, fontFamily, themeIndex }
@@ -246,6 +338,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     callbacksRef.current = {
       onRelocate: (location) => {
         if (location.sectionIndex !== undefined) sectionIndexRef.current = location.sectionIndex
+        if (location.tocLabel !== undefined) setSectionLabel(location.tocLabel)
         const fraction =
           typeof location.fraction === 'number' && Number.isFinite(location.fraction)
             ? location.fraction
@@ -260,6 +353,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         scheduleSave()
       },
       onSelection: (sel) => {
+        // 书页内容在 iframe 里,父层收不到 pointerdown;任何书内交互都兼作
+        // "点空白"——面板开着时先收起面板(内核翻页 zone 有 250ms 延迟,
+        // panelClosedAtRef 保证同一次点击不再被当成翻页)。
+        if (openPanelRef.current !== null) {
+          panelClosedAtRef.current = Date.now()
+          setOpenPanel(null)
+        }
         setActiveAnnotation(null)
         setSelection(sel)
         setChromeVisible(true)
@@ -270,6 +370,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         setChromeVisible(true)
       },
       onTapZone: (zone) => {
+        if (openPanelRef.current !== null) {
+          panelClosedAtRef.current = Date.now()
+          setOpenPanel(null)
+          return
+        }
+        if (Date.now() - panelClosedAtRef.current < 600) return
         if (zone === 'center') {
           setChromeVisible((visible) => !visible)
           return
@@ -280,6 +386,45 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       },
     }
   })
+
+  // 朗读播放条的封面缩略图:与书架同一提取管线,模块级缓存。
+  useEffect(() => {
+    if (ttsCoverUrl) return
+    let cancelled = false
+    void extractCover(book.url, book.format)
+      .then((url) => {
+        if (!cancelled && url) {
+          ttsCoverCache.set(book.hash, url)
+          setTtsCoverUrl(url)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [book, ttsCoverUrl])
+
+  // 导入字体列表 → 组装 @font-face → 注入书籍文档。
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    void invokeCommand('fonts.list', undefined)
+      .then((fonts) => {
+        if (cancelled) return
+        setCustomFonts(fonts)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    void adapterRef.current?.setFontFaces(
+      buildFontFacesCss(customFonts.map((font) => ({ name: font.name, path: font.path }))),
+    )
+  }, [customFonts, phase])
 
   useEffect(() => {
     if (!isTauriRuntime()) return
@@ -301,6 +446,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       onSelection: (sel) => callbacksRef.current.onSelection?.(sel),
       onShowAnnotation: (cfi) => callbacksRef.current.onShowAnnotation?.(cfi),
       onTapZone: (zone) => callbacksRef.current.onTapZone?.(zone),
+      onKeyDown: (event) => handleReaderKeyRef.current(event),
     })
     adapterRef.current = adapter
     let cancelled = false
@@ -319,6 +465,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         if (cancelled) return
         setTitle(metadata.title || book.name)
         setToc(tocItems)
+        setBookLanguage(metadata.language)
         await adapter.setTheme(
           READER_THEMES[settingsRef.current.themeIndex]?.theme ?? READER_THEMES[0]!.theme,
         )
@@ -368,7 +515,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [ragSections, setRagSections] = useState<readonly { label: string; text: string }[]>([])
   const [sourceText, setSourceText] = useState<string | null>(null)
   useEffect(() => {
-    if (!aiOpen) return
+    if (openPanel !== 'ai') return
     const adapter = adapterRef.current
     if (!adapter) return
     void adapter
@@ -386,7 +533,69 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       .catch(() => {
         setAiContext(null)
       })
-  }, [aiOpen])
+  }, [openPanel])
+
+  const toggleFullscreen = useCallback(async (): Promise<void> => {
+    if (!isTauriRuntime()) {
+      // 浏览器模式退化为 Fullscreen API,dev 下也能验证视觉。
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else await document.documentElement.requestFullscreen().catch(() => {})
+      return
+    }
+    const tauriWindow = getCurrentWindow()
+    const next = !(await tauriWindow.isFullscreen())
+    await tauriWindow.setFullscreen(next)
+    setFullscreen(next)
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let unlisten: (() => void) | undefined
+    void getCurrentWindow()
+      .listen('tauri://resize', async () => {
+        setFullscreen(await getCurrentWindow().isFullscreen())
+      })
+      .then((fn) => {
+        unlisten = fn
+      })
+    return () => unlisten?.()
+  }, [])
+
+  // 点空白处关闭当前面板:面板/顶栏/底栏之外的按下即收起,不打断书内交互。
+  useEffect(() => {
+    if (openPanel === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (
+        target?.closest(
+          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-display,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
+        )
+      )
+        return
+      setOpenPanel(null)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => window.removeEventListener('pointerdown', onPointerDown)
+  }, [openPanel])
+
+  /** 夜间一键切换:记住亮色主题,再点返回;背景细选仍走排版设置。 */
+  const toggleNightTheme = useCallback((): void => {
+    const nightIndex = READER_THEMES.findIndex(
+      (option) => option.theme.colorScheme === 'dark',
+    )
+    if (themeIndex === nightIndex) {
+      const restore = lastLightIndexRef.current ?? 0
+      setThemeIndex(restore)
+      void adapterRef.current?.setTheme(READER_THEMES[restore]?.theme ?? READER_THEMES[0]!.theme)
+    } else {
+      lastLightIndexRef.current = themeIndex
+      setThemeIndex(nightIndex === -1 ? 0 : nightIndex)
+      void adapterRef.current?.setTheme(
+        (nightIndex === -1 ? READER_THEMES[0] : READER_THEMES[nightIndex])?.theme ??
+          READER_THEMES[0]!.theme,
+      )
+    }
+  }, [themeIndex])
 
   const showChrome = useCallback(() => {
     setChromeVisible(true)
@@ -396,51 +605,80 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }, CHROME_TIMEOUT_MS)
   }, [])
 
+  /** 带方向感的翻页反馈:动画类上屏后再执行内核翻页,新内容带着
+   *  过渡进来——先翻后播会像没动画。 */
+  const turnPage = useCallback(
+    async (dir: 'next' | 'prev'): Promise<void> => {
+      const adapter = adapterRef.current
+      if (!adapter) return
+      setTurnDir(dir)
+      try {
+        // 双 rAF:确保 React 已把动画 class 写入 DOM 并开始播放。
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        )
+        if (dir === 'next') await adapter.nextPage()
+        else await adapter.previousPage()
+      } finally {
+        setTimeout(() => setTurnDir(null), 320)
+      }
+      showChrome()
+    },
+    [showChrome],
+  )
+
   useEffect(() => {
     const onPointerMove = (): void => showChrome()
-    const onKeyDown = (event: KeyboardEvent): void => {
+    window.addEventListener('pointermove', onPointerMove)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+    }
+  }, [showChrome])
+
+  // 方向键切页:window 与书内 iframe 两个入口共用同一处理。
+  const handleReaderKey = useCallback(
+    (event: KeyboardEvent): void => {
+      if (event.key === 'F11' || (event.key === 'f' && event.ctrlKey && event.metaKey)) {
+        event.preventDefault()
+        void toggleFullscreen()
+        return
+      }
       const adapter = adapterRef.current
       if (!adapter) return
       if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
         event.preventDefault()
-        void adapter.nextPage()
-        showChrome()
+        void turnPage('next')
       } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
         event.preventDefault()
-        void adapter.previousPage()
-        showChrome()
+        void turnPage('prev')
       } else if (event.key === 'Escape') {
-        setTocOpen(false)
-        setSettingsOpen(false)
+        setOpenPanel(null)
         setSelection(null)
         setActiveAnnotation(null)
       }
-    }
-    window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [showChrome])
+    },
+    [turnPage],
+  )
 
-  const changeTheme = (delta: number): void => {
-    const next = (themeIndex + delta + READER_THEMES.length) % READER_THEMES.length
-    setThemeIndex(next)
-    void adapterRef.current?.setTheme(READER_THEMES[next]?.theme ?? READER_THEMES[0]!.theme)
-  }
+  useEffect(() => {
+    handleReaderKeyRef.current = handleReaderKey
+    window.addEventListener('keydown', handleReaderKey)
+    return () => window.removeEventListener('keydown', handleReaderKey)
+  }, [handleReaderKey])
 
   const updateLayout = (patch: {
     viewMode?: ViewMode
     fontSize?: number
     lineHeight?: number | undefined
-    fontFamily?: 'serif' | 'sans' | undefined
+    fontFamily?: string | undefined
   }): void => {
+    // `in` checks, not ?? merges: an explicit undefined means "reset to the
+    // book's own typography" and must win over the previous setting.
     const next = {
       viewMode: patch.viewMode ?? viewMode,
       fontSize: patch.fontSize ?? fontSize,
-      lineHeight: patch.lineHeight !== undefined ? patch.lineHeight : lineHeight,
-      fontFamily: patch.fontFamily !== undefined ? patch.fontFamily : fontFamily,
+      lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
+      fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
     }
     setViewMode(next.viewMode)
     setFontSize(next.fontSize)
@@ -464,7 +702,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
   const goToCfi = useCallback((cfi: string): void => {
     void adapterRef.current?.goTo({ cfi, progress: 0 })
-    setTocOpen(false)
+    setOpenPanel(null)
     setSelection(null)
     setActiveAnnotation(null)
   }, [])
@@ -474,7 +712,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       ...(item.href !== undefined ? { href: item.href } : {}),
       progress: 0,
     })
-    setTocOpen(false)
+    setOpenPanel(null)
   }
 
   /** TTS 听书:当前 section 的纯文本(朗读起点为章首)。 */
@@ -484,17 +722,35 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     return adapter.getSectionText(sectionIndexRef.current)
   }, [])
 
-  /** TTS 听书:跳到下一个 section;全书结束时返回 false。 */
-  const ttsAdvanceSection = useCallback(async (): Promise<boolean> => {
+  /** TTS 听书:按 ±1 跳转章节;越界返回 false。 */
+  const ttsJumpSection = useCallback(async (delta: number): Promise<boolean> => {
     const adapter = adapterRef.current
     if (!adapter) return false
     const count = await adapter.getSectionCount()
-    const next = sectionIndexRef.current + 1
-    if (next >= count) return false
+    const next = sectionIndexRef.current + delta
+    if (next < 0 || next >= count) return false
     await adapter.goToSection(next)
     sectionIndexRef.current = next
     return true
   }, [])
+
+  // 当前章字数:切章时后台取一次纯文本计数(与 TTS 同一数据面,廉价)。
+  useEffect(() => {
+    if (phase !== 'reading') return
+    let cancelled = false
+    void adapterRef.current
+      ?.getSectionText(sectionIndexRef.current)
+      .then((text) => {
+        if (cancelled) return
+        setSectionChars(countChars(text))
+      })
+      .catch(() => {
+        if (!cancelled) setSectionChars(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [phase, progress.location?.current])
 
   const addHighlight = async (): Promise<void> => {
     const adapter = adapterRef.current
@@ -572,6 +828,43 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       setPanelProblem(toAppError(registerError).message ?? null)
     }
   }, [])
+
+  const importReadingFont = useCallback(async (): Promise<void> => {
+    const path = await openFileDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: '字体文件', extensions: ['ttf', 'otf', 'woff', 'woff2'] }],
+    })
+    if (!path) return
+    setFontBusy(true)
+    try {
+      await invokeCommand('fonts.import', { path })
+      const fonts = await invokeCommand('fonts.list', undefined)
+      setCustomFonts(fonts)
+      const imported = fonts[fonts.length - 1]
+      if (imported) updateLayout({ fontFamily: imported.name })
+    } catch (fontError) {
+      setPanelProblem(toAppError(fontError).message ?? null)
+    } finally {
+      setFontBusy(false)
+    }
+  }, [])
+
+  const removeReadingFont = useCallback(
+    async (name: string): Promise<void> => {
+      const target = customFonts.find((font) => font.name === name)
+      if (!target) return
+      try {
+        await invokeCommand('fonts.remove', { id: target.id })
+        const fonts = await invokeCommand('fonts.list', undefined)
+        setCustomFonts(fonts)
+        if (fontFamily === name) updateLayout({ fontFamily: undefined })
+      } catch (fontError) {
+        setPanelProblem(toAppError(fontError).message ?? null)
+      }
+    },
+    [customFonts, fontFamily],
+  )
 
   const removeDictionary = useCallback(async (id: string): Promise<void> => {
     try {
@@ -694,9 +987,32 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }
 
   const theme = READER_THEMES[themeIndex] ?? READER_THEMES[0]!
-  const percent = Math.round(progress.fraction * 1000) / 10
   const liveBookmarks = bookmarks.filter((b) => !b.deleted)
   const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
+
+  // 页码 / 字数 / 预计剩余阅读时间。时间按语言取每页平均用时估算,标注"约"。
+  const readingStats = useMemo(() => {
+    const location = progress.location
+    const pages =
+      location && location.total > 0
+        ? { current: location.current, total: location.total }
+        : null
+    const isCjk = bookLanguage === undefined || /^[a-z]{2,3}[-_]?/i.exec(bookLanguage) === null
+    let timeLabel: string | null = null
+    if (pages && progress.fraction > 0) {
+      const secondsPerPage = isCjk ? 90 : 45
+      const remainingMinutes = Math.max(
+        1,
+        Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60),
+      )
+      timeLabel = remainingMinutes >= 60 ? '约 1 小时+' : `约剩 ${remainingMinutes} 分钟`
+    }
+    return {
+      page: pages ? `${pages.current} / ${pages.total} 页` : null,
+      chars: sectionChars !== null ? `本章 ${sectionChars.toLocaleString('zh-Hans-CN')} 字` : null,
+      time: timeLabel,
+    }
+  }, [progress.location, progress.fraction, bookLanguage, sectionChars])
 
   const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
     items.map((item) => (
@@ -715,16 +1031,44 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
   return (
     <div
-      className={`reader${chromeVisible || tocOpen ? ' chrome-visible' : ''}`}
+      className="reader-scope"
       style={
         {
           '--reader-bg': theme.theme.background,
           '--reader-fg': theme.theme.foreground,
+          '--reader-panel': withAlpha(theme.theme.background, 0.86),
+          '--reader-panel-solid': theme.theme.background,
         } as React.CSSProperties
       }
+    >
+    <div
+      className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
       onPointerDown={() => showChrome()}
     >
-      <div ref={hostRef} className="reader-host" />
+      <div
+        ref={hostRef}
+        className={`reader-host page-turn-${pageTurnStyle}${turnDir ? ` turn-${turnDir}` : ''}`}
+      />
+
+      {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
+      <button
+        type="button"
+        className="page-flip page-flip-left"
+        onClick={() => void turnPage('prev')}
+        title="上一页"
+        aria-label="上一页"
+      >
+        <CaretLeft size={20} weight="bold" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="page-flip page-flip-right"
+        onClick={() => void turnPage('next')}
+        title="下一页"
+        aria-label="下一页"
+      >
+        <CaretRight size={20} weight="bold" aria-hidden />
+      </button>
 
       {phase === 'opening' && <div className="reader-opening" data-title={`正在打开 ${title}…`} />}
       {phase === 'error' && (
@@ -756,9 +1100,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         </button>
         <button
           type="button"
-          className="chrome-button"
-          onClick={() => changeTheme(1)}
-          title={`阅读主题:${theme.label}`}
+          className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
+          onClick={toggleNightTheme}
+          title={`阅读背景:点击切换夜间(当前 ${theme.label},在排版设置中可选)`}
         >
           {theme.theme.colorScheme === 'dark' ? (
             <Moon size={18} weight="regular" aria-hidden />
@@ -768,44 +1112,56 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         </button>
         <button
           type="button"
-          className={`chrome-button${settingsOpen ? ' is-active' : ''}`}
-          onClick={() => setSettingsOpen((open) => !open)}
+          className={`chrome-button${fullscreen ? ' is-active' : ''}`}
+          onClick={() => void toggleFullscreen()}
+          title="全屏阅读(F11 / Ctrl+⌘+F)"
+        >
+          <CornersOut size={18} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`chrome-button${openPanel === 'settings' ? ' is-active' : ''}`}
+          onClick={() => setOpenPanel((panel) => (panel === 'settings' ? null : 'settings'))}
           title="排版设置"
         >
           <TextAa size={18} weight="regular" aria-hidden />
         </button>
         <button
           type="button"
-          className={`chrome-button${aiOpen ? ' is-active' : ''}`}
-          onClick={() => {
-            setAiOpen((open) => !open)
-            setTtsOpen(false)
-            setLearningOpen(false)
-          }}
+          className={`chrome-button${openPanel === 'display' ? ' is-active' : ''}`}
+          onClick={() =>
+            setOpenPanel((panel) => (panel === 'display' ? null : 'display'))
+          }
+          title="显示设置"
+        >
+          <SlidersHorizontal size={18} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
+          onClick={() =>
+            setOpenPanel((panel) => (panel === 'ai' ? null : 'ai'))
+          }
           title="AI 助手"
         >
           <Sparkle size={18} weight="regular" aria-hidden />
         </button>
         <button
           type="button"
-          className={`chrome-button${ttsOpen ? ' is-active' : ''}`}
-          onClick={() => {
-            setTtsOpen((open) => !open)
-            setAiOpen(false)
-            setLearningOpen(false)
-          }}
+          className={`chrome-button${openPanel === 'tts' ? ' is-active' : ''}`}
+          onClick={() =>
+            setOpenPanel((panel) => (panel === 'tts' ? null : 'tts'))
+          }
           title="朗读 / 听书"
         >
           <Headphones size={18} weight="regular" aria-hidden />
         </button>
         <button
           type="button"
-          className={`chrome-button${learningOpen ? ' is-active' : ''}`}
-          onClick={() => {
-            setLearningOpen((open) => !open)
-            setAiOpen(false)
-            setTtsOpen(false)
-          }}
+          className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
+          onClick={() =>
+            setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))
+          }
           title="学习(卡片 / 测验 / 错题本)"
         >
           <GraduationCap size={18} weight="regular" aria-hidden />
@@ -814,7 +1170,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           type="button"
           className="chrome-button"
           onClick={() => {
-            setTocOpen((open) => !open)
+            setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
             setChromeVisible(true)
           }}
           title="目录与搜索"
@@ -823,8 +1179,31 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         </button>
       </header>
 
-      {settingsOpen && (
+      {openPanel === 'settings' && (
         <section className="reader-settings" aria-label="排版设置">
+          <div className="settings-column">
+            <span className="settings-label">阅读背景</span>
+            <div className="reader-theme-row">
+              {READER_THEMES.map((option, index) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
+                  style={{
+                    background: option.theme.background,
+                    color: option.theme.foreground,
+                  }}
+                  onClick={() => {
+                    setThemeIndex(index)
+                    void adapterRef.current?.setTheme(option.theme)
+                  }}
+                  aria-pressed={themeIndex === index}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-row">
             <span className="settings-label">字号</span>
             <div className="segmented">
@@ -862,7 +1241,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               ))}
             </div>
           </div>
-          <div className="settings-row">
+          <div className="settings-column">
             <span className="settings-label">字体</span>
             <div className="segmented">
               {FONT_FAMILY_OPTIONS.map((option) => (
@@ -875,6 +1254,39 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                   {option.label}
                 </button>
               ))}
+              {customFonts.map((font) => (
+                <button
+                  key={font.id}
+                  type="button"
+                  className={fontFamily === font.name ? 'is-active' : ''}
+                  onClick={() => updateLayout({ fontFamily: font.name })}
+                  title={`${font.name}(点按使用;长按列表删除)`}
+                >
+                  {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
+                </button>
+              ))}
+            </div>
+            <div className="font-custom-row">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void importReadingFont()}
+                disabled={fontBusy}
+              >
+                <Plus size={13} weight="bold" aria-hidden />
+                {fontBusy ? '导入中…' : '导入字体'}
+              </button>
+              {fontFamily !== undefined &&
+                !FONT_FAMILY_OPTIONS.some((option) => option.value === fontFamily) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost font-remove"
+                    onClick={() => void removeReadingFont(fontFamily)}
+                    title="删除当前使用的自定义字体"
+                  >
+                    <Trash size={13} aria-hidden /> 删除当前字体
+                  </button>
+                )}
             </div>
           </div>
           {panelProblem !== null && (
@@ -906,6 +1318,68 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               </button>
             </div>
           </div>
+        </section>
+      )}
+
+      {openPanel === 'display' && (
+        <section className="reader-settings reader-display" aria-label="显示设置">
+          <div className="settings-column">
+            <span className="settings-label">显示</span>
+            <div className="stats-toggles">
+              {(
+                [
+                  { key: 'progress', label: '进度条与页码' },
+                  { key: 'words', label: '字数' },
+                  { key: 'time', label: '预计时间' },
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`stats-toggle${statsSettings[item.key] ? ' is-on' : ''}`}
+                  role="switch"
+                  aria-checked={statsSettings[item.key]}
+                  onClick={() => {
+                    setStatsSettings((current) => {
+                      const next = { ...current, [item.key]: !current[item.key] }
+                      localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                      return next
+                    })
+                  }}
+                >
+                  <span className="stats-toggle-label">{item.label}</span>
+                  <span className="stats-toggle-track" aria-hidden>
+                    <span className="stats-toggle-thumb" />
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-column">
+            <span className="settings-label">翻页动画</span>
+            <div className="segmented">
+              {(
+                [
+                  { key: 'slide', label: '滑动' },
+                  { key: 'cover', label: '覆盖' },
+                  { key: 'flip', label: '仿真' },
+                  { key: 'fade', label: '淡入' },
+                ] as const
+              ).map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={pageTurnStyle === option.key ? 'is-active' : ''}
+                  onClick={() => {
+                    setPageTurnStyle(option.key)
+                    localStorage.setItem('deepread.reader.pageTurn', option.key)
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-row">
             <span className="settings-label">方式</span>
             <div className="segmented">
@@ -921,17 +1395,18 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               ))}
             </div>
           </div>
+          <p className="ai-privacy">关闭进度条后,底部工具栏整体隐藏,阅读更沉浸。</p>
         </section>
       )}
 
-      {tocOpen && (
+      {openPanel === 'toc' && (
         <nav className="reader-toc" aria-label="目录与搜索">
           <div className="reader-toc-head">
             <span>目录</span>
             <button
               type="button"
               className="chrome-button"
-              onClick={() => setTocOpen(false)}
+              onClick={() => setOpenPanel(null)}
               title="关闭"
             >
               <X size={16} weight="regular" aria-hidden />
@@ -1044,6 +1519,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         </nav>
       )}
 
+      {statsSettings.progress && (
       <footer className="reader-bottom">
         <input
           type="range"
@@ -1060,10 +1536,23 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             void adapterRef.current?.goTo({ progress: fraction })
           }}
         />
-        <ArrowLeft size={14} weight="regular" aria-hidden className="reader-arrow" />
-        <ArrowRight size={14} weight="regular" aria-hidden className="reader-arrow" />
-        <span className="reader-percent">{percent.toFixed(1)}%</span>
+        <span className="reader-arrow" aria-hidden>
+          <ArrowLeft size={14} weight="regular" />
+        </span>
+        <span className="reader-arrow" aria-hidden>
+          <ArrowRight size={14} weight="regular" />
+        </span>
+        {statsSettings.words && readingStats.chars && (
+          <span className="reader-percent">{readingStats.chars}</span>
+        )}
+        {statsSettings.time && readingStats.time && (
+          <span className="reader-percent">{readingStats.time}</span>
+        )}
+        {statsSettings.progress && readingStats.page && (
+          <span className="reader-percent reader-percent-strong">{readingStats.page}</span>
+        )}
       </footer>
+      )}
 
       {repairReview !== null && (
         <section className="repair-panel" aria-label="修整评审">
@@ -1113,7 +1602,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         </section>
       )}
 
-      {aiOpen && (
+      {openPanel === 'ai' && (
         <AiDrawer
           selection={selection?.text ?? null}
           contextText={aiContext}
@@ -1132,27 +1621,40 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             }
             setToc(await adapter.getTableOfContents())
           }}
-          onClose={() => setAiOpen(false)}
+          onClose={() => setOpenPanel(null)}
         />
       )}
 
-      {ttsOpen && (
+      {(openPanel === 'tts' || ttsActive) && (
         <TtsDrawer
           bookHash={book.hash}
           bookTitle={title}
+          bookLanguage={bookLanguage}
+          coverUrl={ttsCoverUrl}
+          sectionLabel={sectionLabel}
+          minimized={ttsMinimized || openPanel !== 'tts'}
+          onPlayingChange={setTtsActive}
           getSectionText={ttsGetSectionText}
-          advanceSection={ttsAdvanceSection}
-          onClose={() => setTtsOpen(false)}
+          jumpSection={ttsJumpSection}
+          onExpand={() => {
+            setTtsMinimized(false)
+            setOpenPanel('tts')
+          }}
+          onMinimize={() => setTtsMinimized(true)}
+          onClose={() => {
+            setOpenPanel((panel) => (panel === 'tts' ? null : panel))
+            setTtsMinimized(false)
+          }}
         />
       )}
 
-      {learningOpen && (
+      {openPanel === 'learning' && (
         <LearningDrawer
           bookHash={book.hash}
           bookTitle={title}
           annotations={annotations}
           getChapterText={ttsGetSectionText}
-          onClose={() => setLearningOpen(false)}
+          onClose={() => setOpenPanel(null)}
         />
       )}
 
@@ -1237,6 +1739,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           </button>
         </div>
       )}
+    </div>
     </div>
   )
 }

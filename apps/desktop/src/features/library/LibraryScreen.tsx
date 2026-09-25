@@ -6,6 +6,7 @@ import {
   ListBullets,
   MagnifyingGlass,
   Plus,
+  Sparkle,
   SquaresFour,
   X,
 } from '@phosphor-icons/react'
@@ -26,6 +27,8 @@ import {
 } from '../../lib/book-import'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
+import { DropdownMenu } from '../../components/DropdownMenu'
+import { AiProviderForm, useAiProviders } from '../settings/AiProviderSettings'
 
 const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {
   unsupported: '暂时不认识这个文件格式。目前支持 EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown。',
@@ -71,15 +74,18 @@ const SORT_LABELS: Readonly<Record<SortKey, string>> = {
 const APP_THEMES: readonly {
   readonly id: AppTheme
   readonly label: string
+  /** Mini page preview: background, ink, and accent of this world. */
   readonly swatch: string
+  readonly ink: string
+  readonly accent: string
 }[] = [
-  { id: 'pure-white', label: '纯白', swatch: '#f6f5f2' },
-  { id: 'warm-paper', label: '暖纸', swatch: '#f3ecdd' },
-  { id: 'ivory', label: '象牙', swatch: '#f8f4ea' },
-  { id: 'soft-gray', label: '浅灰', swatch: '#ebebeb' },
-  { id: 'dark', label: '深色', swatch: '#131210' },
-  { id: 'oled', label: 'OLED 纯黑', swatch: '#000000' },
-  { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec' },
+  { id: 'pure-white', label: '纯白', swatch: '#f6f5f2', ink: '#1d1b17', accent: '#3d6deb' },
+  { id: 'warm-paper', label: '暖纸', swatch: '#f3ecdd', ink: '#2b2620', accent: '#3d6deb' },
+  { id: 'ivory', label: '象牙', swatch: '#f8f4ea', ink: '#33302a', accent: '#3d6deb' },
+  { id: 'soft-gray', label: '浅灰', swatch: '#ebebeb', ink: '#222222', accent: '#3d6deb' },
+  { id: 'dark', label: '深色', swatch: '#131210', ink: '#ece9e3', accent: '#6e93f6' },
+  { id: 'oled', label: 'OLED 纯黑', swatch: '#000000', ink: '#e8e5df', accent: '#7d9ef7' },
+  { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec', ink: '#1c2430', accent: '#3d6deb' },
 ]
 
 const sortFromStorage = (): SortKey => {
@@ -173,6 +179,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [sort, setSort] = useState<SortKey>(sortFromStorage)
   const [view, setView] = useState<ViewMode>(viewFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'appearance' | 'ai' | 'data'>('appearance')
   const [syncOpen, setSyncOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
   const [appTheme, setAppTheme] = useState<AppTheme>(
@@ -227,6 +234,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   // Real cover extraction per book (kernel covers for EPUB/MOBI, PDF.js page 1
   // for PDF), cached at module level so returning to the shelf never re-extracts.
+  // No cancellation: a books refresh (e.g. progress hydration) cancels this
+  // effect mid-flight, and dropping the in-flight cover would leave that book
+  // coverless — the next run skips it via coverAttempted.
   useEffect(() => {
     if (!libraryLoaded) return
     // Sync already-cached covers immediately: remounts render without flicker.
@@ -237,10 +247,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
     if (cachedNow.size > 0) setCovers((current) => new Map([...current, ...cachedNow]))
 
-    let cancelled = false
     void (async () => {
       for (const book of books) {
-        if (cancelled || coverAttempted.has(book.hash)) continue
+        if (coverAttempted.has(book.hash)) continue
         if (coverCache.has(book.hash)) {
           setCovers((current) => new Map(current).set(book.hash, coverCache.get(book.hash)!))
           continue
@@ -248,16 +257,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         coverAttempted.add(book.hash)
         const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : book.path
         const cover = await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1])
-        if (cancelled) return
         if (cover) {
           coverCache.set(book.hash, cover)
           setCovers((current) => new Map(current).set(book.hash, cover))
+        } else {
+          // Null is also what a transient failure returns; un-mark so the next
+          // shelf rebuild retries instead of caching the failure for the run.
+          coverAttempted.delete(book.hash)
         }
       }
     })()
-    return () => {
-      cancelled = true
-    }
   }, [books, libraryLoaded])
 
   const importPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
@@ -474,6 +483,17 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const reading = books.filter((book) => (book.progress ?? 0) > 0).length
   const openFileInput = (): void => inputRef.current?.click()
 
+  const {
+    providers: aiProviders,
+    loaded: aiLoaded,
+    activeId: aiActiveId,
+    configForm: aiConfigForm,
+    setConfigForm: setAiConfigForm,
+    saveProvider: saveAiProvider,
+    removeProvider: removeAiProvider,
+    error: aiProviderError,
+  } = useAiProviders()
+
   return (
     <div
       className={`library${dragging ? ' is-dragging' : ''}`}
@@ -490,27 +510,34 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         void importFromBrowserFiles(Array.from(event.dataTransfer.files))
       }}
     >
-      <header className="library-header">
-        <span className="library-brand">Deepread</span>
-        <span className="library-tagline">个人阅读操作系统</span>
-        <button
-          type="button"
-          className="chrome-button library-settings-button"
-          onClick={() => setSettingsOpen(true)}
-          title="设置"
-          aria-label="打开设置"
-        >
-          <Gear size={17} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="chrome-button library-settings-button"
-          onClick={() => setSyncOpen(true)}
-          title="云同步(WebDAV)"
-          aria-label="打开云同步"
-        >
-          <Cloud size={17} weight="regular" aria-hidden />
-        </button>
+      <header className="library-header" data-tauri-drag-region>
+        <div className="library-brand-block" data-tauri-drag-region>
+          <span className="library-mark" aria-hidden>
+            <BookOpenText size={17} weight="fill" />
+          </span>
+          <span className="library-brand">Deepread</span>
+          <span className="library-tagline">个人阅读操作系统</span>
+        </div>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={() => setSettingsOpen(true)}
+            title="设置"
+            aria-label="打开设置"
+          >
+            <Gear size={17} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={() => setSyncOpen(true)}
+            title="云同步(WebDAV)"
+            aria-label="打开云同步"
+          >
+            <Cloud size={17} weight="regular" aria-hidden />
+          </button>
+        </div>
       </header>
 
       <main className="library-main">
@@ -606,21 +633,19 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                   <ListBullets size={15} weight="regular" aria-hidden />
                 </button>
               </div>
-              <select
-                className="shelf-sort"
+              <DropdownMenu
+                ariaLabel="排序方式"
                 value={sort}
-                onChange={(event) => {
-                  setSort(event.target.value as SortKey)
-                  localStorage.setItem('deepread.shelf.sort', event.target.value)
+                options={Object.entries(SORT_LABELS).map(([key, label]) => ({
+                  value: key as SortKey,
+                  label,
+                }))}
+                onChange={(next) => {
+                  setSort(next)
+                  localStorage.setItem('deepread.shelf.sort', next)
                 }}
-                aria-label="排序方式"
-              >
-                {Object.entries(SORT_LABELS).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                className="dropdown-shelf-sort"
+              />
               <button
                 type="button"
                 className="shelf-import"
@@ -812,10 +837,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       )}
 
       {settingsOpen && (
-        <div className="settings-overlay">
-          <section className="settings-panel" aria-label="设置">
-            <header className="lookup-head">
-              <strong>设置</strong>
+        <div
+          className="modal-overlay"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSettingsOpen(false)
+          }}
+        >
+          <section className="modal-panel" role="dialog" aria-label="设置">
+            <header className="modal-head">
+              <strong className="modal-title">设置</strong>
               <button
                 type="button"
                 className="chrome-button"
@@ -825,62 +855,172 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 <X size={14} weight="regular" aria-hidden />
               </button>
             </header>
-            <p className="settings-section-label">外观主题</p>
-            <div className="theme-grid">
-              {APP_THEMES.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
-                  onClick={() => setAppTheme(theme.id)}
-                >
-                  <span className="theme-swatch-color" style={{ background: theme.swatch }} />
-                  {theme.label}
-                </button>
-              ))}
-            </div>
-            <p className="settings-section-label">备份与恢复</p>
-            <div className="segmented">
-              <button type="button" onClick={() => void runBackup()} disabled={backupBusy}>
-                {backupBusy ? '备份中…' : '备份到…'}
+            <nav className="settings-tabs" aria-label="设置分区">
+              <button
+                type="button"
+                className={settingsTab === 'appearance' ? 'is-active' : ''}
+                onClick={() => setSettingsTab('appearance')}
+              >
+                外观
               </button>
               <button
                 type="button"
-                onClick={() => void runRestore(loadBooks)}
-                disabled={backupBusy}
+                className={settingsTab === 'ai' ? 'is-active' : ''}
+                onClick={() => setSettingsTab('ai')}
               >
-                {backupBusy ? '恢复中…' : '从备份恢复…'}
+                <Sparkle size={13} weight="fill" aria-hidden /> AI 服务
               </button>
-            </div>
-            {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
-            <p className="settings-section-label">更新</p>
-            <div className="segmented">
-              <button type="button" onClick={() => void checkForUpdates()} disabled={updateBusy}>
-                {updateBusy ? '检查中…' : '检查更新'}
+              <button
+                type="button"
+                className={settingsTab === 'data' ? 'is-active' : ''}
+                onClick={() => setSettingsTab('data')}
+              >
+                备份与更新
               </button>
-              {update !== null && (
-                <button type="button" onClick={() => void installUpdate()} disabled={updateBusy}>
-                  下载并安装
-                </button>
-              )}
-              {update !== null && (
-                <button type="button" onClick={ignoreUpdate} disabled={updateBusy}>
-                  忽略此版本
-                </button>
-              )}
-            </div>
-            {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
-            <p className="settings-section-label">书架偏好(自动保存)</p>
-            <p className="ai-privacy">
-              排序与视图选择自动记忆;AI 服务在阅读器内的 ✦ 助手里配置(密钥存入系统钥匙串)。
-            </p>
-            <button
-              type="button"
-              className="reader-error-button"
-              onClick={() => setSettingsOpen(false)}
-            >
-              完成
-            </button>
+            </nav>
+
+            {settingsTab === 'appearance' && (
+              <>
+                <section className="modal-section">
+                  <p className="modal-section-label">界面主题</p>
+                  <div className="theme-grid">
+                    {APP_THEMES.map((theme) => (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
+                        onClick={() => setAppTheme(theme.id)}
+                        aria-pressed={appTheme === theme.id}
+                      >
+                        <span
+                          className="theme-swatch-color"
+                          style={{ background: theme.swatch, color: theme.ink }}
+                        >
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.85 }}
+                          />
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.55 }}
+                          />
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.35 }}
+                          />
+                          <span
+                            className="theme-swatch-dot"
+                            style={{ background: theme.accent }}
+                          />
+                        </span>
+                        {theme.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <section className="modal-section">
+                  <p className="modal-section-label">书架偏好(自动保存)</p>
+                  <p className="ai-privacy">
+                    排序与视图选择自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa 面板设置。
+                  </p>
+                </section>
+              </>
+            )}
+
+            {settingsTab === 'ai' && (
+              <section className="modal-section">
+                <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
+                <AiProviderForm
+                  providers={aiProviders}
+                  configForm={aiConfigForm}
+                  onFormChange={setAiConfigForm}
+                  onSave={() => saveAiProvider()}
+                  onRemove={removeAiProvider}
+                  onApplyPreset={(preset) => {
+                    setAiConfigForm((form) => ({
+                      ...form,
+                      name: preset.label,
+                      baseUrl: preset.baseUrl,
+                      model: preset.model,
+                    }))
+                  }}
+                  error={aiProviderError}
+                />
+                {aiLoaded && aiProviders.length > 0 && (
+                  <p className="ai-privacy">
+                    配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
+                    {aiProviders.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}。
+                  </p>
+                )}
+              </section>
+            )}
+
+            {settingsTab === 'data' && (
+              <>
+                <section className="modal-section">
+                  <p className="modal-section-label">备份与恢复</p>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void runBackup()}
+                      disabled={backupBusy}
+                    >
+                      {backupBusy ? '备份中…' : '备份到…'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void runRestore(loadBooks)}
+                      disabled={backupBusy}
+                    >
+                      {backupBusy ? '恢复中…' : '从备份恢复…'}
+                    </button>
+                  </div>
+                  {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+                </section>
+                <section className="modal-section">
+                  <p className="modal-section-label">更新</p>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void checkForUpdates()}
+                      disabled={updateBusy}
+                    >
+                      {updateBusy ? '检查中…' : '检查更新'}
+                    </button>
+                    {update !== null && (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void installUpdate()}
+                        disabled={updateBusy}
+                      >
+                        下载并安装
+                      </button>
+                    )}
+                    {update !== null && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={ignoreUpdate}
+                        disabled={updateBusy}
+                      >
+                        忽略此版本
+                      </button>
+                    )}
+                  </div>
+                  {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
+                </section>
+              </>
+            )}
+
+            <footer className="modal-foot">
+              <button type="button" className="btn-primary" onClick={() => setSettingsOpen(false)}>
+                完成
+              </button>
+            </footer>
           </section>
         </div>
       )}

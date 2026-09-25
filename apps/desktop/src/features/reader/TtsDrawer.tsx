@@ -1,142 +1,207 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Pause, Play, Stop, Users, X } from '@phosphor-icons/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CaretDown,
+  CaretDoubleLeft,
+  CaretDoubleRight,
+  CaretLeft,
+  CaretRight,
+  Check,
+  Pause,
+  Play,
+  SpinnerBall,
+  X,
+} from '@phosphor-icons/react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { toAppError, type AiProviderConfig } from '@deepread/shared'
-import { buildCharactersMessages, parseCharacters } from '@deepread/ai-core'
-import { buildSpeechSegments, type SpeechSegment } from '@deepread/reader-core'
+import { splitSentences } from '@deepread/reader-core'
 import { invokeCommand } from '../../lib/ipc'
-import { runChatOnce } from '../../lib/ai-chat'
+import { DropdownMenu } from '../../components/DropdownMenu'
 
-const CLOUD_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const
-const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2] as const
-const TIMER_OPTIONS: readonly { readonly label: string; readonly minutes: number }[] = [
-  { label: '关闭', minutes: 0 },
-  { label: '30 分钟', minutes: 30 },
-  { label: '60 分钟', minutes: 60 },
-  { label: '90 分钟', minutes: 90 },
-]
-const PITCH_OPTIONS: readonly { readonly label: string; readonly value: number }[] = [
-  { label: '低', value: 0.8 },
-  { label: '中', value: 1 },
-  { label: '高', value: 1.3 },
-]
-const MAX_BATCH_CHARS = 800
+type Engine = 'edge' | 'system' | 'cloud'
 
-/** Per-character voice assignment (spec §45), persisted per book. */
-interface TtsCastEntry {
-  readonly name: string
-  readonly systemVoice?: string
-  readonly cloudVoice?: string
-  readonly pitch: number
+const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 1.75, 2] as const
+const ENGINE_LABELS: Readonly<Record<Engine, string>> = {
+  edge: 'Edge 语音',
+  system: '系统语音',
+  cloud: '云端语音',
 }
-
-interface TtsSettings {
-  engine: 'system' | 'cloud'
-  rate: number
-  timerMinutes: number
-  narratorSystem?: string
-  narratorCloud: string
-  multiChar: boolean
-}
+/** 中文语速基线:每秒约 4.2 字,用于时间估算。 */
+const CHARS_PER_SECOND = 4.2
+/** 合成块大小:约 2-4 句。小块首响快(1-3 秒),配合预取无缝衔接——
+ * 参考 readest 的按句流水线,整章一次合成要等几十秒。 */
+const MAX_SYNTH_CHARS = 300
 
 const SETTINGS_KEY = 'deepread.tts.settings'
 
+interface TtsSettings {
+  engine: Engine
+  rate: number
+  /** 章末连读下一章。 */
+  autoNext: boolean
+  timerKind: 'off' | 'minutes' | 'section' | 'book'
+  timerMinutes: number
+  narratorEdge: string
+  narratorSystem?: string
+  narratorCloud: string
+}
+
 const DEFAULT_SETTINGS: TtsSettings = {
-  engine: 'system',
+  engine: 'edge',
   rate: 1,
-  timerMinutes: 0,
+  autoNext: true,
+  timerKind: 'off',
+  timerMinutes: 30,
+  narratorEdge: 'zh-CN-XiaoxiaoNeural',
   narratorCloud: 'alloy',
-  multiChar: false,
 }
 
 interface TtsDrawerProps {
   readonly bookHash: string
   readonly bookTitle: string
+  /** 书的语言(BCP-47),用于过滤语音列表。 */
+  readonly bookLanguage?: string
+  /** 封面缩略图(书架同源提取)。 */
+  readonly coverUrl: string | null
+  /** 当前章节名(阅读位置)。 */
+  readonly sectionLabel: string | null
+  /** 迷你播放条形态(面板被收起或切到别的面板时)。 */
+  readonly minimized: boolean
+  /** 播放状态变化(用于父层决定是否保留迷你条)。 */
+  readonly onPlayingChange: (playing: boolean) => void
   /** Plain text of the section currently on screen. */
   readonly getSectionText: () => Promise<string>
-  /** Move the view to the next section; resolves false at the book's end. */
-  readonly advanceSection: () => Promise<boolean>
+  /** 跳转章节(±1);返回 false 表示越界。 */
+  readonly jumpSection: (delta: number) => Promise<boolean>
+  /** 展开回完整播放器。 */
+  readonly onExpand: () => void
+  /** 收起为迷你播放条。 */
+  readonly onMinimize: () => void
+  /** 完全关闭(停止播放)。 */
   readonly onClose: () => void
 }
 
-type Phase = 'idle' | 'playing' | 'paused'
+type Phase = 'idle' | 'loading' | 'playing' | 'paused'
 
-/** Merge consecutive same-speaker segments so cloud TTS needs fewer calls. */
-function batchSegments(segments: readonly SpeechSegment[], multiChar: boolean): SpeechSegment[] {
-  const batches: SpeechSegment[] = []
-  for (const segment of segments) {
-    const speaker = multiChar ? segment.speaker : 'narrator'
-    const last = batches[batches.length - 1]
-    if (
-      last &&
-      last.speaker === speaker &&
-      last.text.length + segment.text.length <= MAX_BATCH_CHARS
-    ) {
-      batches[batches.length - 1] = { speaker, text: last.text + segment.text }
+interface Sentence {
+  readonly text: string
+  /** 全章字符起点。 */
+  readonly start: number
+}
+
+interface Block {
+  readonly text: string
+  readonly start: number
+}
+
+/** 按句边界把整章切成 ≤max 的合成块,块与块的语音首尾相接。 */
+function splitChapterBlocks(text: string, max = MAX_SYNTH_CHARS): Block[] {
+  const sentences = splitSentences(text)
+  const blocks: Block[] = []
+  let current = ''
+  let currentStart = 0
+  let cursor = 0
+  for (const sentence of sentences) {
+    if (current.length + sentence.length > max && current.length > 0) {
+      blocks.push({ text: current, start: currentStart })
+      current = sentence
+      currentStart = cursor
     } else {
-      batches.push({ speaker, text: segment.text })
+      if (current.length === 0) currentStart = cursor
+      current += sentence
     }
+    cursor += sentence.length
   }
-  return batches
+  if (current.length > 0) blocks.push({ text: current, start: currentStart })
+  return blocks
+}
+
+/** 优先保留与书同语言的语音;同语言不足两条时回退全部。 */
+function voicesForLanguage<T extends { lang: string }>(
+  voices: readonly T[],
+  language: string | undefined,
+): readonly T[] {
+  if (!language) return voices
+  const prefix = language.slice(0, 2).toLowerCase()
+  const matched = voices.filter((voice) =>
+    voice.lang.toLowerCase().replace('_', '-').startsWith(prefix),
+  )
+  return matched.length >= 2 ? matched : voices
+}
+
+function formatClock(seconds: number): string {
+  const safe = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(safe / 60)
+  const rest = safe % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
 export function TtsDrawer({
-  bookHash,
   bookTitle,
+  bookLanguage,
+  coverUrl,
+  sectionLabel,
+  minimized,
+  onPlayingChange,
   getSectionText,
-  advanceSection,
+  jumpSection,
+  onExpand,
+  onMinimize,
   onClose,
 }: TtsDrawerProps) {
-  const castKey = `deepread.tts.cast.${bookHash}`
   const [settings, setSettings] = useState<TtsSettings>(() => {
     try {
       const stored = localStorage.getItem(SETTINGS_KEY)
       return stored
-        ? { ...DEFAULT_SETTINGS, ...(JSON.parse(stored) as TtsSettings) }
+        ? { ...DEFAULT_SETTINGS, ...(JSON.parse(stored) as Partial<TtsSettings>) }
         : DEFAULT_SETTINGS
     } catch {
       return DEFAULT_SETTINGS
     }
   })
-  const [cast, setCast] = useState<readonly TtsCastEntry[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(castKey) ?? '[]') as TtsCastEntry[]
-    } catch {
-      return []
-    }
-  })
-  const [voices, setVoices] = useState<readonly SpeechSynthesisVoice[]>([])
-  const [providers, setProviders] = useState<readonly AiProviderConfig[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  const [view, setView] = useState<'player' | 'voices'>('player')
   const [phase, setPhase] = useState<Phase>('idle')
-  const [currentText, setCurrentText] = useState<string | null>(null)
+  const [sentences, setSentences] = useState<readonly Sentence[]>([])
+  const [charPos, setCharPos] = useState(0)
+  const [sectionTitle, setSectionTitle] = useState(sectionLabel)
   const [error, setError] = useState<string | null>(null)
-  const [detecting, setDetecting] = useState(false)
+  const [voices, setVoices] = useState<readonly SpeechSynthesisVoice[]>([])
+  const [edgeVoices, setEdgeVoices] = useState<
+    readonly { shortName: string; friendlyName: string; locale: string; lang: string }[]
+  >([])
+  const [providers, setProviders] = useState<readonly AiProviderConfig[]>([])
+  const [voiceSwitching, setVoiceSwitching] = useState(false)
 
   const stopFlagRef = useRef(false)
-  const cancelAudioRef = useRef<(() => void) | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // The playback loop outlives renders; it reads live values from mirrors.
+  // 播放循环比渲染活得久,实时值全部从镜像读取。
   const settingsRef = useRef(settings)
-  const castRef = useRef(cast)
+  const phaseRef = useRef(phase)
+  const sentencesRef = useRef<readonly Sentence[]>([])
+  const charPosRef = useRef(0)
   const voicesRef = useRef(voices)
-  const activeIdRef = useRef(activeId)
+  const activeIdRef = useRef<string | null>(null)
+  const sectionTokenRef = useRef(0)
+  // 首挂标记:热切换 effect 用它跳过首次执行。
+  const voiceSettingsProbe = useRef(false)
 
   useEffect(() => {
     settingsRef.current = settings
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
   }, [settings])
   useEffect(() => {
-    castRef.current = cast
-    localStorage.setItem(castKey, JSON.stringify(cast))
-  }, [cast, castKey])
+    phaseRef.current = phase
+    onPlayingChange(phase !== 'idle')
+  }, [phase, onPlayingChange])
   useEffect(() => {
     voicesRef.current = voices
   }, [voices])
   useEffect(() => {
-    activeIdRef.current = activeId
-  }, [activeId])
+    charPosRef.current = charPos
+  }, [charPos])
+  useEffect(() => {
+    setSectionTitle(sectionLabel)
+  }, [sectionLabel])
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return
@@ -149,455 +214,829 @@ export function TtsDrawer({
   useEffect(() => {
     invokeCommand('ai.config.list', undefined)
       .then((response) => {
-        setProviders(response.providers)
-        setActiveId((current) => current ?? response.providers[0]?.id ?? null)
+        setProviders(response?.providers ?? [])
       })
       .catch(() => {
-        // Cloud engine is optional; the error surfaces if the user selects it.
+        // 云端引擎是可选项;选中时才暴露错误。
       })
-  }, [])
-
-  const stop = useCallback((): void => {
-    stopFlagRef.current = true
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = null
-    window.speechSynthesis?.cancel()
-    cancelAudioRef.current?.()
-    audioRef.current?.pause()
-    audioRef.current = null
-    setPhase('idle')
-    setCurrentText(null)
   }, [])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') onMinimize()
     }
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('keydown', onKey)
-      stop()
+      stopFlagRef.current = true
       window.speechSynthesis?.cancel()
-    }
-  }, [onClose, stop])
-
-  const speakSystem = (
-    text: string,
-    voice: SpeechSynthesisVoice | undefined,
-    rate: number,
-    pitch: number,
-  ) =>
-    new Promise<void>((resolve, reject) => {
-      const utterance = new SpeechSynthesisUtterance(text)
-      if (voice) utterance.voice = voice
-      utterance.rate = rate
-      utterance.pitch = pitch
-      utterance.onend = () => resolve()
-      utterance.onerror = (event) => {
-        // 'interrupted'/'canceled' are how stop() cuts an utterance short.
-        if (event.error === 'interrupted' || event.error === 'canceled') resolve()
-        else reject(new Error(`系统语音合成失败(${event.error})`))
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.removeAttribute('src')
+        audioRef.current = null
       }
-      window.speechSynthesis.speak(utterance)
-    })
-
-  const speakCloud = async (
-    text: string,
-    voice: string,
-    rate: number,
-    configId: string,
-  ): Promise<void> => {
-    const response = await invokeCommand('tts.audio', { configId, text, voice, speed: rate })
-    const audio = new Audio(convertFileSrc(response.path))
-    audioRef.current = audio
-    await new Promise<void>((resolve, reject) => {
-      let settled = false
-      const settle = (): void => {
-        if (settled) return
-        settled = true
-        resolve()
-      }
-      cancelAudioRef.current = settle
-      audio.onended = settle
-      audio.onerror = () => {
-        settled = true
-        reject(new Error('音频播放失败'))
-      }
-      void audio.play().catch((reason: unknown) => {
-        if (!settled) {
-          settled = true
-          reject(reason instanceof Error ? reason : new Error('音频播放失败'))
-        }
-      })
-    })
-  }
-
-  const voiceForSpeaker = (
-    speaker: string,
-  ): { systemVoice?: string; cloudVoice: string; pitch: number } => {
-    if (settingsRef.current.multiChar && speaker !== 'narrator') {
-      const entry = castRef.current.find((item) => item.name === speaker)
-      if (entry) {
-        return {
-          systemVoice: entry.systemVoice,
-          cloudVoice: entry.cloudVoice ?? settingsRef.current.narratorCloud,
-          pitch: entry.pitch,
-        }
-      }
-    }
-    return {
-      systemVoice: settingsRef.current.narratorSystem,
-      cloudVoice: settingsRef.current.narratorCloud,
-      pitch: 1,
-    }
-  }
-
-  const speakBatch = async (batch: SpeechSegment): Promise<void> => {
-    const current = settingsRef.current
-    const assignment = voiceForSpeaker(batch.speaker)
-    if (current.engine === 'cloud') {
-      const configId = activeIdRef.current
-      if (!configId) throw new Error('请先选择一个已配置的语音服务')
-      await speakCloud(batch.text, assignment.cloudVoice, current.rate, configId)
-    } else {
-      if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
-      const voice = voicesRef.current.find((item) => item.voiceURI === assignment.systemVoice)
-      await speakSystem(batch.text, voice, current.rate, assignment.pitch)
-    }
-  }
-
-  const armTimer = (): void => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    const minutes = settingsRef.current.timerMinutes
-    if (minutes > 0) timerRef.current = setTimeout(() => stop(), minutes * 60 * 1000)
-  }
-
-  const pause = (): void => {
-    if (phase !== 'playing') return
-    if (settingsRef.current.engine === 'cloud') audioRef.current?.pause()
-    else window.speechSynthesis?.pause()
-    setPhase('paused')
-  }
-
-  const resume = (): void => {
-    if (phase !== 'paused') return
-    if (settingsRef.current.engine === 'cloud') void audioRef.current?.play()
-    else window.speechSynthesis?.resume()
-    setPhase('playing')
-  }
-
-  const run = useCallback(async (): Promise<void> => {
-    if (phase !== 'idle') return
-    // ponytail: 听书的跨重启断点续播留到云端同步阶段;本次会话内暂停/继续可用。
-    stopFlagRef.current = false
-    setPhase('playing')
-    setError(null)
-    setCurrentText(null)
-    armTimer()
-    try {
-      let previous = ''
-      for (;;) {
-        if (stopFlagRef.current) return
-        const text = (await getSectionText()).trim()
-        // Empty section, or the advance landed nowhere new (book end).
-        if (text === '' || text === previous) return
-        previous = text
-        const multiChar = settingsRef.current.multiChar
-        const batches = batchSegments(
-          buildSpeechSegments(text, multiChar ? castRef.current.map((entry) => entry.name) : []),
-          multiChar,
-        )
-        for (const batch of batches) {
-          if (stopFlagRef.current) return
-          setCurrentText(batch.text)
-          await speakBatch(batch)
-        }
-        if (!(await advanceSection())) return
-      }
-    } catch (runError) {
-      if (!stopFlagRef.current) setError(toAppError(runError).message)
-    } finally {
-      stopFlagRef.current = false
-      setPhase('idle')
-      setCurrentText(null)
       if (timerRef.current) clearTimeout(timerRef.current)
-      timerRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getSectionText, advanceSection, phase])
+  }, [])
 
-  const detectCharacters = useCallback(async (): Promise<void> => {
-    const configId = activeId
-    if (!configId) {
-      setError('请先在 AI 助手中配置服务,才能自动识别角色。')
+  useEffect(() => {
+    let cancelled = false
+    void invokeCommand('tts.edge.voices', undefined)
+      .then((response) => {
+        if (cancelled) return
+        setEdgeVoices(
+          response.voices.map((voice) => ({
+            shortName: voice.shortName,
+            friendlyName: voice.friendlyName,
+            locale: voice.locale,
+            lang: voice.locale,
+          })),
+        )
+      })
+      .catch(() => {
+        // 列表拉取失败时仍可手输;错误在使用处呈现。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const activeId = providers[0]?.id ?? null
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
+  const stop = useCallback((): void => {
+    stopFlagRef.current = true
+    sectionTokenRef.current += 1
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = null
+    window.speechSynthesis?.cancel()
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.removeAttribute('src')
+      audioRef.current = null
+    }
+    setPhase('idle')
+    setSentences([])
+    sentencesRef.current = []
+    setCharPos(0)
+    charPosRef.current = 0
+  }, [])
+
+  const armTimer = useCallback((): void => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    const { timerKind, timerMinutes } = settingsRef.current
+    if (timerKind === 'minutes' && timerMinutes > 0) {
+      timerRef.current = setTimeout(() => stop(), timerMinutes * 60 * 1000)
+    }
+    // section/book 模式在章循环结束处检查。
+  }, [stop])
+
+  /** 播放已合成的块文件;onTime 持续回报全章字符位置。resolve 于自然播完。 */
+  const playBlockFile = useCallback(
+    async (block: Block, path: string, seekRatio: number): Promise<void> => {
+      const audio = new Audio(convertFileSrc(path))
+      audioRef.current = audio
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const settle = (): void => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        audio.ontimeupdate = () => {
+          if (audio.duration > 0) {
+            const ratio = audio.currentTime / audio.duration
+            setCharPos(block.start + Math.round(ratio * block.text.length))
+          }
+        }
+        audio.onended = settle
+        audio.onerror = () => {
+          if (!settled) {
+            settled = true
+            reject(new Error('音频播放失败'))
+          }
+        }
+        if (seekRatio > 0) {
+          audio.onloadedmetadata = () => {
+            audio.currentTime = seekRatio * (audio.duration || 0)
+          }
+        }
+        void audio.play().catch((reason: unknown) => {
+          if (!settled) {
+            settled = true
+            reject(reason instanceof Error ? reason : new Error('音频播放失败'))
+          }
+        })
+      })
+      setCharPos(block.start + block.text.length)
+    },
+    [],
+  )
+
+  /** 系统引擎:整块 utterance + 估算时钟推进字符位置。 */
+  const speakSystemBlock = useCallback(async (block: Block): Promise<void> => {
+    if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
+    const current = settingsRef.current
+    const voice = voicesRef.current.find((item) => item.voiceURI === current.narratorSystem)
+    const chars = block.text.length
+    const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
+    let elapsed = 0
+    const step = 100
+    const clock = setInterval(() => {
+      if (stopFlagRef.current) return
+      elapsed += step
+      setCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
+    }, step)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const utterance = new SpeechSynthesisUtterance(block.text)
+        if (voice) utterance.voice = voice
+        utterance.rate = current.rate
+        utterance.onend = () => resolve()
+        utterance.onerror = (event) => {
+          if (event.error === 'interrupted' || event.error === 'canceled') resolve()
+          else reject(new Error(`系统语音合成失败(${event.error})`))
+        }
+        window.speechSynthesis.speak(utterance)
+      })
+    } finally {
+      clearInterval(clock)
+    }
+    setCharPos(block.start + chars)
+  }, [])
+
+  /** 从 startChar 起连播整章;章末按连读开关与定时模式决定去留。 */
+  const run = useCallback(
+    async (startChar = 0, opts?: { readonly stopAtChapterEnd?: boolean }): Promise<void> => {
+      sectionTokenRef.current += 1
+      const token = sectionTokenRef.current
+      stopFlagRef.current = false
+      setPhase('loading')
+      setError(null)
+      armTimer()
+      try {
+        let previous = ''
+        for (;;) {
+          if (stopFlagRef.current || sectionTokenRef.current !== token) return
+          const text = (await getSectionText()).trim()
+          if (text === '' || text === previous) return
+          previous = text
+          let sentenceCursor = 0
+          const sentenceList = splitSentences(text).map((sentence) => {
+            const entry = { text: sentence, start: sentenceCursor }
+            sentenceCursor += sentence.length
+            return entry
+          })
+          sentencesRef.current = sentenceList
+          setSentences(sentenceList)
+          setPhase('playing')
+          const blocks = splitChapterBlocks(text)
+          // 流水线:块 N 播放时后台合成块 N+1(readest 的 preload 思路)。
+          // 缓存命中时预取立即返回,重听零等待。
+          type Fetch = Promise<{ block: Block; path: string } | null>
+          const fetchBlock = async (block: Block): Promise<{ block: Block; path: string }> => {
+            const current = settingsRef.current
+            const response =
+              current.engine === 'edge'
+                ? await invokeCommand('tts.edge.audio', {
+                    text: block.text,
+                    voice: current.narratorEdge,
+                    lang: bookLanguage,
+                    rate: current.rate,
+                  })
+                : await invokeCommand('tts.audio', {
+                    configId: activeIdRef.current ?? '',
+                    text: block.text,
+                    voice: current.narratorCloud,
+                    speed: current.rate,
+                  })
+            return { block, path: response.path }
+          }
+          let prefetch: Fetch | null = null
+          const nextIndexAfter = (from: number): number => {
+            for (let i = from + 1; i < blocks.length; i++) {
+              if (blocks[i]!.start + blocks[i]!.text.length > startChar) return i
+            }
+            return -1
+          }
+          // 找到起点块。
+          let cursor = -1
+          for (let i = 0; i < blocks.length; i++) {
+            if (blocks[i]!.start + blocks[i]!.text.length > startChar) {
+              cursor = i
+              break
+            }
+          }
+          while (cursor !== -1) {
+            if (stopFlagRef.current || sectionTokenRef.current !== token) return
+            const block = blocks[cursor]!
+            const seekRatio =
+              block.start < startChar ? (startChar - block.start) / block.text.length : 0
+            setCharPos(Math.max(block.start, startChar))
+            if (settingsRef.current.engine === 'system') {
+              await speakSystemBlock(block)
+              cursor = nextIndexAfter(cursor)
+              continue
+            }
+            let attempt = 0
+            for (;;) {
+              try {
+                const fetched = (await (prefetch ?? fetchBlock(block))) ?? (await fetchBlock(block))
+                prefetch = null
+                if (stopFlagRef.current || sectionTokenRef.current !== token) return
+                await playBlockFile(fetched.block, fetched.path, seekRatio)
+                break
+              } catch (blockError) {
+                prefetch = null
+                attempt += 1
+                if (attempt >= 2 || stopFlagRef.current || sectionTokenRef.current !== token)
+                  throw blockError
+                // 连接中断:换新连接重试一次当前块。
+                await new Promise((resolve) => setTimeout(resolve, 600))
+              }
+            }
+            if (stopFlagRef.current || sectionTokenRef.current !== token) return
+            const next = nextIndexAfter(cursor)
+            // 预取下一块:不等它,失败留给播放时重试。
+            if (next !== -1) {
+              prefetch = fetchBlock(blocks[next]!).catch(() => null)
+            }
+            cursor = next
+            if (cursor === -1) {
+              await (prefetch ?? Promise.resolve(null))
+              prefetch = null
+            }
+          }
+          if (stopFlagRef.current || sectionTokenRef.current !== token) return
+          // 定时"本章结束",或跨章"上一句"只播上一章的尾部。
+          if (settingsRef.current.timerKind === 'section' || opts?.stopAtChapterEnd) {
+            stop()
+            return
+          }
+          startChar = 0
+          if (!settingsRef.current.autoNext) {
+            stop()
+            return
+          }
+          if (!(await jumpSection(1))) return
+        }
+      } catch (runError) {
+        if (!stopFlagRef.current && sectionTokenRef.current === token)
+          setError(toAppError(runError).message)
+      } finally {
+        if (sectionTokenRef.current === token) {
+          stopFlagRef.current = false
+          setPhase('idle')
+          setSentences([])
+          sentencesRef.current = []
+          setCharPos(0)
+          charPosRef.current = 0
+          if (timerRef.current) {
+            clearTimeout(timerRef.current)
+            timerRef.current = null
+          }
+        }
+      }
+    },
+    [getSectionText, jumpSection, armTimer, playBlockFile, speakSystemBlock, stop],
+  )
+
+  const play = useCallback((): void => {
+    if (phaseRef.current === 'paused') {
+      audioRef.current?.play().catch(() => {})
+      window.speechSynthesis?.resume()
+      setPhase('playing')
+      armTimer()
       return
     }
-    setDetecting(true)
-    setError(null)
-    try {
-      const text = (await getSectionText()).slice(0, 3000)
-      const raw = await runChatOnce(
-        configId,
-        buildCharactersMessages([{ label: '当前章节', text }], bookTitle),
-      )
-      const parsed = parseCharacters(raw)
-      setCast((current) => {
-        const known = new Map(current.map((entry) => [entry.name, entry]))
-        return parsed.characters.map((character): TtsCastEntry => ({
-          pitch: 1,
-          ...known.get(character.name),
-          name: character.name,
-        }))
-      })
-    } catch (detectError) {
-      setError(toAppError(detectError).message)
-    } finally {
-      setDetecting(false)
-    }
-  }, [activeId, bookTitle, getSectionText])
+    if (phaseRef.current !== 'idle') return
+    void run(0)
+  }, [run, armTimer])
 
-  const updateCast = (name: string, patch: Partial<TtsCastEntry>): void => {
-    setCast((current) =>
-      current.map((entry) => (entry.name === name ? { ...entry, ...patch } : entry)),
+  const pause = useCallback((): void => {
+    if (phaseRef.current !== 'playing') return
+    audioRef.current?.pause()
+    window.speechSynthesis?.pause()
+    setPhase('paused')
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
+
+  const toggle = useCallback((): void => {
+    if (phaseRef.current === 'playing') pause()
+    else play()
+  }, [pause, play])
+
+  /** 音色/语速/引擎热切换:软中断当前块,从当前字符位置续播。 */
+  useEffect(() => {
+    const wasActive = phaseRef.current === 'playing' || phaseRef.current === 'paused'
+    const mounted = voiceSettingsProbe.current
+    if (!mounted) return
+    if (!wasActive) return
+    const at = charPosRef.current
+    setVoiceSwitching(true)
+    sectionTokenRef.current += 1
+    stopFlagRef.current = true
+    window.speechSynthesis?.cancel()
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.removeAttribute('src')
+      audioRef.current = null
+    }
+    const delay = setTimeout(() => {
+      setVoiceSwitching(false)
+      void run(at)
+    }, 80)
+    return () => clearTimeout(delay)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.narratorEdge, settings.narratorCloud, settings.narratorSystem, settings.rate, settings.engine])
+
+  useEffect(() => {
+    voiceSettingsProbe.current = true
+  }, [])
+
+  const totalChars = useMemo(
+    () => sentences.reduce((sum, sentence) => sum + sentence.text.length, 0),
+    [sentences],
+  )
+
+  /** 当前句:charPos 落在哪句区间。 */
+  const sentenceIndex = useMemo(() => {
+    let index = 0
+    for (const sentence of sentences) {
+      if (sentence.start > charPos) break
+      index += 1
+    }
+    return Math.max(0, index - 1)
+  }, [sentences, charPos])
+
+  /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
+  const seekToChar = useCallback((target: number): void => {
+    if (phaseRef.current === 'idle') return
+    const audio = audioRef.current
+    const list = sentencesRef.current
+    // 优先:目标就在当前音频对应的块内,直接 currentTime 精确 seek。
+    // 块边界未知于 UI 层,统一走重载路径:token 中断 + run(目标位置)。
+    if (audio && !audio.paused) {
+      // 粗判:目标位置仍在当前句块内时也可跳,但块信息不在 UI;重载即合成缓存命中(同文本同音色同语速),代价是秒级。
+    }
+    sectionTokenRef.current += 1
+    stopFlagRef.current = true
+    window.speechSynthesis?.cancel()
+    if (audio) {
+      audio.pause()
+      audio.removeAttribute('src')
+      audioRef.current = null
+    }
+    setPhase('loading')
+    setTimeout(() => {
+      void run(Math.max(0, Math.min(target, totalChars > 0 ? totalChars - 1 : target)))
+    }, 60)
+    void list
+  }, [run, totalChars])
+
+  const jumpSentences = useCallback(
+    (delta: number): void => {
+      if (phaseRef.current === 'idle') return
+      const target = sentenceIndex + delta
+      if (target < 0) {
+        void jumpSection(-1).then((moved) => {
+          if (moved) {
+            sectionTokenRef.current += 1
+            stopFlagRef.current = true
+            window.speechSynthesis?.cancel()
+            audioRef.current?.pause()
+            setPhase('loading')
+            setTimeout(() => void run(Number.MAX_SAFE_INTEGER / 2 - 1, { stopAtChapterEnd: true }), 60)
+          }
+        })
+        return
+      }
+      const sentence = sentences[target]
+      if (sentence) seekToChar(sentence.start)
+    },
+    [sentenceIndex, sentences, jumpSection, run, seekToChar],
+  )
+
+  const changeSection = useCallback(
+    (delta: number): void => {
+      const wasActive = phaseRef.current !== 'idle'
+      stop()
+      void jumpSection(delta).then((moved) => {
+        if (moved && wasActive) void run(0)
+      })
+    },
+    [stop, jumpSection, run],
+  )
+
+  // 切句时把当前句滚动到视口中央(歌词页)。
+  const sentenceListRef = useRef<HTMLOListElement | null>(null)
+  useEffect(() => {
+    if (sentenceListRef.current === null) return
+    const current = sentenceListRef.current.querySelector('.is-current')
+    current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [sentenceIndex, sentences.length])
+
+  const sentenceProgress = totalChars > 0 ? Math.min(1, charPos / totalChars) : 0
+  const cps = CHARS_PER_SECOND * settings.rate
+  const elapsed = totalChars > 0 ? charPos / cps : 0
+  const remaining = totalChars > 0 ? (totalChars - charPos) / cps : 0
+
+  const voiceLabel =
+    settings.engine === 'edge'
+      ? (edgeVoices.find((voice) => voice.shortName === settings.narratorEdge)?.shortName ??
+        settings.narratorEdge)
+      : settings.engine === 'cloud'
+        ? settings.narratorCloud
+        : (voices.find((voice) => voice.voiceURI === settings.narratorSystem)?.name ?? '默认')
+
+  const systemVoiceOptions = useMemo(
+    () => voicesForLanguage(voices, bookLanguage),
+    [voices, bookLanguage],
+  )
+  const edgeVoiceOptions = useMemo(
+    () => voicesForLanguage(edgeVoices, bookLanguage),
+    [edgeVoices, bookLanguage],
+  )
+
+  const timerLabel =
+    settings.timerKind === 'off'
+      ? '关闭'
+      : settings.timerKind === 'section'
+        ? '本章结束'
+        : settings.timerKind === 'book'
+          ? '全书结束'
+          : `${settings.timerMinutes} 分钟`
+
+  // 迷你播放条:悬浮在底栏上方,不打断阅读;点击展开,× 停止。
+  if (minimized) {
+    return (
+      <div className="tts-mini" role="region" aria-label="朗读迷你条">
+        {coverUrl ? (
+          <img src={coverUrl} alt="" className="tts-mini-cover" />
+        ) : (
+          <span className="tts-mini-cover tts-cover-fallback" aria-hidden>
+            {bookTitle.charAt(0)}
+          </span>
+        )}
+        <button type="button" className="tts-mini-open" onClick={onExpand} title="展开播放器">
+          <span className="tts-mini-title">{bookTitle}</span>
+          <span className="tts-mini-progress">
+            <span
+              className="tts-mini-progress-fill"
+              style={{ width: `${sentenceProgress * 100}%` }}
+            />
+          </span>
+        </button>
+        <button
+          type="button"
+          className="tts-mini-btn"
+          onClick={toggle}
+          title={phase === 'playing' ? '暂停' : phase === 'paused' ? '继续' : '播放'}
+        >
+          {phase === 'playing' ? (
+            <Pause size={15} weight="fill" aria-hidden />
+          ) : (
+            <Play size={15} weight="fill" aria-hidden />
+          )}
+        </button>
+        <button type="button" className="tts-mini-btn" onClick={onClose} title="停止并关闭">
+          <X size={14} weight="regular" aria-hidden />
+        </button>
+      </div>
     )
   }
 
   return (
-    <aside className="ai-drawer tts-drawer" aria-label="朗读">
-      <div className="lookup-head">
-        <strong>朗读</strong>
-        <div className="ai-head-actions">
-          {settings.engine === 'cloud' && (
-            <select
-              className="ai-provider-select"
-              value={activeId ?? ''}
-              onChange={(event) => setActiveId(event.target.value)}
-              aria-label="语音服务"
-            >
-              {providers.length === 0 && <option value="">未配置服务</option>}
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <button type="button" className="chrome-button" onClick={onClose} title="关闭">
-            <X size={16} weight="regular" aria-hidden />
-          </button>
-        </div>
-      </div>
-
-      <div className="ai-drawer-body">
-        <div className="settings-row">
-          <span className="settings-label">引擎</span>
-          <div className="segmented">
-            <button
-              type="button"
-              className={settings.engine === 'system' ? 'is-active' : ''}
-              onClick={() => setSettings((current) => ({ ...current, engine: 'system' }))}
-            >
-              系统语音
-            </button>
-            <button
-              type="button"
-              className={settings.engine === 'cloud' ? 'is-active' : ''}
-              onClick={() => setSettings((current) => ({ ...current, engine: 'cloud' }))}
-            >
-              云端语音
-            </button>
-          </div>
-        </div>
-
-        {settings.engine === 'system' && voices.length === 0 && (
-          <p className="ai-privacy">系统语音列表为空或仍在加载;若一直为空,请改用云端语音。</p>
-        )}
-
-        <div className="settings-row">
-          <span className="settings-label">声音</span>
-          {settings.engine === 'system' ? (
-            <select
-              className="ai-provider-select"
-              value={settings.narratorSystem ?? ''}
-              onChange={(event) =>
-                setSettings((current) => ({ ...current, narratorSystem: event.target.value }))
-              }
-              aria-label="叙述者声音"
-            >
-              <option value="">默认</option>
-              {voices.map((voice) => (
-                <option key={voice.voiceURI} value={voice.voiceURI}>
-                  {voice.name}({voice.lang})
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select
-              className="ai-provider-select"
-              value={settings.narratorCloud}
-              onChange={(event) =>
-                setSettings((current) => ({ ...current, narratorCloud: event.target.value }))
-              }
-              aria-label="云端声音"
-            >
-              {CLOUD_VOICES.map((voice) => (
-                <option key={voice} value={voice}>
-                  {voice}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div className="settings-row">
-          <span className="settings-label">语速</span>
-          <div className="segmented">
-            {RATE_OPTIONS.map((rate) => (
-              <button
-                key={rate}
-                type="button"
-                className={settings.rate === rate ? 'is-active' : ''}
-                onClick={() => setSettings((current) => ({ ...current, rate }))}
-              >
-                {rate}×
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="settings-row">
-          <span className="settings-label">定时停止</span>
-          <div className="segmented">
-            {TIMER_OPTIONS.map((option) => (
-              <button
-                key={option.minutes}
-                type="button"
-                className={settings.timerMinutes === option.minutes ? 'is-active' : ''}
-                onClick={() =>
-                  setSettings((current) => ({ ...current, timerMinutes: option.minutes }))
-                }
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="settings-row">
-          <span className="settings-label">多角色</span>
-          <div className="segmented">
-            <button
-              type="button"
-              className={!settings.multiChar ? 'is-active' : ''}
-              onClick={() => setSettings((current) => ({ ...current, multiChar: false }))}
-            >
-              关
-            </button>
-            <button
-              type="button"
-              className={settings.multiChar ? 'is-active' : ''}
-              onClick={() => setSettings((current) => ({ ...current, multiChar: true }))}
-            >
-              开
-            </button>
-          </div>
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={() => void detectCharacters()}
-            disabled={detecting}
-            title="AI 识别本段角色并分配声音"
-          >
-            <Users size={14} weight="regular" aria-hidden />
-            {detecting ? '识别中…' : '识别角色'}
-          </button>
-        </div>
-
-        {settings.multiChar &&
-          cast.map((entry) => (
-            <div key={entry.name} className="settings-row voice-row">
-              <span className="settings-label">{entry.name}</span>
-              {settings.engine === 'system' ? (
-                <select
-                  className="ai-provider-select"
-                  value={entry.systemVoice ?? ''}
-                  onChange={(event) => updateCast(entry.name, { systemVoice: event.target.value })}
-                  aria-label={`${entry.name} 的声音`}
-                >
-                  <option value="">跟随叙述者</option>
-                  {voices.map((voice) => (
-                    <option key={voice.voiceURI} value={voice.voiceURI}>
-                      {voice.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <select
-                  className="ai-provider-select"
-                  value={entry.cloudVoice ?? ''}
-                  onChange={(event) => updateCast(entry.name, { cloudVoice: event.target.value })}
-                  aria-label={`${entry.name} 的声音`}
-                >
-                  <option value="">跟随叙述者</option>
-                  {CLOUD_VOICES.map((voice) => (
-                    <option key={voice} value={voice}>
-                      {voice}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <div className="segmented">
-                {PITCH_OPTIONS.map((pitch) => (
-                  <button
-                    key={pitch.value}
-                    type="button"
-                    className={entry.pitch === pitch.value ? 'is-active' : ''}
-                    onClick={() => updateCast(entry.name, { pitch: pitch.value })}
-                  >
-                    {pitch.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-
-        <div className="tts-controls">
-          {phase === 'playing' ? (
-            <button type="button" className="chrome-button" onClick={pause} title="暂停">
-              <Pause size={18} weight="regular" aria-hidden />
-            </button>
-          ) : (
+    <aside className="ai-drawer tts-drawer" aria-label="语音播放器">
+      {view === 'voices' ? (
+        <div className="tts-voices">
+          <div className="lookup-head">
             <button
               type="button"
               className="chrome-button"
-              onClick={() => (phase === 'paused' ? resume() : void run())}
-              title={phase === 'paused' ? '继续' : '从当前章开始朗读'}
+              onClick={() => setView('player')}
+              title="返回播放器"
             >
-              <Play size={18} weight="regular" aria-hidden />
+              <CaretLeft size={16} weight="bold" aria-hidden />
             </button>
-          )}
+            <strong>选择语音</strong>
+            <button type="button" className="chrome-button" onClick={onMinimize} title="收起">
+              <X size={16} weight="regular" aria-hidden />
+            </button>
+          </div>
+          <p className="tts-voices-sub">
+            {ENGINE_LABELS[settings.engine]} ·{' '}
+            {settings.engine === 'edge'
+              ? `${edgeVoiceOptions.length} 种语音`
+              : settings.engine === 'system'
+                ? `${systemVoiceOptions.length} 种语音`
+                : `${providers.length} 个服务`}
+          </p>
+          <div className="tts-voice-list">
+            {settings.engine === 'edge' &&
+              edgeVoiceOptions.map((voice) => (
+                <button
+                  key={voice.shortName}
+                  type="button"
+                  className={`tts-voice-item${settings.narratorEdge === voice.shortName ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setSettings((current) => ({ ...current, narratorEdge: voice.shortName }))
+                    setView('player')
+                  }}
+                >
+                  <span className="tts-voice-name">{voice.shortName.replace(/Neural$/, '')}</span>
+                  <span className="tts-voice-locale">{voice.locale}</span>
+                  {settings.narratorEdge === voice.shortName && (
+                    <Check size={15} weight="bold" aria-hidden />
+                  )}
+                </button>
+              ))}
+            {settings.engine === 'system' && (
+              <button
+                type="button"
+                className={`tts-voice-item${!settings.narratorSystem ? ' is-active' : ''}`}
+                onClick={() => {
+                  setSettings((current) => ({ ...current, narratorSystem: undefined }))
+                  setView('player')
+                }}
+              >
+                <span className="tts-voice-name">默认</span>
+                {!settings.narratorSystem && <Check size={15} weight="bold" aria-hidden />}
+              </button>
+            )}
+            {settings.engine === 'system' &&
+              systemVoiceOptions.map((voice) => (
+                <button
+                  key={voice.voiceURI}
+                  type="button"
+                  className={`tts-voice-item${settings.narratorSystem === voice.voiceURI ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setSettings((current) => ({ ...current, narratorSystem: voice.voiceURI }))
+                    setView('player')
+                  }}
+                >
+                  <span className="tts-voice-name">{voice.name}</span>
+                  <span className="tts-voice-locale">{voice.lang}</span>
+                  {settings.narratorSystem === voice.voiceURI && (
+                    <Check size={15} weight="bold" aria-hidden />
+                  )}
+                </button>
+              ))}
+            {settings.engine === 'cloud' &&
+              providers.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  className={`tts-voice-item${activeId === provider.id ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setView('player')
+                  }}
+                >
+                  <span className="tts-voice-name">
+                    {provider.name} · {provider.ttsModel ?? '未配置 TTS 模型'}
+                  </span>
+                  {activeId === provider.id && <Check size={15} weight="bold" aria-hidden />}
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="tts-head">
+            {coverUrl ? (
+              <img src={coverUrl} alt="" className="tts-cover" />
+            ) : (
+              <span className="tts-cover tts-cover-fallback" aria-hidden>
+                {bookTitle.charAt(0)}
+              </span>
+            )}
+            <div className="tts-head-text">
+              <strong className="tts-title">{bookTitle}</strong>
+              <span className="tts-section">{sectionTitle || sectionLabel || '当前章节'}</span>
+            </div>
+            <button
+              type="button"
+              className="chrome-button"
+              onClick={onMinimize}
+              title="收起为迷你播放条"
+            >
+              <CaretDown size={15} weight="bold" aria-hidden />
+            </button>
+            <button type="button" className="chrome-button" onClick={onClose} title="停止并关闭">
+              <X size={15} weight="regular" aria-hidden />
+            </button>
+          </div>
+
+          <div className="tts-sentences" aria-live="polite">
+            {phase === 'loading' ? (
+              <div className="tts-loading" aria-label="正在合成语音">
+                <div className="tts-loading-bar" />
+                <div className="tts-loading-bar short" />
+                <span className="tts-loading-label">正在合成整章语音…</span>
+              </div>
+            ) : sentences.length === 0 ? (
+              <p className="tts-sentence-text is-idle">
+                {phase === 'idle' ? '待机' : '正在加载章节…'}
+              </p>
+            ) : (
+              <ol className="tts-sentence-list" ref={sentenceListRef}>
+                {sentences.map((sentence, index) => (
+                  <li key={sentence.start}>
+                    <button
+                      type="button"
+                      className={`tts-sentence-item${index === sentenceIndex ? ' is-current' : ''}${
+                        index < sentenceIndex ? ' is-past' : ''
+                      }`}
+                      onClick={() => seekToChar(sentence.start)}
+                      aria-current={index === sentenceIndex}
+                    >
+                      {sentence.text}
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {voiceSwitching && (
+              <span className="tts-switching" aria-hidden>
+                <SpinnerBall size={16} weight="bold" /> 切换音色中…
+              </span>
+            )}
+          </div>
+
+          <div className="tts-progress">
+            <span className="tts-clock">{formatClock(elapsed)}</span>
+            <input
+              type="range"
+              className="tts-seek"
+              min={0}
+              max={1000}
+              value={Math.round(sentenceProgress * 1000)}
+              aria-label="本章播放进度"
+              disabled={totalChars === 0}
+              onChange={(event) => {
+                const fraction = Number(event.target.value) / 1000
+                seekToChar(Math.round(fraction * totalChars))
+              }}
+            />
+            <span className="tts-clock">-{formatClock(remaining)}</span>
+          </div>
+
+          <div className="tts-transport">
+            <button
+              type="button"
+              className="tts-skip"
+              onClick={() => changeSection(-1)}
+              title="上一章"
+              aria-label="上一章"
+            >
+              <CaretDoubleLeft size={17} weight="bold" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="tts-skip"
+              onClick={() => jumpSentences(-1)}
+              title="上一句"
+              aria-label="上一句"
+            >
+              <CaretLeft size={17} weight="bold" aria-hidden />
+            </button>
+            {phase === 'playing' ? (
+              <button
+                type="button"
+                className="tts-play"
+                onClick={pause}
+                title="暂停"
+                aria-label="暂停"
+              >
+                <Pause size={22} weight="fill" aria-hidden />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="tts-play"
+                onClick={toggle}
+                title={phase === 'paused' ? '继续' : '播放本章'}
+                aria-label="播放"
+              >
+                <Play size={22} weight="fill" aria-hidden />
+              </button>
+            )}
+            <button
+              type="button"
+              className="tts-skip"
+              onClick={() => jumpSentences(1)}
+              title="下一句"
+              aria-label="下一句"
+            >
+              <CaretRight size={17} weight="bold" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="tts-skip"
+              onClick={() => changeSection(1)}
+              title="下一章"
+              aria-label="下一章"
+            >
+              <CaretDoubleRight size={17} weight="bold" aria-hidden />
+            </button>
+          </div>
+
+          <div className="tts-cards">
+            <button
+              type="button"
+              className="tts-card"
+              onClick={() => {
+                const index = RATE_OPTIONS.indexOf(settings.rate as (typeof RATE_OPTIONS)[number])
+                const next = RATE_OPTIONS[(index + 1) % RATE_OPTIONS.length] ?? 1
+                setSettings((current) => ({ ...current, rate: next }))
+              }}
+            >
+              <span className="tts-card-value">{settings.rate}×</span>
+              <span className="tts-card-label">语速</span>
+            </button>
+            <button
+              type="button"
+              className="tts-card"
+              onClick={() => setView('voices')}
+              title="选择语音"
+            >
+              <span className="tts-card-value">
+                {voiceLabel.length > 14 ? `${voiceLabel.slice(0, 13)}…` : voiceLabel}
+              </span>
+              <span className="tts-card-label">{ENGINE_LABELS[settings.engine]}</span>
+            </button>
+            <DropdownMenu
+              className="tts-card-dropdown"
+              ariaLabel="定时关闭"
+              value={`${settings.timerKind}:${settings.timerMinutes}`}
+              options={[
+                { value: 'off:30', label: '关闭' },
+                { value: 'minutes:30', label: '30 分钟' },
+                { value: 'minutes:60', label: '60 分钟' },
+                { value: 'minutes:90', label: '90 分钟' },
+                { value: 'section:30', label: '本章结束' },
+                { value: 'book:30', label: '全书结束(读完为止)' },
+              ]}
+              onChange={(value) => {
+                const [kind, minutes] = value.split(':')
+                setSettings((current) => ({
+                  ...current,
+                  timerKind: kind as TtsSettings['timerKind'],
+                  timerMinutes: Number(minutes) || 30,
+                }))
+                if (kind === 'minutes' && phaseRef.current !== 'idle') armTimer()
+                if (kind !== 'minutes' && timerRef.current) {
+                  clearTimeout(timerRef.current)
+                  timerRef.current = null
+                }
+              }}
+            >
+              <span className="tts-card-value">{timerLabel}</span>
+              <span className="tts-card-label">定时关闭</span>
+            </DropdownMenu>
+          </div>
+
+          <div className="tts-engine-row">
+            {(Object.keys(ENGINE_LABELS) as Engine[]).map((engine) => (
+              <button
+                key={engine}
+                type="button"
+                className={`segmented-button${settings.engine === engine ? ' is-active' : ''}`}
+                onClick={() => setSettings((current) => ({ ...current, engine }))}
+              >
+                {ENGINE_LABELS[engine]}
+              </button>
+            ))}
+          </div>
+
           <button
             type="button"
-            className="chrome-button"
-            onClick={stop}
-            disabled={phase === 'idle'}
-            title="停止"
+            className={`stats-toggle tts-auto-next${settings.autoNext ? ' is-on' : ''}`}
+            role="switch"
+            aria-checked={settings.autoNext}
+            onClick={() =>
+              setSettings((current) => ({ ...current, autoNext: !current.autoNext }))
+            }
           >
-            <Stop size={18} weight="regular" aria-hidden />
+            <span className="stats-toggle-label">连读下一章</span>
+            <span className="stats-toggle-track" aria-hidden>
+              <span className="stats-toggle-thumb" />
+            </span>
           </button>
-          <span className="tts-status">
-            {phase === 'playing' ? '朗读中' : phase === 'paused' ? '已暂停' : '待机'}
-          </span>
-        </div>
 
-        {currentText !== null && <p className="tts-now">{currentText}</p>}
-        {error !== null && (
-          <p className="ai-error" role="alert">
-            {error}
-          </p>
-        )}
-        <p className="ai-privacy">云端语音按段缓存到本地,重复收听不再消耗配额。</p>
-      </div>
+          {error !== null && (
+            <p className="ai-error" role="alert">
+              {error}
+            </p>
+          )}
+        </>
+      )}
     </aside>
   )
 }

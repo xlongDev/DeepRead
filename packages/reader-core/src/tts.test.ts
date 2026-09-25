@@ -68,6 +68,21 @@ describe('assignSpeakers', () => {
   })
 })
 
+describe('buildSpeechSegments sentence granularity', () => {
+  it('splits both narration and dialogue into individual sentences', () => {
+    // 回归:对话框曾整段成段(可能几百字),歌词页失去逐句高亮能力。
+    const segments = buildSpeechSegments(
+      '他推门进来。窗外正下着雨，很久都没有停。「你来了。」她头也不抬。',
+    )
+    expect(segments.map((s) => s.text)).toEqual([
+      '他推门进来。',
+      '窗外正下着雨，很久都没有停。',
+      '「你来了。」',
+      '她头也不抬。',
+    ])
+  })
+})
+
 describe('buildSpeechSegments', () => {
   it('runs the full pipeline', () => {
     const plan = buildSpeechSegments('夜里，张三低声道：「灯灭了。」', ['张三'])

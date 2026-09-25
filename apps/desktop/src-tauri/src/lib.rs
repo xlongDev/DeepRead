@@ -9,8 +9,10 @@ mod cards;
 mod cloud;
 mod commands;
 mod dictionary;
+mod edge_tts;
 mod error;
 mod events;
+mod fonts;
 mod library;
 mod secrets;
 mod state;
@@ -42,6 +44,10 @@ pub fn run() {
                 }
             }
             // Cached TTS audio is served to the webview the same way.
+            let fonts_dir = fonts::fonts_dir(&base);
+            if let Err(err) = app.asset_protocol_scope().allow_directory(&fonts_dir, false) {
+                log::warn!("failed to allow fonts dir {}: {err}", fonts_dir.display());
+            }
             let tts_cache = tts::cache_dir(&base);
             if let Err(err) = app
                 .asset_protocol_scope()
@@ -101,6 +107,11 @@ pub fn run() {
             cards::cards_remove,
             cards::cards_review,
             tts::command_tts_audio,
+            edge_tts::command_edge_tts_audio,
+            edge_tts::command_edge_tts_voices,
+            fonts::command_fonts_list,
+            fonts::command_fonts_import,
+            fonts::command_fonts_remove,
             cloud::cloud_config_get,
             cloud::cloud_config_save,
             cloud::cloud_config_test,

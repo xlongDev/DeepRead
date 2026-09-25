@@ -55,6 +55,9 @@ export interface EngineSelection {
 export type TapZone = 'left' | 'right' | 'center'
 
 export interface EngineCallbacks {
+  /** 书内 iframe 的键盘事件转发(iframe 获焦时父层 window 收不到)。 */
+  onKeyDown?: (event: KeyboardEvent) => void
+
   onRelocate?: (location: EngineLocation) => void
   onSelection?: (selection: EngineSelection | null) => void
   onShowAnnotation?: (cfi: string) => void
@@ -70,21 +73,31 @@ function titleFromName(name: string): string {
 
 function buildReaderCSS(
   theme: ReaderTheme,
-  layout: { fontSize?: number; lineHeight?: number; fontFamily?: 'serif' | 'sans' },
+  layout: { fontSize?: number; lineHeight?: number; fontFamily?: string },
+  flow: 'paginated' | 'scrolled',
+  fontFaces?: string,
 ): string {
   const fontStack =
     layout.fontFamily === 'serif'
       ? 'var(--font-serif, Georgia, "Songti SC", serif)'
       : layout.fontFamily === 'sans'
         ? 'var(--font-sans, -apple-system, "PingFang SC", sans-serif)'
-        : undefined
+        : layout.fontFamily === 'wenkai'
+          ? '"LXGW WenKai", "Songti SC", serif'
+          : layout.fontFamily !== undefined
+            ? // 用户导入字体:fontFamily 即字体的 display name。
+              `"${layout.fontFamily.replace(/["\\]/g, '')}", "PingFang SC", sans-serif`
+            : undefined
   return [
-    `html { font-size: ${layout.fontSize ?? 16}px; }`,
+    ...(fontFaces ? [fontFaces] : []),
+    `html { font-size: ${layout.fontSize ?? 16}px; --theme-bg-color: ${theme.background}; }`,
     ...(layout.lineHeight !== undefined
       ? [`body { line-height: ${layout.lineHeight} !important; }`]
       : []),
     ...(fontStack ? [`body { font-family: ${fontStack} !important; }`] : []),
     `html, body { background: ${theme.background} !important; color: ${theme.foreground} !important; }`,
+    // 滚动模式内核把上下 padding 清零,这里由我们补回舒适的阅读留白
+    ...(flow === 'scrolled' ? [`body { padding: 56px 0 120px !important; }`] : []),
   ].join('\n')
 }
 
@@ -94,7 +107,9 @@ export class FoliateAdapter implements ReaderEngine {
   readonly #callbacks: EngineCallbacks
   readonly #annotationCfis = new Map<string, string>()
   #theme: ReaderTheme | null = null
-  #layout: { fontSize?: number; lineHeight?: number; fontFamily?: 'serif' | 'sans' } = {}
+  #layout: { fontSize?: number; lineHeight?: number; fontFamily?: string } = {}
+  #flow: 'paginated' | 'scrolled' = 'paginated'
+  #fontFaces: string | undefined
   #tapTimer: ReturnType<typeof setTimeout> | undefined
   #destroyed = false
   #adapterBuiltText: { format: 'txt' | 'md'; title: string; text: string } | null = null
@@ -108,7 +123,7 @@ export class FoliateAdapter implements ReaderEngine {
   #applyStyles(): void {
     const view = this.#view
     if (!view || view.isFixedLayout || !this.#theme) return
-    view.renderer.setStyles?.(buildReaderCSS(this.#theme, this.#layout))
+    view.renderer.setStyles?.(buildReaderCSS(this.#theme, this.#layout, this.#flow, this.#fontFaces))
   }
 
   #requireView(): View {
@@ -133,6 +148,11 @@ export class FoliateAdapter implements ReaderEngine {
     })
     view.addEventListener('load', (event) => {
       const { doc, index } = (event as CustomEvent).detail as { doc: Document; index: number }
+      // 内核翻页后 iframe 会自行获焦,方向键从此落在 iframe 文档里,
+      // 必须在这里转发,父层 window 才能持续收到切页按键。
+      doc.addEventListener('keydown', (domEvent) => {
+        this.#callbacks.onKeyDown?.(domEvent)
+      })
       doc.addEventListener('pointerup', (domEvent) => {
         const selection = doc.getSelection()
         if (!selection || selection.isCollapsed) {
@@ -479,6 +499,12 @@ export class FoliateAdapter implements ReaderEngine {
     this.#annotationCfis.delete(annotationId)
   }
 
+  /** 注入书籍文档的 @font-face 规则(内置 + 用户导入)。 */
+  async setFontFaces(css: string): Promise<void> {
+    this.#fontFaces = css
+    this.#applyStyles()
+  }
+
   async setTheme(theme: ReaderTheme): Promise<void> {
     this.#theme = theme
     this.#applyStyles()
@@ -487,17 +513,26 @@ export class FoliateAdapter implements ReaderEngine {
   async setLayout(layout: ReaderLayout): Promise<void> {
     const view = this.#requireView()
     if (view.isFixedLayout) return
-    view.renderer.setAttribute('flow', layout.flow === 'scrolled' ? 'scrolled' : 'paginated')
-    view.renderer.setAttribute('margin', String(layout.margin ?? 48))
+    this.#flow = layout.flow === 'scrolled' ? 'scrolled' : 'paginated'
+    view.renderer.setAttribute('flow', this.#flow)
+    // 内核 CSS 变量参与 calc() 长度运算,必须带 px 单位——无单位会让整条
+    // grid 声明失效,列宽与上下边距全部失控(单页满宽、双页裁字)。
+    // 栏宽对齐印刷排版的舒适行长:单/滚 ~40 字,双页每栏 ~34 字。
+    view.renderer.setAttribute('margin', `${layout.margin ?? 72}px`)
+    view.renderer.setAttribute(
+      'max-inline-size',
+      `${layout.pageMode === 'dual' ? 620 : 700}px`,
+    )
 
     // Dual page only makes sense on wide paginated surfaces; the kernel picks
     // its column count from these two attributes.
     view.renderer.setAttribute('max-column-count', layout.pageMode === 'dual' ? '2' : '1')
-    view.renderer.setAttribute('max-inline-size', layout.pageMode === 'dual' ? '1100' : '760')
+    // Whole-layout replace: omitting a field means "back to the book's own
+    // typography" — merging here would make 原书 unreachable after any change.
     this.#layout = {
       ...(layout.fontSize !== undefined ? { fontSize: layout.fontSize } : {}),
-      ...(layout.lineHeight !== undefined ? { lineHeight: layout.lineHeight } : {}),
-      ...(layout.fontFamily !== undefined ? { fontFamily: layout.fontFamily } : {}),
+      lineHeight: layout.lineHeight,
+      fontFamily: layout.fontFamily,
     }
     this.#applyStyles()
   }

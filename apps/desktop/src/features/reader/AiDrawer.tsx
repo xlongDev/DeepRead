@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
-import { toAppError, type AiIndexPayload, type AiProviderConfig } from '@deepread/shared'
+import { toAppError, type AiIndexPayload } from '@deepread/shared'
 import {
   buildChatBody,
   buildOutlineMessages,
@@ -32,7 +32,9 @@ import {
   type CharactersPayload,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
+import { useAiProviders } from '../settings/AiProviderSettings'
 import { GraphView } from './GraphView'
+import { DropdownMenu } from '../../components/DropdownMenu'
 
 interface AiDrawerProps {
   /** Current selection text (if any) is offered as quick context. */
@@ -55,25 +57,6 @@ type ChatUiMessage = ChatMessage & { readonly streaming?: boolean }
 
 type StreamPhase = 'idle' | 'streaming' | 'error'
 
-const PROVIDER_PRESETS: readonly {
-  readonly label: string
-  readonly baseUrl: string
-  readonly model: string
-}[] = [
-  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' },
-  { label: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k3' },
-  { label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.3' },
-  {
-    label: '通义 Qwen',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen3.8-max',
-  },
-  { label: 'MiniMax', baseUrl: 'https://api.minimaxi.com/v1', model: 'MiniMax-M3' },
-  { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto' },
-  { label: 'Ollama(本地)', baseUrl: 'http://localhost:11434/v1', model: 'qwen3.8-flash' },
-  { label: 'LM Studio(本地)', baseUrl: 'http://localhost:1234/v1', model: 'local-model' },
-]
-
 export function AiDrawer({
   selection,
   contextText,
@@ -84,17 +67,7 @@ export function AiDrawer({
   onReplaceSource,
   onClose,
 }: AiDrawerProps) {
-  const [providers, setProviders] = useState<readonly AiProviderConfig[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
-  const [showConfig, setShowConfig] = useState(false)
-  const [configForm, setConfigForm] = useState({
-    name: '',
-    baseUrl: '',
-    model: '',
-    embeddingModel: '',
-    ttsModel: '',
-    apiKey: '',
-  })
+  const { providers, activeId, setActiveId } = useAiProviders()
   const [messages, setMessages] = useState<readonly ChatUiMessage[]>([])
   const [input, setInput] = useState('')
   const [phase, setPhase] = useState<StreamPhase>('idle')
@@ -123,77 +96,12 @@ export function AiDrawer({
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!isTauriRuntime()) return
-    let cancelled = false
-    invokeCommand('ai.config.list', undefined)
-      .then((response) => {
-        if (cancelled) return
-        setProviders(response.providers)
-        setActiveId((current) => current ?? response.providers[0]?.id ?? null)
-        if (response.providers.length === 0) setShowConfig(true)
-      })
-      .catch(() => {
-        // Config list is optional on first paint; the config form retries.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
-
-  const saveProvider = useCallback(async (): Promise<void> => {
-    const id =
-      activeId ?? `cfg-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-    try {
-      const embeddingModel = configForm.embeddingModel.trim()
-      const ttsModel = configForm.ttsModel.trim()
-      const response = await invokeCommand('ai.config.save', {
-        provider: {
-          id,
-          name: configForm.name.trim() || '自定义',
-          baseUrl: configForm.baseUrl.trim(),
-          model: configForm.model.trim(),
-          ...(embeddingModel ? { embeddingModel } : {}),
-          ...(ttsModel ? { ttsModel } : {}),
-        },
-        apiKey: configForm.apiKey.trim(),
-      })
-      setProviders((current) => [
-        response.provider,
-        ...current.filter((provider) => provider.id !== response.provider.id),
-      ])
-      setActiveId(response.provider.id)
-      setShowConfig(false)
-      setConfigForm({
-        name: '',
-        baseUrl: '',
-        model: '',
-        embeddingModel: '',
-        ttsModel: '',
-        apiKey: '',
-      })
-      setError(null)
-    } catch (saveError) {
-      setError(toAppError(saveError).message)
-    }
-  }, [activeId, configForm])
-
-  const removeProvider = useCallback(async (id: string): Promise<void> => {
-    try {
-      await invokeCommand('ai.config.remove', { id })
-      setProviders((current) => current.filter((provider) => provider.id !== id))
-      setActiveId((current) => (current === id ? null : current))
-    } catch (removeError) {
-      setError(toAppError(removeError).message)
-    }
-  }, [])
 
   const buildIndex = useCallback(async (): Promise<void> => {
     if (sections.length === 0) return
@@ -643,15 +551,6 @@ export function AiDrawer({
     }
   }, [])
 
-  const applyPreset = (preset: (typeof PROVIDER_PRESETS)[number]): void => {
-    setConfigForm((form) => ({
-      ...form,
-      name: preset.label,
-      baseUrl: preset.baseUrl,
-      model: preset.model,
-    }))
-  }
-
   return (
     <aside className="ai-drawer" aria-label="AI 助手">
       <div className="lookup-head">
@@ -659,27 +558,19 @@ export function AiDrawer({
           <Sparkle size={14} weight="fill" aria-hidden /> AI 助手
         </strong>
         <div className="ai-head-actions">
-          <select
-            className="ai-provider-select"
-            value={activeId ?? ''}
-            onChange={(event) => setActiveId(event.target.value || null)}
-            aria-label="选择 AI 服务"
-          >
-            {providers.length === 0 && <option value="">未配置</option>}
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name} · {provider.model}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={() => setShowConfig((open) => !open)}
-            title={showConfig ? '收起配置' : '服务配置'}
-          >
-            <Sparkle size={14} weight="regular" aria-hidden />
-          </button>
+          {providers.length > 0 && (
+            <DropdownMenu
+              className="dropdown-head"
+              ariaLabel="选择 AI 服务"
+              value={activeId ?? ''}
+              options={providers.map((provider) => ({
+                value: provider.id,
+                label: provider.name,
+                hint: provider.model,
+              }))}
+              onChange={(id) => setActiveId(id || null)}
+            />
+          )}
           <button type="button" className="chrome-button" onClick={onClose} title="关闭">
             <X size={14} weight="regular" aria-hidden />
           </button>
@@ -687,91 +578,13 @@ export function AiDrawer({
       </div>
 
       <div className="ai-drawer-body">
-        {showConfig && (
-          <section className="ai-config" aria-label="服务配置">
-            {providers.map((provider) => (
-              <div key={provider.id} className="settings-row dictionary-row">
-                <span className="settings-label">
-                  {provider.name} · {provider.model}
-                </span>
-                <button
-                  type="button"
-                  className="chrome-button"
-                  onClick={() => void removeProvider(provider.id)}
-                  title="移除"
-                >
-                  <X size={12} weight="regular" aria-hidden />
-                </button>
-              </div>
-            ))}
-            <div className="segmented ai-presets">
-              {PROVIDER_PRESETS.map((preset) => (
-                <button key={preset.label} type="button" onClick={() => applyPreset(preset)}>
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            <input
-              className="ai-input"
-              placeholder="名称"
-              value={configForm.name}
-              onChange={(event) => setConfigForm((form) => ({ ...form, name: event.target.value }))}
-            />
-            <input
-              className="ai-input"
-              placeholder="Base URL(OpenAI 兼容,含 /v1)"
-              value={configForm.baseUrl}
-              onChange={(event) =>
-                setConfigForm((form) => ({ ...form, baseUrl: event.target.value }))
-              }
-            />
-            <input
-              className="ai-input"
-              placeholder="对话模型,如 deepseek-v4-pro"
-              value={configForm.model}
-              onChange={(event) =>
-                setConfigForm((form) => ({ ...form, model: event.target.value }))
-              }
-            />
-            <input
-              className="ai-input"
-              placeholder="Embedding 模型(可选,默认用对话模型)"
-              value={configForm.embeddingModel}
-              onChange={(event) =>
-                setConfigForm((form) => ({ ...form, embeddingModel: event.target.value }))
-              }
-            />
-            <input
-              className="ai-input"
-              placeholder="TTS 模型(可选,用于云端朗读)"
-              value={configForm.ttsModel}
-              onChange={(event) =>
-                setConfigForm((form) => ({ ...form, ttsModel: event.target.value }))
-              }
-            />
-            <input
-              className="ai-input"
-              type="password"
-              placeholder="API Key(存入系统钥匙串)"
-              value={configForm.apiKey}
-              onChange={(event) =>
-                setConfigForm((form) => ({ ...form, apiKey: event.target.value }))
-              }
-            />
-            <button
-              type="button"
-              className="reader-error-button"
-              onClick={() => void saveProvider()}
-              disabled={
-                configForm.baseUrl.trim().length === 0 || configForm.model.trim().length === 0
-              }
-            >
-              保存配置
-            </button>
+        {providers.length === 0 && (
+          <div className="ai-setup-hint">
             <p className="ai-privacy">
-              密钥保存在本机钥匙串,不会进入页面或仓库;对话时仅发送下方勾选的正文片段。
+              还没有可用的 AI 服务。请返回书架,在「设置 → AI 服务」里添加(支持 DeepSeek、Kimi、智谱
+              等任何 OpenAI 兼容服务,密钥只存本机钥匙串)。
             </p>
-          </section>
+          </div>
         )}
 
         <div className="segmented ai-scope">

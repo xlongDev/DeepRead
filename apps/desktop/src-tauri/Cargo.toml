@@ -25,8 +25,9 @@ time.workspace = true
 sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-futures-util = { version = "0.3", default-features = false }
-tokio = { version = "1", features = ["time"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio = { version = "1", features = ["time", "net", "macros", "rt"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

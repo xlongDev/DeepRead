@@ -13,11 +13,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "Deepread",
+        "title": "",
         "width": 1280,
         "height": 820,
         "minWidth": 480,
-        "minHeight": 360
+        "minHeight": 360,
+        "titleBarStyle": "Overlay",
+        "useHttpsScheme": true
       }
     ],
     "security": {
