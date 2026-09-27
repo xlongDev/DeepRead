@@ -95,6 +95,8 @@ pub fn run() {
             commands::system::app_info,
             state::reader_state_get,
             state::reader_state_set,
+            state::reader_stats_add,
+            state::reader_stats_get,
             library::library_list,
             library::library_import,
             library::library_remove,

@@ -34,6 +34,7 @@ import {
   type ReadingFont,
 } from '@deepread/shared'
 import type { ReaderTheme, TocItem } from '@deepread/reader-core'
+import { localDayKey } from '@deepread/shared'
 import {
   countChars,
   estimateReadingMinutes,
@@ -56,6 +57,7 @@ import {
 } from '@deepread/reader-adapter'
 import type { RepairChange } from '@deepread/reader-adapter'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
 import { LearningDrawer } from './LearningDrawer'
 import { TtsDrawer } from './TtsDrawer'
@@ -709,6 +711,46 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     await tauriWindow.setFullscreen(next)
     setFullscreen(next)
   }, [])
+
+  /**
+   * 阅读时长统计:只在"书在屏上且窗口可见"时累计,每 30s 上报一次增量
+   * (离屏/失焦的间隔一律不计),离开阅读态时补一次尾账。
+   */
+  useEffect(() => {
+    if (phase !== 'reading') return
+    let lastTick = Date.now()
+    let pending = 0
+    const flush = (): void => {
+      if (pending < 1) return
+      void reportReadingTime(book.hash, localDayKey(), pending).catch(() => {})
+      pending = 0
+    }
+    const tick = (): void => {
+      const now = Date.now()
+      // 单次 tick 最多计 90s:超过说明机器睡了,不能算成阅读。
+      const elapsed = Math.min(now - lastTick, 90_000) / 1000
+      lastTick = now
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+      pending += elapsed
+      if (pending >= 30) flush()
+    }
+    const onVisibility = (): void => {
+      // 切回前台时重新起算,避免把后台停留时间算进去。
+      lastTick = Date.now()
+      if (document.visibilityState === 'hidden') flush()
+    }
+    const timer = window.setInterval(tick, 15_000)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('blur', onVisibility)
+    window.addEventListener('focus', onVisibility)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('blur', onVisibility)
+      window.removeEventListener('focus', onVisibility)
+      flush()
+    }
+  }, [phase, book.hash])
 
   // 系统级全屏(绿色按钮 / 快捷键)也要同步按钮状态。
   useEffect(() => {

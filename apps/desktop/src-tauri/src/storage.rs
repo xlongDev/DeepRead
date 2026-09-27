@@ -134,6 +134,17 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE books ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
     "#,
+    // v6 — reading time per book per day. The frontend reports deltas (it is
+    // the only side that knows when the reader is actually on screen), and the
+    // day key is local so "today" matches the user's calendar, not UTC.
+    r#"
+    CREATE TABLE reading_stats (
+        book_hash TEXT NOT NULL,
+        day       TEXT NOT NULL,
+        seconds   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (book_hash, day)
+    );
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {

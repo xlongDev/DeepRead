@@ -21,6 +21,8 @@ export const COMMAND = {
   libraryRemove: 'library.remove',
   libraryRename: 'library.rename',
   libraryTagSet: 'library.tag.set',
+  readerStatsAdd: 'reader.stats.add',
+  readerStatsGet: 'reader.stats.get',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
   dictionaryList: 'dictionary.list',
@@ -160,6 +162,24 @@ export interface LibraryRenameRequest {
 
 export interface LibraryRenameResponse {
   readonly book: LibraryBook
+}
+
+export interface ReaderStatsAddRequest {
+  readonly bookHash: string
+  /** Local calendar day of the reading session, `YYYY-MM-DD`. */
+  readonly day: string
+  readonly seconds: number
+}
+
+export interface ReaderStatsAddResponse {
+  /** Total for that book on that day after the update. */
+  readonly daySeconds: number
+}
+
+export interface ReaderStatsGetResponse {
+  /** Per-day totals across all books, newest first. */
+  readonly days: readonly { readonly day: string; readonly seconds: number }[]
+  readonly totalSeconds: number
 }
 
 export interface LibraryTagSetRequest {
@@ -634,6 +654,14 @@ export interface CommandMap {
     readonly request: LibraryTagSetRequest
     readonly response: LibraryTagSetResponse
   }
+  [COMMAND.readerStatsAdd]: {
+    readonly request: ReaderStatsAddRequest
+    readonly response: ReaderStatsAddResponse
+  }
+  [COMMAND.readerStatsGet]: {
+    readonly request: undefined
+    readonly response: ReaderStatsGetResponse
+  }
   [COMMAND.libraryCoverGet]: {
     readonly request: LibraryCoverGetRequest
     readonly response: LibraryCoverGetResponse
@@ -874,6 +902,18 @@ export const libraryRenameRequestSchema = z.object({
   displayName: z.string().min(1).max(512),
 })
 export const libraryRenameResponseSchema = z.object({ book: libraryBookSchema })
+const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+export const readerStatsAddRequestSchema = z.object({
+  bookHash: bookHash,
+  day: dayKey,
+  // One report never covers more than an hour (the reader flushes every 30s).
+  seconds: z.number().int().min(0).max(3600),
+})
+export const readerStatsAddResponseSchema = z.object({ daySeconds: z.number().int().min(0) })
+export const readerStatsGetResponseSchema = z.object({
+  days: z.array(z.object({ day: dayKey, seconds: z.number().int().min(0) })).max(400),
+  totalSeconds: z.number().int().min(0),
+})
 export const libraryTagSetRequestSchema = z.object({
   bookHash: bookHash,
   tags: z.array(z.string().min(1).max(32)).max(20),
@@ -1164,6 +1204,8 @@ export const responseValidators: {
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
   [COMMAND.libraryRename]: libraryRenameResponseSchema,
   [COMMAND.libraryTagSet]: libraryTagSetResponseSchema,
+  [COMMAND.readerStatsAdd]: readerStatsAddResponseSchema,
+  [COMMAND.readerStatsGet]: readerStatsGetResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
@@ -1214,6 +1256,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
   [COMMAND.libraryRename]: libraryRenameRequestSchema,
   [COMMAND.libraryTagSet]: libraryTagSetRequestSchema,
+  [COMMAND.readerStatsAdd]: readerStatsAddRequestSchema,
+  [COMMAND.readerStatsGet]: undefined,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.dictionaryList]: undefined,

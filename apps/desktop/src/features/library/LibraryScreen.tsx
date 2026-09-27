@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpenText,
+  ChartLineUp,
   Check,
   CheckSquare,
   Cloud,
@@ -17,7 +18,14 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { toAppError, type AppInfo, type LibraryBook } from '@deepread/shared'
+import {
+  dailySeries,
+  localDayKey,
+  readingStreak,
+  toAppError,
+  type AppInfo,
+  type LibraryBook,
+} from '@deepread/shared'
 import { extractCover, extractTitle } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
@@ -34,6 +42,7 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
+import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
 import { DropdownMenu } from '../../components/DropdownMenu'
@@ -127,6 +136,13 @@ let browserShelf: readonly ShelfBook[] = []
 const BULK_CONFIRM = '__bulk__'
 /** `tagFilter` sentinel: the tag dropdown needs a value for "no filter". */
 const ALL_TAGS = '__all__'
+
+/** 统计数字的紧凑格式:秒 → 分 → 小时。 */
+function formatStatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)} 秒`
+  if (seconds < 3600) return `${Math.round(seconds / 60)} 分`
+  return `${(seconds / 3600).toFixed(1)} 小时`
+}
 
 /** The shelf title: the book's own metadata title once known, else cleaned file name. */
 function shelfTitle(book: LibraryBook): string {
@@ -234,6 +250,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [tagDraft, setTagDraft] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
+  const [stats, setStats] = useState<ReadingStats | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
@@ -243,15 +261,17 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
 
-  // 设置弹窗与云同步抽屉一致:Esc 关闭。
+  // 设置/统计弹窗与云同步抽屉一致:Esc 关闭。
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!settingsOpen && !statsOpen) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setSettingsOpen(false)
+      if (event.key !== 'Escape') return
+      setSettingsOpen(false)
+      setStatsOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen])
+  }, [settingsOpen, statsOpen])
 
   const loadBooks = useCallback(async (): Promise<void> => {
     if (!isTauriRuntime()) {
@@ -628,6 +648,27 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (!isTauriRuntime()) browserShelf = books
   }, [books])
 
+  // 统计面板每次打开现取:数字必须是最新的,不值得缓存。
+  useEffect(() => {
+    if (!statsOpen) return
+    let cancelled = false
+    void loadReadingStats()
+      .then((loaded) => {
+        if (!cancelled) setStats(loaded)
+      })
+      .catch(() => {
+        if (!cancelled) setStats({ days: [], totalSeconds: 0 })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [statsOpen])
+
+  const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
+  const statsSeries = dailySeries(stats?.days ?? [], 7)
+  // 柱高按当日峰值归一;全零时给个地板值,免得除零。
+  const statsPeak = Math.max(60, ...statsSeries.map((entry) => entry.seconds))
+
   const allTags = useMemo(
     () => [...new Set(books.flatMap((book) => book.tags))].sort((a, b) => a.localeCompare(b, 'zh')),
     [books],
@@ -874,6 +915,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                   className="dropdown-shelf-tags"
                 />
               )}
+              <button
+                type="button"
+                className="shelf-manage"
+                onClick={() => setStatsOpen(true)}
+                title="阅读统计"
+              >
+                <ChartLineUp size={15} weight="regular" aria-hidden />
+                统计
+              </button>
               <button
                 type="button"
                 className={`shelf-manage${selecting ? ' is-active' : ''}`}
@@ -1324,6 +1374,79 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 完成
               </button>
             </footer>
+          </dialog>
+        </div>
+      )}
+
+      {statsOpen && (
+        <div className="modal-overlay">
+          <button
+            type="button"
+            className="modal-dismiss"
+            aria-label="关闭统计"
+            onClick={() => setStatsOpen(false)}
+          />
+          <dialog className="modal-panel" open aria-label="阅读统计">
+            <header className="modal-head">
+              <strong className="modal-title">阅读统计</strong>
+              <button
+                type="button"
+                className="chrome-button"
+                onClick={() => setStatsOpen(false)}
+                title="关闭"
+              >
+                <X size={14} weight="regular" aria-hidden />
+              </button>
+            </header>
+
+            {stats === null ? (
+              <p className="library-note">统计加载中…</p>
+            ) : (
+              <>
+                <div className="stats-summary">
+                  <div className="stats-tile">
+                    <span className="stats-tile-value">{formatStatDuration(todaySeconds)}</span>
+                    <span className="stats-tile-label">今日</span>
+                  </div>
+                  <div className="stats-tile">
+                    <span className="stats-tile-value">{readingStreak(stats.days)}</span>
+                    <span className="stats-tile-label">连续天数</span>
+                  </div>
+                  <div className="stats-tile">
+                    <span className="stats-tile-value">
+                      {formatStatDuration(stats.totalSeconds)}
+                    </span>
+                    <span className="stats-tile-label">累计</span>
+                  </div>
+                </div>
+
+                <section className="modal-section">
+                  <p className="modal-section-label">最近 7 天</p>
+                  <div className="stats-chart">
+                    {statsSeries.map((entry) => (
+                      <div
+                        key={entry.day}
+                        className="stats-bar"
+                        title={`${entry.day} · ${formatStatDuration(entry.seconds)}`}
+                      >
+                        <span className="stats-bar-track">
+                          <span
+                            className="stats-bar-fill"
+                            style={{
+                              height: `${Math.round((entry.seconds / statsPeak) * 100)}%`,
+                            }}
+                          />
+                        </span>
+                        <span className="stats-bar-label">{entry.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="library-note">
+                    只统计前台真正在读书的时间;累计 {formatStatDuration(stats.totalSeconds)}。
+                  </p>
+                </section>
+              </>
+            )}
           </dialog>
         </div>
       )}

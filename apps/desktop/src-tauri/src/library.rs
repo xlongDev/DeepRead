@@ -229,6 +229,7 @@ pub fn remove_book(conn: &Connection, hash: &str) -> Result<bool, AppError> {
         "cards",
         "ai_index",
         "ai_artifacts",
+        "reading_stats",
     ] {
         tx.execute(&format!("DELETE FROM {table} WHERE book_hash = ?1"), [hash])
             .map_err(|err| {

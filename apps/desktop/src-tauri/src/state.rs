@@ -279,6 +279,167 @@ pub fn reader_state_set(
     })
 }
 
+/* ---------- Reading stats ----------
+The frontend owns the clock (it knows when the reader is really on screen)
+and reports deltas; this side only accumulates them per local day. */
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DayStat {
+    pub day: String,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatsAddRequest {
+    pub book_hash: String,
+    /// Local calendar day, `YYYY-MM-DD`.
+    pub day: String,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsAddResponse {
+    /// Total for that book on that day after the update.
+    pub day_seconds: u64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsGetResponse {
+    /// Newest first.
+    pub days: Vec<DayStat>,
+    pub total_seconds: u64,
+}
+
+/// A day key must be a plain calendar date; anything else would make "today"
+/// unqueryable and could grow the table without bound.
+fn validate_day(day: &str) -> Result<(), AppError> {
+    let bytes = day.as_bytes();
+    let shaped = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    if shaped {
+        Ok(())
+    } else {
+        Err(
+            AppError::new(ErrorCode::SystemValidation, "day must be YYYY-MM-DD")
+                .with_context("field", "day"),
+        )
+    }
+}
+
+/// Cap per report: the frontend flushes every 30s, so anything larger than an
+/// hour means a clock jump (sleep/resume) rather than real reading.
+const MAX_REPORTED_SECONDS: u64 = 3600;
+
+pub fn add_reading_seconds(
+    conn: &Connection,
+    hash: &str,
+    day: &str,
+    seconds: u64,
+) -> Result<u64, AppError> {
+    validate_hash(hash)?;
+    validate_day(day)?;
+    let seconds = seconds.min(MAX_REPORTED_SECONDS);
+    conn.execute(
+        "INSERT INTO reading_stats (book_hash, day, seconds) VALUES (?1, ?2, ?3)
+         ON CONFLICT (book_hash, day) DO UPDATE SET seconds = seconds + excluded.seconds",
+        rusqlite::params![hash, day, seconds as i64],
+    )
+    .map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to record reading time").with_cause(err)
+    })?;
+    load_day_seconds(conn, hash, day)
+}
+
+fn load_day_seconds(conn: &Connection, hash: &str, day: &str) -> Result<u64, AppError> {
+    conn.query_row(
+        "SELECT seconds FROM reading_stats WHERE book_hash = ?1 AND day = ?2",
+        rusqlite::params![hash, day],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|seconds| seconds.max(0) as u64)
+    .map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to read reading time").with_cause(err)
+    })
+}
+
+/// Per-day totals across all books, newest first. `limit_days` keeps the
+/// payload bounded (the UI shows a week plus a streak).
+pub fn load_reading_stats(
+    conn: &Connection,
+    limit_days: u32,
+) -> Result<StatsGetResponse, AppError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT day, SUM(seconds) FROM reading_stats
+             GROUP BY day ORDER BY day DESC LIMIT ?1",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to prepare stats query").with_cause(err)
+        })?;
+    let rows = statement
+        .query_map([limit_days], |row| {
+            Ok(DayStat {
+                day: row.get(0)?,
+                seconds: row.get::<_, i64>(1)?.max(0) as u64,
+            })
+        })
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read stats").with_cause(err)
+        })?;
+    let mut days = Vec::new();
+    for row in rows {
+        days.push(row.map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read stats row").with_cause(err)
+        })?);
+    }
+    let total_seconds = conn
+        .query_row(
+            "SELECT COALESCE(SUM(seconds), 0) FROM reading_stats",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|total| total.max(0) as u64)
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to total reading time").with_cause(err)
+        })?;
+    Ok(StatsGetResponse {
+        days,
+        total_seconds,
+    })
+}
+
+#[tauri::command(rename = "reader.stats.add")]
+pub fn reader_stats_add(
+    db: tauri::State<'_, crate::storage::Db>,
+    request: StatsAddRequest,
+) -> Result<StatsAddResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(StatsAddResponse {
+        day_seconds: add_reading_seconds(&conn, &request.book_hash, &request.day, request.seconds)?,
+    })
+}
+
+#[tauri::command(rename = "reader.stats.get")]
+pub fn reader_stats_get(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<StatsGetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    load_reading_stats(&conn, 400)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +483,62 @@ mod tests {
             }],
             updated_at: "2026-09-09T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn reading_time_accumulates_per_day_and_clamps_clock_jumps() {
+        let conn = memory_db();
+        let first = &"a".repeat(64);
+        let second = &"b".repeat(64);
+
+        assert_eq!(
+            add_reading_seconds(&conn, first, "2026-09-28", 60).unwrap(),
+            60
+        );
+        assert_eq!(
+            add_reading_seconds(&conn, first, "2026-09-28", 30).unwrap(),
+            90,
+            "same day accumulates"
+        );
+        add_reading_seconds(&conn, second, "2026-09-28", 30).unwrap();
+        add_reading_seconds(&conn, first, "2026-09-27", 10).unwrap();
+
+        // A resume-after-sleep delta must not be booked as real reading.
+        assert_eq!(
+            add_reading_seconds(&conn, first, "2026-09-29", 99_999).unwrap(),
+            MAX_REPORTED_SECONDS
+        );
+
+        let stats = load_reading_stats(&conn, 400).unwrap();
+        assert_eq!(
+            stats.days,
+            vec![
+                DayStat {
+                    day: "2026-09-29".into(),
+                    seconds: MAX_REPORTED_SECONDS
+                },
+                DayStat {
+                    day: "2026-09-28".into(),
+                    seconds: 120
+                },
+                DayStat {
+                    day: "2026-09-27".into(),
+                    seconds: 10
+                },
+            ],
+            "days group across books, newest first"
+        );
+        assert_eq!(stats.total_seconds, 3600 + 120 + 10);
+    }
+
+    #[test]
+    fn reading_time_rejects_malformed_inputs() {
+        let conn = memory_db();
+        let hash = &"a".repeat(64);
+        assert!(add_reading_seconds(&conn, hash, "2026-9-28", 60).is_err());
+        assert!(add_reading_seconds(&conn, hash, "today", 60).is_err());
+        assert!(validate_day("2026-09-28").is_ok());
+        assert!(add_reading_seconds(&conn, "not-a-hash", "2026-09-28", 60).is_err());
     }
 
     #[test]

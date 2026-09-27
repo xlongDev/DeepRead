@@ -42,6 +42,16 @@
 | Errors         | `SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO`、`STORAGE_CORRUPT`                                                   |
 | 用途           | 按书籍文件哈希持久化阅读进度(CFI)与批注锚点;SQLite 落地前的真实 JSON 存储。                                       |
 
+### `reader.stats.add` / `reader.stats.get`(阅读时长)
+
+|      |                                                                                                                            |
+| ---- | -------------------------------------------------------------------------------------------------------------------------- |
+| add  | Request `{ bookHash, day: 'YYYY-MM-DD', seconds }`;Response `{ daySeconds }`(该书当天累计)                                  |
+| get  | Request `undefined`;Response `{ days: { day, seconds }[], totalSeconds }`(按日汇总、新→旧,最多 400 天)                      |
+| 约定 | 时钟在前端:只有"书在屏上且窗口可见"才累计,每 30s 上报一次增量;单次上报上限 1 小时(睡眠唤醒的跃变不能算阅读)               |
+| 约定 | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                                              |
+| 约定 | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除                               |
+
 ### `library.cover.get` / `library.cover.put`(封面缓存)
 
 |      |                                                                                                                        |
