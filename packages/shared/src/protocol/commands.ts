@@ -20,6 +20,8 @@ export const COMMAND = {
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
   libraryRename: 'library.rename',
+  libraryCoverGet: 'library.cover.get',
+  libraryCoverPut: 'library.cover.put',
   dictionaryList: 'dictionary.list',
   dictionaryRegister: 'dictionary.register',
   dictionaryRemove: 'dictionary.remove',
@@ -124,6 +126,8 @@ export interface LibraryBook {
   readonly path: string
   readonly size: number
   readonly addedAt: ISO8601
+  /** Reading fraction (0-1) joined in by `library.list`; null = never opened. */
+  readonly progress: number | null
 }
 
 export interface LibraryListResponse {
@@ -153,6 +157,25 @@ export interface LibraryRenameRequest {
 
 export interface LibraryRenameResponse {
   readonly book: LibraryBook
+}
+
+export interface LibraryCoverGetRequest {
+  readonly bookHash: string
+}
+
+export interface LibraryCoverGetResponse {
+  /** Absolute path of the cached cover; null when it has not been extracted yet. */
+  readonly path: string | null
+}
+
+export interface LibraryCoverPutRequest {
+  readonly bookHash: string
+  /** Base64 of the extracted cover image (bytes travel badly through JSON IPC). */
+  readonly data: string
+}
+
+export interface LibraryCoverPutResponse {
+  readonly path: string
 }
 
 /** A registered StarDict dictionary (files stay at their original location). */
@@ -594,6 +617,14 @@ export interface CommandMap {
     readonly request: LibraryRenameRequest
     readonly response: LibraryRenameResponse
   }
+  [COMMAND.libraryCoverGet]: {
+    readonly request: LibraryCoverGetRequest
+    readonly response: LibraryCoverGetResponse
+  }
+  [COMMAND.libraryCoverPut]: {
+    readonly request: LibraryCoverPutRequest
+    readonly response: LibraryCoverPutResponse
+  }
   [COMMAND.dictionaryList]: {
     readonly request: undefined
     readonly response: DictionaryListResponse
@@ -802,6 +833,7 @@ export const libraryBookSchema = z.object({
   path: z.string().min(1).max(4096),
   size: z.number().int().min(0),
   addedAt: iso8601,
+  progress: z.number().min(0).max(1).nullable(),
 })
 
 export const readerStateGetRequestSchema = z.object({ bookHash })
@@ -824,6 +856,13 @@ export const libraryRenameRequestSchema = z.object({
   displayName: z.string().min(1).max(512),
 })
 export const libraryRenameResponseSchema = z.object({ book: libraryBookSchema })
+export const libraryCoverGetRequestSchema = z.object({ bookHash: bookHash })
+export const libraryCoverGetResponseSchema = z.object({ path: z.string().max(4096).nullable() })
+export const libraryCoverPutRequestSchema = z.object({
+  bookHash: bookHash,
+  data: z.string().min(1).max(12_000_000),
+})
+export const libraryCoverPutResponseSchema = z.object({ path: z.string().min(1).max(4096) })
 
 const dictionaryMetaSchema = z.object({
   id: z.string().min(8).max(64),
@@ -1101,6 +1140,8 @@ export const responseValidators: {
   [COMMAND.libraryImport]: libraryImportResponseSchema,
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
   [COMMAND.libraryRename]: libraryRenameResponseSchema,
+  [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
+  [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
   [COMMAND.dictionaryRegister]: dictionaryRegisterResponseSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveResponseSchema,
@@ -1148,6 +1189,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryImport]: libraryImportRequestSchema,
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
   [COMMAND.libraryRename]: libraryRenameRequestSchema,
+  [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
+  [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.dictionaryList]: undefined,
   [COMMAND.dictionaryRegister]: dictionaryRegisterRequestSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveRequestSchema,

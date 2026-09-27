@@ -53,14 +53,56 @@ export function cleanBookTitle(fileName: string): string {
   return cleaned.length > 0 ? cleaned : withoutExtension.trim()
 }
 
-/** Library records open through the asset protocol, streamed from the original file. */
-export function openedBookFromLibrary(record: LibraryBook): OpenedBook {
+/**
+ * Browser-mode (dev) file registry: imported `File` objects live here so the
+ * shelf can re-open and re-parse a book after LibraryScreen remounts. File
+ * handles cannot survive a reload — that is what the desktop build is for.
+ */
+const browserFiles = new Map<string, File>()
+
+export function registerBrowserFile(hash: string, file: File): void {
+  browserFiles.set(hash, file)
+}
+
+export function getBrowserFile(hash: string): File | undefined {
+  return browserFiles.get(hash)
+}
+
+export function deleteBrowserFile(hash: string): void {
+  browserFiles.delete(hash)
+  const url = browserObjectUrls.get(hash)
+  if (url !== undefined) {
+    URL.revokeObjectURL(url)
+    browserObjectUrls.delete(hash)
+  }
+}
+
+/** Stable object URL per imported file (created once, reused by covers/titles). */
+const browserObjectUrls = new Map<string, string>()
+
+export function browserBookUrl(hash: string): string {
+  let url = browserObjectUrls.get(hash)
+  if (url === undefined) {
+    const file = browserFiles.get(hash)
+    if (file === undefined) return ''
+    url = URL.createObjectURL(file)
+    browserObjectUrls.set(hash, url)
+  }
+  return url
+}
+
+/**
+ * Open a shelf book. Desktop streams the original file through the asset
+ * protocol; in the browser `record.path` is empty and the registered `File`
+ * provides the URL instead.
+ */
+export function openedBookFromLibrary(record: LibraryBook, file?: File): OpenedBook {
   return {
     bookId: record.hash,
     format: record.format as BookFormat,
     hash: record.hash,
     name: record.fileName,
-    url: convertFileSrc(record.path),
+    url: file !== undefined ? URL.createObjectURL(file) : convertFileSrc(record.path),
   }
 }
 

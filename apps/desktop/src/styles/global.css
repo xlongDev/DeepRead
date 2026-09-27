@@ -2788,6 +2788,7 @@ dialog.modal-panel {
   transform: rotate(180deg);
 }
 
+
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 6px);

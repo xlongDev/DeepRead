@@ -15,8 +15,8 @@ import {
   MagnifyingGlass,
   Minus,
   Moon,
-  SlidersHorizontal,
   Plus,
+  SlidersHorizontal,
   Sparkle,
   Sun,
   TextAa,
@@ -316,6 +316,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     [],
   )
   const [searchState, setSearchState] = useState<'idle' | 'searching' | 'done'>('idle')
+  /** 命中数超过展示上限:必须说清楚,否则用户以为搜索不全。 */
+  const [searchTruncated, setSearchTruncated] = useState(false)
   const [dictionaries, setDictionaries] = useState<readonly DictionaryMeta[]>([])
   const [lookup, setLookup] = useState<{
     word: string
@@ -338,9 +340,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
   )
-  const [fullscreen, setFullscreen] = useState(false)
   /** 当前章字数(千分位在渲染层做);null = 还没算出来。 */
   const [sectionChars, setSectionChars] = useState<number | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
   /** 全书正文统计(后台逐节统计;PDF 等固定排版为 null)。 */
   const [bookCharStats, setBookCharStats] = useState<{
     total: number
@@ -708,6 +710,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     setFullscreen(next)
   }, [])
 
+  // 系统级全屏(绿色按钮 / 快捷键)也要同步按钮状态。
   useEffect(() => {
     if (!isTauriRuntime()) return
     let unlisten: (() => void) | undefined
@@ -1233,7 +1236,15 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     } else {
       setBookmarks((list) => [
         ...list,
-        { id: crypto.randomUUID(), cfi: current.cfi, createdAt: new Date().toISOString() },
+        {
+          id: crypto.randomUUID(),
+          cfi: current.cfi,
+          // 记下当时的章节名:书签列表里比原始 CFI 有意义得多。
+          ...(sectionLabel !== null && sectionLabel.trim() !== ''
+            ? { label: sectionLabel }
+            : {}),
+          createdAt: new Date().toISOString(),
+        },
       ])
     }
     scheduleSave()
@@ -1250,6 +1261,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     if (!adapter || !query) return
     setSearchState('searching')
     const results = await adapter.search(query)
+    setSearchTruncated(results.length > MAX_SHOWN_SEARCH_RESULTS)
     setSearchResults(
       results
         .slice(0, MAX_SHOWN_SEARCH_RESULTS)
@@ -1419,9 +1431,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         <button
           type="button"
           className={`chrome-button${openPanel === 'display' ? ' is-active' : ''}`}
-          onClick={() =>
-            setOpenPanel((panel) => (panel === 'display' ? null : 'display'))
-          }
+          onClick={() => setOpenPanel((panel) => (panel === 'display' ? null : 'display'))}
           title="显示设置"
         >
           <SlidersHorizontal size={18} weight="regular" aria-hidden />
@@ -1449,9 +1459,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         <button
           type="button"
           className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
-          onClick={() =>
-            setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))
-          }
+          onClick={() => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))}
           title="学习(卡片 / 测验 / 错题本)"
         >
           <GraduationCap size={18} weight="regular" aria-hidden />
@@ -1782,6 +1790,11 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               {result.excerpt}
             </button>
           ))}
+          {searchTruncated && (
+            <p className="reader-toc-empty">
+              仅显示前 {MAX_SHOWN_SEARCH_RESULTS} 条,请细化关键词。
+            </p>
+          )}
 
           {book.format === 'txt' && (
             <>
@@ -1833,7 +1846,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                 onClick={() => goToCfi(bookmark.cfi)}
                 title="跳转到书签"
               >
-                {bookmark.label ?? `书签 ${bookmark.cfi}`}
+                {bookmark.label ?? `书签 ${bookmark.cfi.slice(0, 18)}…`}
               </button>
               <button
                 type="button"

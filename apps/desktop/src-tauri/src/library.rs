@@ -43,6 +43,9 @@ pub struct LibraryBook {
     pub path: String,
     pub size: u64,
     pub added_at: String,
+    /// Reading fraction from `progress`, joined in so the shelf needs one query
+    /// instead of one `reader.state.get` per book.
+    pub progress: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +76,33 @@ pub struct LibraryRemoveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRemoveResponse {
     pub removed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibraryCoverGetRequest {
+    pub book_hash: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryCoverGetResponse {
+    /// Absolute path of the cached cover; `null` = not cached yet.
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibraryCoverPutRequest {
+    pub book_hash: String,
+    /// Base64 of the extracted cover image.
+    pub data: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryCoverPutResponse {
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,13 +159,25 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
         path: row.get("path")?,
         size: row.get::<_, i64>("size")? as u64,
         added_at: row.get("added_at")?,
+        progress: row.get("progress")?,
     })
 }
 
+/// One row per book with its reading fraction (LEFT JOIN: unread books are
+/// `None`). The shelf used to ask for `reader.state.get` per book, which
+/// serialized on the global database lock.
 pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
-        .prepare("SELECT hash, file_name, display_name, format, path, size, added_at FROM books ORDER BY added_at DESC, rowid DESC")
-        .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query library").with_cause(err))?;
+        .prepare(
+            "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
+                    p.fraction AS progress
+             FROM books b
+             LEFT JOIN progress p ON p.book_hash = b.hash
+             ORDER BY b.added_at DESC, b.rowid DESC",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query library").with_cause(err)
+        })?;
     let books = statement
         .query_map([], row_to_book)
         .map_err(|err| {
@@ -204,16 +246,25 @@ pub fn rename_book(
             "book not in library",
         ));
     }
-    conn.query_row(
-        "SELECT hash, file_name, display_name, format, path, size, added_at FROM books WHERE hash = ?1",
-        [hash],
-        row_to_book,
-    )
-    .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read renamed book").with_cause(err))
+    get_book(conn, hash)
 }
 
 /// Import flow: validate the picked file, hash it, upsert the record keeping
 /// the original `added_at`.
+/// Read one book (with its progress) by hash.
+fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
+    conn.query_row(
+        "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
+                p.fraction AS progress
+         FROM books b
+         LEFT JOIN progress p ON p.book_hash = b.hash
+         WHERE b.hash = ?1",
+        [hash],
+        row_to_book,
+    )
+    .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read book").with_cause(err))
+}
+
 pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, AppError> {
     let path = PathBuf::from(raw_path);
     let file_name = path
@@ -265,6 +316,7 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
             .as_ref()
             .map(|(added_at, _)| added_at.clone())
             .unwrap_or_else(crate::timestamps::rfc3339_now),
+        progress: None,
     };
     conn.execute(
         "INSERT OR REPLACE INTO books (hash, file_name, display_name, format, path, size, added_at)
@@ -280,11 +332,93 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
         ],
     )
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save book").with_cause(err))?;
-    Ok(book)
+    // Re-read so the caller gets the row the shelf renders (progress included).
+    get_book(conn, &book.hash)
 }
 
 pub fn database_path(base: &Path) -> PathBuf {
     base.join("deepread.db")
+}
+
+/* ---------- Cover cache ----------
+Covers cost a zip parse (EPUB/MOBI) or a PDF render each; paying that on
+every app start is pure waste, so the first extraction is written next to
+the database and the shelf only reads a file afterwards. */
+
+pub fn covers_dir(base: &Path) -> PathBuf {
+    base.join("covers")
+}
+
+/// Extensions we write; `get` probes them in this order.
+const COVER_EXTENSIONS: [&str; 4] = ["png", "jpg", "webp", "gif"];
+
+/// Sniff the real image type: the extension decides what the asset protocol
+/// serves, and a wrong one makes `<img>` fail to decode.
+fn cover_extension(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if bytes.len() > 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        "webp"
+    } else if bytes.starts_with(b"GIF8") {
+        "gif"
+    } else {
+        // Unknown magic: covers we produce are PNG, so that is the best guess.
+        "png"
+    }
+}
+
+fn cover_path(base: &Path, hash: &str, extension: &str) -> PathBuf {
+    covers_dir(base).join(format!("{hash}.{extension}"))
+}
+
+/// Cached cover for a book, if we already extracted one.
+pub fn cover_path_if_exists(base: &Path, hash: &str) -> Option<PathBuf> {
+    COVER_EXTENSIONS
+        .iter()
+        .map(|extension| cover_path(base, hash, extension))
+        .find(|path| path.exists())
+}
+
+/// Store a cover we just extracted. `data` is base64 (bytes over JSON IPC).
+pub fn save_cover(base: &Path, hash: &str, data: &str) -> Result<PathBuf, AppError> {
+    crate::state::validate_hash(hash)?;
+    let bytes = base64_decode(data).ok_or_else(|| {
+        AppError::new(ErrorCode::SystemValidation, "cover is not valid base64")
+            .with_context("field", "data")
+    })?;
+    if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "cover size out of range",
+        ));
+    }
+    let dir = covers_dir(base);
+    std::fs::create_dir_all(&dir).map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to create covers dir").with_cause(err)
+    })?;
+    let path = cover_path(base, hash, cover_extension(&bytes));
+    std::fs::write(&path, &bytes).map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to write cover").with_cause(err)
+    })?;
+    Ok(path)
+}
+
+/// Base64 (standard alphabet, with padding) — the only decoding this app needs.
+fn base64_decode(data: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(data).ok()
+}
+
+/// Drop a cached cover when its book leaves the shelf (best effort).
+pub fn delete_cover(base: &Path, hash: &str) {
+    for extension in COVER_EXTENSIONS {
+        let path = cover_path(base, hash, extension);
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 #[tauri::command(rename = "library.list")]
@@ -323,14 +457,56 @@ pub fn library_import(
 
 #[tauri::command(rename = "library.remove")]
 pub fn library_remove(
+    app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     request: LibraryRemoveRequest,
 ) -> Result<LibraryRemoveResponse, AppError> {
     let conn =
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
-    Ok(LibraryRemoveResponse {
-        removed: remove_book(&conn, &request.book_hash)?,
+    let removed = remove_book(&conn, &request.book_hash)?;
+    if removed {
+        // The cached cover goes with it; a missing file is not an error.
+        if let Ok(base) = crate::ai::data_dir(&app) {
+            delete_cover(&base, &request.book_hash);
+        }
+    }
+    Ok(LibraryRemoveResponse { removed })
+}
+
+#[tauri::command(rename = "library.cover.get")]
+pub fn library_cover_get(
+    app: tauri::AppHandle,
+    request: LibraryCoverGetRequest,
+) -> Result<LibraryCoverGetResponse, AppError> {
+    crate::state::validate_hash(&request.book_hash)?;
+    let base = crate::ai::data_dir(&app)?;
+    Ok(LibraryCoverGetResponse {
+        path: cover_path_if_exists(&base, &request.book_hash)
+            .map(|path| path.to_string_lossy().to_string()),
+    })
+}
+
+#[tauri::command(rename = "library.cover.put")]
+pub fn library_cover_put(
+    app: tauri::AppHandle,
+    request: LibraryCoverPutRequest,
+) -> Result<LibraryCoverPutResponse, AppError> {
+    let base = crate::ai::data_dir(&app)?;
+    let path = save_cover(&base, &request.book_hash, &request.data)?;
+    // Same asset protocol as books/fonts: the webview can only read what we
+    // allow, and this file is one we just wrote ourselves.
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|err| {
+            AppError::new(
+                ErrorCode::SecurityValidationFailed,
+                "failed to allow cover path",
+            )
+            .with_cause(err)
+        })?;
+    Ok(LibraryCoverPutResponse {
+        path: path.to_string_lossy().to_string(),
     })
 }
 
@@ -478,11 +654,86 @@ mod tests {
             path: "/tmp/a.epub".into(),
             size: 3,
             added_at: "2026-09-09T00:00:00Z".into(),
+            progress: Some(0.25),
         };
         let json = serde_json::to_value(&book).unwrap();
         assert_eq!(json["fileName"], "a.epub");
         assert_eq!(json["displayName"], "A Book");
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
+        assert_eq!(json["progress"], 0.25);
+    }
+
+    #[test]
+    fn cover_cache_round_trips_and_sniffs_the_image_type() {
+        let base = std::env::temp_dir().join(format!(
+            "reader-cover-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let hash = "e".repeat(64);
+
+        assert!(cover_path_if_exists(&base, &hash).is_none());
+
+        // A real PNG signature, base64-encoded.
+        let png = "iVBORw0KGgoAAAANSUhEUg==";
+        let path = save_cover(&base, &hash, png).unwrap();
+        assert_eq!(path.extension().unwrap(), "png");
+        assert_eq!(cover_path_if_exists(&base, &hash), Some(path.clone()));
+        assert!(path.exists());
+
+        // A JPEG signature rewrites the same book's cover with a jpg name.
+        let jpeg = "/9j/4AAQSkZJRg==";
+        let jpeg_path = save_cover(&base, &hash, jpeg).unwrap();
+        assert_eq!(jpeg_path.extension().unwrap(), "jpg");
+
+        delete_cover(&base, &hash);
+        assert!(cover_path_if_exists(&base, &hash).is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cover_put_rejects_garbage_and_oversized_payloads() {
+        let base = std::env::temp_dir().join("reader-cover-invalid");
+        let hash = "f".repeat(64);
+        assert!(save_cover(&base, &hash, "not base64 !!").is_err());
+        assert!(save_cover(&base, &hash, "").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn listing_returns_progress_without_a_second_query_per_book() {
+        let conn = memory_db();
+        let base = std::env::temp_dir().join(format!(
+            "reader-lib-join-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let read = base.join("read.epub");
+        std::fs::write(&read, b"read-bytes").unwrap();
+        let unread = base.join("unread.epub");
+        std::fs::write(&unread, b"unread-bytes").unwrap();
+
+        let read_book = import_book(&conn, read.to_str().unwrap()).unwrap();
+        import_book(&conn, unread.to_str().unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO progress (book_hash, cfi, fraction, updated_at) VALUES (?1, 'c', 0.5, 'now')",
+            [&read_book.hash],
+        )
+        .unwrap();
+
+        let books = list_books(&conn).unwrap();
+        let progress_of =
+            |hash: &str| -> Option<f64> { books.iter().find(|book| book.hash == hash)?.progress };
+        assert_eq!(progress_of(&read_book.hash), Some(0.5));
+        assert!(
+            books.iter().any(|book| book.progress.is_none()),
+            "unread books must report no progress"
+        );
     }
 
     #[test]

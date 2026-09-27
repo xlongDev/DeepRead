@@ -21,12 +21,17 @@ import {
   ACCEPTED_EXTENSIONS,
   DIALOG_EXTENSIONS,
   classifyFile,
+  browserBookUrl,
   cleanBookTitle,
   convertFileSrc,
+  deleteBrowserFile,
+  getBrowserFile,
   openedBookFromLibrary,
+  registerBrowserFile,
   type ImportProblem,
   type OpenedBook,
 } from '../../lib/book-import'
+import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
 import { DropdownMenu } from '../../components/DropdownMenu'
@@ -108,6 +113,14 @@ const coverAttempted = new Set<string>()
 const titleAttempted = new Set<string>()
 const TITLE_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
 
+/**
+ * Browser mode (dev): the shelf state must survive LibraryScreen remounts
+ * (reader roundtrips), so it lives next to the file registry at module level.
+ * A reload still clears both — File handles cannot be persisted; that is what
+ * the desktop build is for.
+ */
+let browserShelf: ShelfBook[] = []
+
 /** The shelf title: the book's own metadata title once known, else cleaned file name. */
 function shelfTitle(book: LibraryBook): string {
   return book.displayName ?? cleanBookTitle(book.fileName)
@@ -118,9 +131,8 @@ interface LibraryScreenProps {
   readonly backend: AppInfo | null
 }
 
-interface ShelfBook extends LibraryBook {
-  readonly progress: number | null
-}
+/** `library.list` already joins the reading fraction — no per-book IPC. */
+type ShelfBook = LibraryBook
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -226,21 +238,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const loadBooks = useCallback(async (): Promise<void> => {
     if (!isTauriRuntime()) {
       setLibraryLoaded(true)
+      setBooks(browserShelf)
       return
     }
     try {
       const response = await invokeCommand('library.list', undefined)
-      const withProgress = await Promise.all(
-        response.books.map(async (book) => {
-          try {
-            const state = await invokeCommand('reader.state.get', { bookHash: book.hash })
-            return { ...book, progress: state.state?.progress?.fraction ?? null }
-          } catch {
-            return { ...book, progress: null }
-          }
-        }),
-      )
-      setBooks(withProgress)
+      setBooks(response.books)
     } catch {
       // The library still works: importing will retry the list.
     } finally {
@@ -277,7 +280,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     void (async () => {
       for (const book of books) {
         if (book.format === 'unknown') continue
-        const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : book.path
+        // 浏览器模式从注册的 File 生成稳定 object URL('' 表示文件已不在会话里)。
+        const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : browserBookUrl(book.hash)
+        if (!isTauriRuntime() && bookUrl === '') continue
 
         // Resolve the real title once per book, then persist it so the shelf
         // stops showing download-site file names forever.
@@ -323,10 +328,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
           continue
         }
         coverAttempted.add(book.hash)
-        const cover = await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1])
+        // Already extracted in an earlier run? Then this is just a file read.
+        const cached = await readCachedCover(book.hash).catch(() => null)
+        const cover =
+          cached ?? (await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1]))
         if (cover) {
           coverCache.set(book.hash, cover)
           setCovers((current) => new Map(current).set(book.hash, cover))
+          if (cached === null) void writeCachedCover(book.hash, cover).catch(() => {})
         } else {
           // Null is also what a transient failure returns; un-mark so the next
           // shelf rebuild retries instead of caching the failure for the run.
@@ -341,7 +350,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       try {
         const response = await invokeCommand('library.import', { path })
         setBooks((current) => [
-          { ...response.book, progress: null },
+          response.book,
           ...current.filter((b) => b.hash !== response.book.hash),
         ])
         setProblem(null)
@@ -399,6 +408,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       }
       setProblem(null)
       const hash = await sha256Hex(file)
+      registerBrowserFile(hash, file)
       imported.push({
         hash,
         fileName: file.name,
@@ -411,11 +421,25 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       })
     }
     if (imported.length > 0) {
-      setBooks((current) => [...imported, ...current])
+      // 重导同一文件(同 hash)时替换而不是重复上榜。
+      browserShelf = [
+        ...imported,
+        ...browserShelf.filter((book) => !imported.some((item) => item.hash === book.hash)),
+      ]
+      setBooks((current) => [
+        ...imported,
+        ...current.filter((book) => !imported.some((item) => item.hash === book.hash)),
+      ])
     }
   }, [])
 
   const removeFromLibrary = useCallback(async (hash: string): Promise<void> => {
+    if (!isTauriRuntime()) {
+      browserShelf = browserShelf.filter((book) => book.hash !== hash)
+      deleteBrowserFile(hash)
+      setBooks((current) => current.filter((book) => book.hash !== hash))
+      return
+    }
     try {
       await invokeCommand('library.remove', { bookHash: hash })
       setBooks((current) => current.filter((b) => b.hash !== hash))
@@ -582,7 +606,13 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
   const reading = books.filter((book) => (book.progress ?? 0) > 0).length
-  const openFileInput = (): void => inputRef.current?.click()
+
+  /** 浏览器模式从注册表里的 File 解析 URL;桌面端走 asset 协议。 */
+  const openBook = (book: ShelfBook): void => {
+    onOpenBook(
+      openedBookFromLibrary(book, isTauriRuntime() ? undefined : getBrowserFile(book.hash)),
+    )
+  }
 
   const {
     providers: aiProviders,
@@ -642,27 +672,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       </header>
 
       <main className="library-main">
-        {libraryLoaded && books.length === 0 && !isTauriRuntime() && (
-          <section className="library-empty" aria-label="导入书籍">
-            <button
-              type="button"
-              className="library-drop-button"
-              onClick={openFileInput}
-              aria-label="导入书籍"
-            >
-              <BookOpenText size={44} weight="light" aria-hidden />
-              <span className="library-empty-title">导入一本书</span>
-              <span className="library-empty-hint">
-                EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
-              </span>
-            </button>
-            <p className="library-note">
-              浏览器模式:导入的书籍只在当前会话有效;下载桌面版获得书架与进度记忆。
-            </p>
-          </section>
-        )}
-
-        {isTauriRuntime() && !libraryLoaded && (
+        {isTauriRuntime() && !libraryLoaded ? (
           <div className="shelf-skeleton" aria-label="书架加载中">
             {Array.from({ length: 6 }, (_, i) => (
               <div
@@ -672,23 +682,31 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               />
             ))}
           </div>
-        )}
-
-        {isTauriRuntime() && libraryLoaded && books.length === 0 && (
-          <section className="library-empty" aria-label="导入书籍">
-            <button
-              type="button"
-              className="library-drop-button"
-              onClick={triggerImport}
-              aria-label="导入书籍"
-            >
-              <BookOpenText size={44} weight="light" aria-hidden />
-              <span className="library-empty-title">把书拖进窗口,或点击导入</span>
-              <span className="library-empty-hint">
-                EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
-              </span>
-            </button>
-          </section>
+        ) : (
+          libraryLoaded &&
+          books.length === 0 && (
+            <section className="library-empty" aria-label="导入书籍">
+              <button
+                type="button"
+                className="library-drop-button"
+                onClick={triggerImport}
+                aria-label="导入书籍"
+              >
+                <BookOpenText size={44} weight="light" aria-hidden />
+                <span className="library-empty-title">
+                  {isTauriRuntime() ? '把书拖进窗口,或点击导入' : '导入一本书'}
+                </span>
+                <span className="library-empty-hint">
+                  EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
+                </span>
+              </button>
+              {!isTauriRuntime() && (
+                <p className="library-note">
+                  浏览器模式:导入的书籍只在当前会话有效;下载桌面版获得书架与进度记忆。
+                </p>
+              )}
+            </section>
+          )
         )}
 
         {libraryLoaded && books.length > 0 && (
@@ -785,7 +803,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                         onClick={
                           book.format === 'unknown'
                             ? undefined
-                            : () => onOpenBook(openedBookFromLibrary(book))
+                            : () => openBook(book)
                         }
                         title={
                           book.format === 'unknown'
@@ -848,7 +866,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                       <button
                         type="button"
                         className="book-row-open"
-                        onClick={() => onOpenBook(openedBookFromLibrary(book))}
+                        onClick={() => openBook(book)}
                       >
                         <span
                           className="book-row-cover"

@@ -51,6 +51,14 @@ pub fn run() {
             {
                 log::warn!("failed to allow fonts dir {}: {err}", fonts_dir.display());
             }
+            // Cached covers are read straight from disk on every shelf paint.
+            let covers_dir = library::covers_dir(&base);
+            if let Err(err) = app
+                .asset_protocol_scope()
+                .allow_directory(&covers_dir, false)
+            {
+                log::warn!("failed to allow covers dir {}: {err}", covers_dir.display());
+            }
             let tts_cache = tts::cache_dir(&base);
             if let Err(err) = app
                 .asset_protocol_scope()
@@ -91,6 +99,8 @@ pub fn run() {
             library::library_import,
             library::library_remove,
             library::library_rename,
+            library::library_cover_get,
+            library::library_cover_put,
             dictionary::dictionary_list,
             dictionary::dictionary_register,
             dictionary::dictionary_remove,

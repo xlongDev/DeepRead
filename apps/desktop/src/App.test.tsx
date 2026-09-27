@@ -36,6 +36,7 @@ const shelfBook = {
   path: '/books/夜航书.epub',
   size: 2391,
   addedAt: '2026-09-09T00:00:00Z',
+  progress: null,
 }
 
 beforeEach(() => {
