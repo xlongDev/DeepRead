@@ -37,6 +37,7 @@ const shelfBook = {
   size: 2391,
   addedAt: '2026-09-09T00:00:00Z',
   progress: null,
+  tags: [],
 }
 
 beforeEach(() => {

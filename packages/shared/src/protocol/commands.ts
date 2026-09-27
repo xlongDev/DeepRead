@@ -20,6 +20,7 @@ export const COMMAND = {
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
   libraryRename: 'library.rename',
+  libraryTagSet: 'library.tag.set',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
   dictionaryList: 'dictionary.list',
@@ -128,6 +129,8 @@ export interface LibraryBook {
   readonly addedAt: ISO8601
   /** Reading fraction (0-1) joined in by `library.list`; null = never opened. */
   readonly progress: number | null
+  /** User collections; empty means untagged. */
+  readonly tags: readonly string[]
 }
 
 export interface LibraryListResponse {
@@ -156,6 +159,16 @@ export interface LibraryRenameRequest {
 }
 
 export interface LibraryRenameResponse {
+  readonly book: LibraryBook
+}
+
+export interface LibraryTagSetRequest {
+  readonly bookHash: string
+  /** Full replacement set: the shelf sends what the book should end up with. */
+  readonly tags: readonly string[]
+}
+
+export interface LibraryTagSetResponse {
   readonly book: LibraryBook
 }
 
@@ -617,6 +630,10 @@ export interface CommandMap {
     readonly request: LibraryRenameRequest
     readonly response: LibraryRenameResponse
   }
+  [COMMAND.libraryTagSet]: {
+    readonly request: LibraryTagSetRequest
+    readonly response: LibraryTagSetResponse
+  }
   [COMMAND.libraryCoverGet]: {
     readonly request: LibraryCoverGetRequest
     readonly response: LibraryCoverGetResponse
@@ -834,6 +851,7 @@ export const libraryBookSchema = z.object({
   size: z.number().int().min(0),
   addedAt: iso8601,
   progress: z.number().min(0).max(1).nullable(),
+  tags: z.array(z.string().min(1).max(32)).max(20),
 })
 
 export const readerStateGetRequestSchema = z.object({ bookHash })
@@ -856,6 +874,11 @@ export const libraryRenameRequestSchema = z.object({
   displayName: z.string().min(1).max(512),
 })
 export const libraryRenameResponseSchema = z.object({ book: libraryBookSchema })
+export const libraryTagSetRequestSchema = z.object({
+  bookHash: bookHash,
+  tags: z.array(z.string().min(1).max(32)).max(20),
+})
+export const libraryTagSetResponseSchema = z.object({ book: libraryBookSchema })
 export const libraryCoverGetRequestSchema = z.object({ bookHash: bookHash })
 export const libraryCoverGetResponseSchema = z.object({ path: z.string().max(4096).nullable() })
 export const libraryCoverPutRequestSchema = z.object({
@@ -1140,6 +1163,7 @@ export const responseValidators: {
   [COMMAND.libraryImport]: libraryImportResponseSchema,
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
   [COMMAND.libraryRename]: libraryRenameResponseSchema,
+  [COMMAND.libraryTagSet]: libraryTagSetResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
@@ -1189,6 +1213,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryImport]: libraryImportRequestSchema,
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
   [COMMAND.libraryRename]: libraryRenameRequestSchema,
+  [COMMAND.libraryTagSet]: libraryTagSetRequestSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.dictionaryList]: undefined,

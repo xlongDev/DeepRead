@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpenText,
+  Check,
+  CheckSquare,
   Cloud,
   Gear,
   ListBullets,
@@ -119,7 +121,12 @@ const TITLE_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
  * A reload still clears both — File handles cannot be persisted; that is what
  * the desktop build is for.
  */
-let browserShelf: ShelfBook[] = []
+let browserShelf: readonly ShelfBook[] = []
+
+/** `confirmRemove` sentinel for the bulk bar (per-book pending state uses a hash). */
+const BULK_CONFIRM = '__bulk__'
+/** `tagFilter` sentinel: the tag dropdown needs a value for "no filter". */
+const ALL_TAGS = '__all__'
 
 /** The shelf title: the book's own metadata title once known, else cleaned file name. */
 function shelfTitle(book: LibraryBook): string {
@@ -159,6 +166,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 382,
         addedAt: '2026-09-13T03:00:00Z',
         progress: 0.42,
+        tags: [],
       },
       {
         hash: 'demo2',
@@ -169,6 +177,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 2391,
         addedAt: '2026-09-13T02:00:00Z',
         progress: 0.08,
+        tags: [],
       },
       {
         hash: 'demo3',
@@ -179,6 +188,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 619,
         addedAt: '2026-09-12T10:00:00Z',
         progress: null,
+        tags: [],
       },
       {
         hash: 'demo4',
@@ -189,6 +199,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 300,
         addedAt: '2026-09-12T09:00:00Z',
         progress: null,
+        tags: [],
       },
       {
         hash: 'demo5',
@@ -199,6 +210,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 11_000_000,
         addedAt: '2026-09-11T08:00:00Z',
         progress: 0.77,
+        tags: [],
       },
     ])
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dev-only seed, mount only
@@ -216,6 +228,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  /** null = 全部标签。 */
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [tagDraft, setTagDraft] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
@@ -361,13 +379,13 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }, [])
 
   const importFromDialog = useCallback(async (): Promise<void> => {
-    const selected = await open({
+    const picked = await open({
       multiple: true,
       directory: false,
       filters: [{ name: '电子书', extensions: DIALOG_EXTENSIONS }],
     })
-    if (!selected) return
-    const paths = Array.isArray(selected) ? selected : [selected]
+    if (!picked) return
+    const paths = Array.isArray(picked) ? picked : [picked]
     await importPaths(paths)
   }, [importPaths])
 
@@ -418,6 +436,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: file.size,
         addedAt: new Date().toISOString(),
         progress: null,
+        tags: [],
       })
     }
     if (imported.length > 0) {
@@ -514,13 +533,13 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }, [update])
 
   const runRestore = useCallback(async (reload: () => void): Promise<void> => {
-    const selected = await open({
+    const backupPath = await open({
       multiple: false,
       directory: false,
       filters: [{ name: 'SQLite 备份', extensions: ['db'] }],
     })
-    if (!selected || typeof selected !== 'string') return
-    const checksumPath = `${selected}.sha256`
+    if (!backupPath || typeof backupPath !== 'string') return
+    const checksumPath = `${backupPath}.sha256`
     let checksum = ''
     try {
       const response = await fetch(convertFileSrc(checksumPath))
@@ -534,7 +553,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
     setBackupBusy(true)
     try {
-      await invokeCommand('storage.restore', { path: selected, checksum })
+      await invokeCommand('storage.restore', { path: backupPath, checksum })
       setBackupMsg('恢复完成:书架、进度与批注已还原。')
       reload()
     } catch (restoreError) {
@@ -602,6 +621,84 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         )}
       </button>
     )
+  }
+
+  // 浏览器模式下书架列表由 books 状态镜像回模块缓存(重挂载后还在)。
+  useEffect(() => {
+    if (!isTauriRuntime()) browserShelf = books
+  }, [books])
+
+  const allTags = useMemo(
+    () => [...new Set(books.flatMap((book) => book.tags))].sort((a, b) => a.localeCompare(b, 'zh')),
+    [books],
+  )
+  const visible = useMemo(
+    () => (tagFilter === null ? filtered : filtered.filter((book) => book.tags.includes(tagFilter))),
+    [filtered, tagFilter],
+  )
+  const selectedBooks = books.filter((book) => selected.has(book.hash))
+
+  const toggleSelected = (hash: string): void => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(hash)) next.delete(hash)
+      else next.add(hash)
+      return next
+    })
+  }
+
+  const exitSelection = (): void => {
+    setSelecting(false)
+    setSelected(new Set())
+    setConfirmRemove(null)
+  }
+
+  /** 标签是整组替换:桌面端落库,浏览器模式只改内存。 */
+  const saveTags = async (book: ShelfBook, tags: readonly string[]): Promise<ShelfBook> => {
+    if (!isTauriRuntime()) return { ...book, tags: [...tags] }
+    const response = await invokeCommand('library.tag.set', {
+      bookHash: book.hash,
+      tags: [...tags],
+    })
+    return response.book
+  }
+
+  const tagSelected = async (): Promise<void> => {
+    const tag = tagDraft.trim()
+    if (tag === '' || selectedBooks.length === 0) return
+    setBulkBusy(true)
+    try {
+      const updated = new Map<string, ShelfBook>()
+      for (const book of selectedBooks) {
+        if (book.tags.includes(tag)) continue
+        try {
+          const saved = await saveTags(book, [...book.tags, tag])
+          updated.set(saved.hash, saved)
+        } catch (error) {
+          setProblem(toAppError(error).message)
+        }
+      }
+      if (updated.size > 0) {
+        setBooks((current) => current.map((book) => updated.get(book.hash) ?? book))
+      }
+      setTagDraft('')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const removeSelected = async (): Promise<void> => {
+    if (confirmRemove !== BULK_CONFIRM) {
+      setConfirmRemove(BULK_CONFIRM)
+      return
+    }
+    setBulkBusy(true)
+    try {
+      for (const book of selectedBooks) await removeFromLibrary(book.hash)
+      exitSelection()
+    } finally {
+      setBulkBusy(false)
+    }
   }
 
   const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
@@ -765,6 +862,28 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 }}
                 className="dropdown-shelf-sort"
               />
+              {allTags.length > 0 && (
+                <DropdownMenu
+                  ariaLabel="按标签筛选"
+                  value={tagFilter ?? ALL_TAGS}
+                  options={[
+                    { value: ALL_TAGS, label: '全部标签' },
+                    ...allTags.map((tag) => ({ value: tag, label: tag })),
+                  ]}
+                  onChange={(next) => setTagFilter(next === ALL_TAGS ? null : next)}
+                  className="dropdown-shelf-tags"
+                />
+              )}
+              <button
+                type="button"
+                className={`shelf-manage${selecting ? ' is-active' : ''}`}
+                onClick={() => (selecting ? exitSelection() : setSelecting(true))}
+                title={selecting ? '退出批量管理' : '批量管理'}
+                aria-pressed={selecting}
+              >
+                <CheckSquare size={15} weight={selecting ? 'fill' : 'regular'} aria-hidden />
+                {selecting ? '完成' : '管理'}
+              </button>
               <button
                 type="button"
                 className="shelf-import"
@@ -775,19 +894,22 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               </button>
             </div>
 
-            {filtered.length === 0 ? (
-              <p className="shelf-none">没有匹配“{query}”的书。</p>
+            {visible.length === 0 ? (
+              <p className="shelf-none">
+                没有匹配“{tagFilter ?? query}”的书。
+              </p>
             ) : view === 'grid' ? (
               <ul className="shelf-grid" aria-label="书架">
-                {filtered.map((book, index) => {
+                {visible.map((book, index) => {
                   const palette = coverPalette(book.hash)
                   const title = shelfTitle(book)
                   const progress = book.progress
                   const coverUrl = covers.get(book.hash) ?? null
+                  const isSelected = selected.has(book.hash)
                   return (
                     <li
                       key={book.hash}
-                      className="book-card"
+                      className={`book-card${isSelected ? ' is-selected' : ''}`}
                       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
                     >
                       <button
@@ -801,14 +923,21 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                               }
                         }
                         onClick={
-                          book.format === 'unknown'
-                            ? undefined
-                            : () => openBook(book)
+                          selecting
+                            ? () => toggleSelected(book.hash)
+                            : book.format === 'unknown'
+                              ? undefined
+                              : () => openBook(book)
                         }
+                        aria-pressed={selecting ? isSelected : undefined}
                         title={
-                          book.format === 'unknown'
-                            ? '重新导入同一文件即可恢复此书的进度与批注'
-                            : `打开《${title}》`
+                          selecting
+                            ? isSelected
+                              ? '取消选择'
+                              : '选择这本书'
+                            : book.format === 'unknown'
+                              ? '重新导入同一文件即可恢复此书的进度与批注'
+                              : `打开《${title}》`
                         }
                       >
                         {book.format === 'unknown' ? (
@@ -832,12 +961,18 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                             />
                           </span>
                         )}
+                        {selecting && (
+                          <span className="book-select" aria-hidden>
+                            {isSelected && <Check size={13} weight="bold" />}
+                          </span>
+                        )}
                       </button>
                       <div className="book-meta">
                         <span className="book-meta-title" title={title}>
                           {title}
                         </span>
                         <span className="book-meta-sub">
+                          {book.tags.length > 0 ? `${book.tags.join(' / ')} · ` : ''}
                           {book.format === 'unknown'
                             ? '重新导入同一文件即可恢复'
                             : progress !== null && progress > 0
@@ -845,29 +980,36 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                               : formatBytes(book.size)}
                         </span>
                       </div>
-                      {removeButton(book)}
+                      {!selecting && removeButton(book)}
                     </li>
                   )
                 })}
               </ul>
             ) : (
               <ul className="shelf-list" aria-label="书架">
-                {filtered.map((book, index) => {
+                {visible.map((book, index) => {
                   const title = shelfTitle(book)
                   const progress = book.progress
                   const coverUrl = covers.get(book.hash) ?? null
                   const palette = coverPalette(book.hash)
+                  const isSelected = selected.has(book.hash)
                   return (
                     <li
                       key={book.hash}
-                      className="book-row"
+                      className={`book-row${isSelected ? ' is-selected' : ''}`}
                       style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
                     >
                       <button
                         type="button"
                         className="book-row-open"
-                        onClick={() => openBook(book)}
+                        onClick={() => (selecting ? toggleSelected(book.hash) : openBook(book))}
+                        aria-pressed={selecting ? isSelected : undefined}
                       >
+                        {selecting && (
+                          <span className={`book-select is-inline${isSelected ? ' is-checked' : ''}`} aria-hidden>
+                            {isSelected && <Check size={12} weight="bold" />}
+                          </span>
+                        )}
                         <span
                           className="book-row-cover"
                           style={
@@ -887,6 +1029,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                             {progress !== null && progress > 0
                               ? ` · 读到 ${Math.round(progress * 100)}%`
                               : ''}
+                            {book.tags.length > 0 ? ` · ${book.tags.join(' / ')}` : ''}
                           </span>
                         </span>
                         {progress !== null && progress > 0 && (
@@ -898,12 +1041,68 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                           </span>
                         )}
                       </button>
-                      {removeButton(book, 'book-row-remove')}
+                      {!selecting && removeButton(book, 'book-row-remove')}
                     </li>
                   )
                 })}
               </ul>
             )}
+
+            {selecting && (
+              <div className="shelf-bulk" role="toolbar" aria-label="批量操作">
+                <span className="shelf-bulk-count">已选 {selected.size} 本</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() =>
+                    setSelected(
+                      selected.size === visible.length
+                        ? new Set()
+                        : new Set(visible.map((book) => book.hash)),
+                    )
+                  }
+                >
+                  {selected.size === visible.length ? '取消全选' : '全选'}
+                </button>
+                <input
+                  className="shelf-bulk-tag"
+                  list="deepread-tag-options"
+                  placeholder="加标签…"
+                  value={tagDraft}
+                  onChange={(event) => setTagDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void tagSelected()
+                  }}
+                  aria-label="给选中的书加标签"
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
+                  onClick={() => void tagSelected()}
+                >
+                  打标签
+                </button>
+                <button
+                  type="button"
+                  className={`btn${confirmRemove === BULK_CONFIRM ? ' is-danger' : ''}`}
+                  disabled={bulkBusy || selected.size === 0}
+                  onClick={() => void removeSelected()}
+                >
+                  {confirmRemove === BULK_CONFIRM
+                    ? `确认移除 ${selected.size} 本?`
+                    : '移出书架'}
+                </button>
+              </div>
+            )}
+
+            <datalist id="deepread-tag-options">
+              {allTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </datalist>
           </>
         )}
 

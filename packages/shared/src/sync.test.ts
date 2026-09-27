@@ -111,6 +111,7 @@ describe('mergeLibrary', () => {
     size: 1,
     addedAt: '2026-09-01T00:00:00Z',
     progress: null,
+    tags: [],
     ...overrides,
   })
 
@@ -135,5 +136,14 @@ describe('mergeLibrary', () => {
     const books = [book('d'.repeat(64))]
     const { changed } = mergeLibrary(books, books)
     expect(changed).toBe(false)
+  })
+
+  it('tags union instead of one device dropping the other’s collections', () => {
+    const hash = 'e'.repeat(64)
+    const local = [book(hash, { tags: ['技术'] })]
+    const remote = [book(hash, { addedAt: '2026-08-01T00:00:00Z', tags: ['在读'] })]
+    const { books, changed } = mergeLibrary(local, remote)
+    expect([...books[0]!.tags].sort()).toEqual(['在读', '技术'])
+    expect(changed).toBe(true)
   })
 })

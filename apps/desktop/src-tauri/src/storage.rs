@@ -129,6 +129,11 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE books ADD COLUMN display_name TEXT;
     "#,
+    // v5 — shelf tags (JSON array of strings): collections the user builds on
+    // top of the flat shelf. Plain JSON keeps the column sync-friendly.
+    r#"
+    ALTER TABLE books ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {

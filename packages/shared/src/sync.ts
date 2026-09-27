@@ -175,7 +175,10 @@ export function mergeLibrary(
       byHash.set(book.hash, book)
       continue
     }
-    byHash.set(book.hash, preferBook(book, remoteBook))
+    const winner = preferBook(book, remoteBook)
+    // Tags union instead of winner-takes-all: a device that never tagged the
+    // book must not drop collections added elsewhere.
+    byHash.set(book.hash, { ...winner, tags: unionTags(book, remoteBook) })
   }
   const books = [...byHash.values()]
   return {
@@ -195,4 +198,8 @@ function preferBook(a: LibraryBook, b: LibraryBook): LibraryBook {
   if (a.displayName !== null && b.displayName === null) return a
   if (b.displayName !== null && a.displayName === null) return b
   return a.addedAt <= b.addedAt ? a : b
+}
+
+function unionTags(a: LibraryBook, b: LibraryBook): readonly string[] {
+  return [...new Set([...a.tags, ...b.tags])]
 }

@@ -46,6 +46,8 @@ pub struct LibraryBook {
     /// Reading fraction from `progress`, joined in so the shelf needs one query
     /// instead of one `reader.state.get` per book.
     pub progress: Option<f64>,
+    /// User collections. Stored as a JSON array of strings in `books.tags`.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +78,19 @@ pub struct LibraryRemoveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRemoveResponse {
     pub removed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibraryTagSetRequest {
+    pub book_hash: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTagSetResponse {
+    pub book: LibraryBook,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +175,14 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
         size: row.get::<_, i64>("size")? as u64,
         added_at: row.get("added_at")?,
         progress: row.get("progress")?,
+        tags: parse_tags(row.get::<_, String>("tags").unwrap_or_default().as_str()),
     })
+}
+
+/// Tags live as a JSON array; a malformed value degrades to "no tags" rather
+/// than making the whole shelf unreadable.
+fn parse_tags(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
 }
 
 /// One row per book with its reading fraction (LEFT JOIN: unread books are
@@ -170,7 +192,7 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
         .prepare(
             "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
-                    p.fraction AS progress
+                    b.tags, p.fraction AS progress
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
              ORDER BY b.added_at DESC, b.rowid DESC",
@@ -224,6 +246,43 @@ pub fn remove_book(conn: &Connection, hash: &str) -> Result<bool, AppError> {
     Ok(removed > 0)
 }
 
+/// Replace a book's tags. Input is normalized (trimmed, deduped, capped) so a
+/// runaway UI can neither bloat the row nor store whitespace-only tags.
+pub fn set_tags(conn: &Connection, hash: &str, tags: &[String]) -> Result<LibraryBook, AppError> {
+    crate::state::validate_hash(hash)?;
+    let mut normalized: Vec<String> = Vec::new();
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > 32 {
+            continue;
+        }
+        if !normalized.iter().any(|existing| existing == trimmed) {
+            normalized.push(trimmed.to_string());
+        }
+        if normalized.len() >= 20 {
+            break;
+        }
+    }
+    let updated = conn
+        .execute(
+            "UPDATE books SET tags = ?1 WHERE hash = ?2",
+            rusqlite::params![
+                serde_json::to_string(&normalized).unwrap_or_else(|_| "[]".to_string()),
+                hash
+            ],
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to save tags").with_cause(err)
+        })?;
+    if updated == 0 {
+        return Err(AppError::new(
+            ErrorCode::BookOpenFailed,
+            "book not in library",
+        ));
+    }
+    get_book(conn, hash)
+}
+
 /// Set the shelf title for a book (the frontend resolves it from the book's
 /// own metadata and backfills older rows).
 pub fn rename_book(
@@ -255,7 +314,7 @@ pub fn rename_book(
 fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
     conn.query_row(
         "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
-                p.fraction AS progress
+                b.tags, p.fraction AS progress
          FROM books b
          LEFT JOIN progress p ON p.book_hash = b.hash
          WHERE b.hash = ?1",
@@ -289,13 +348,13 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     }
 
     let (hash, size) = hash_file(&path)?;
-    // Re-importing a known file keeps its added_at and the title we already
-    // resolved — the point of re-import is usually a moved file, not a reset.
-    let existing: Option<(String, Option<String>)> = conn
+    // Re-importing a known file keeps its added_at, its resolved title and its
+    // tags — the point of re-import is usually a moved file, not a reset.
+    let existing: Option<(String, Option<String>, String)> = conn
         .query_row(
-            "SELECT added_at, display_name FROM books WHERE hash = ?1",
+            "SELECT added_at, display_name, tags FROM books WHERE hash = ?1",
             [&hash],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map(Some)
         .or_else(|err| match err {
@@ -308,19 +367,23 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     let book = LibraryBook {
         hash: hash.clone(),
         file_name,
-        display_name: existing.as_ref().and_then(|(_, name)| name.clone()),
+        display_name: existing.as_ref().and_then(|(_, name, _)| name.clone()),
         format: format.to_string(),
         path: raw_path.to_string(),
         size,
         added_at: existing
             .as_ref()
-            .map(|(added_at, _)| added_at.clone())
+            .map(|(added_at, _, _)| added_at.clone())
             .unwrap_or_else(crate::timestamps::rfc3339_now),
         progress: None,
+        tags: existing
+            .as_ref()
+            .map(|(_, _, tags)| parse_tags(tags))
+            .unwrap_or_default(),
     };
     conn.execute(
-        "INSERT OR REPLACE INTO books (hash, file_name, display_name, format, path, size, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT OR REPLACE INTO books (hash, file_name, display_name, format, path, size, added_at, tags)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             book.hash,
             book.file_name,
@@ -328,7 +391,8 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
             book.format,
             book.path,
             book.size as i64,
-            book.added_at
+            book.added_at,
+            serde_json::to_string(&book.tags).unwrap_or_else(|_| "[]".to_string())
         ],
     )
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save book").with_cause(err))?;
@@ -472,6 +536,19 @@ pub fn library_remove(
         }
     }
     Ok(LibraryRemoveResponse { removed })
+}
+
+#[tauri::command(rename = "library.tag.set")]
+pub fn library_tag_set(
+    db: tauri::State<'_, Db>,
+    request: LibraryTagSetRequest,
+) -> Result<LibraryTagSetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(LibraryTagSetResponse {
+        book: set_tags(&conn, &request.book_hash, &request.tags)?,
+    })
 }
 
 #[tauri::command(rename = "library.cover.get")]
@@ -655,12 +732,57 @@ mod tests {
             size: 3,
             added_at: "2026-09-09T00:00:00Z".into(),
             progress: Some(0.25),
+            tags: vec!["技术".into()],
         };
         let json = serde_json::to_value(&book).unwrap();
         assert_eq!(json["fileName"], "a.epub");
         assert_eq!(json["displayName"], "A Book");
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
         assert_eq!(json["progress"], 0.25);
+        assert_eq!(json["tags"][0], "技术");
+    }
+
+    #[test]
+    fn tags_round_trip_are_normalized_and_survive_reimport() {
+        let conn = memory_db();
+        let base = std::env::temp_dir().join(format!(
+            "reader-lib-tags-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("book.epub");
+        std::fs::write(&path, b"epub-bytes").unwrap();
+        let book = import_book(&conn, path.to_str().unwrap()).unwrap();
+        assert!(book.tags.is_empty());
+
+        let tagged = set_tags(
+            &conn,
+            &book.hash,
+            &[
+                " 技术 ".into(),
+                "技术".into(),
+                "".into(),
+                "在读".into(),
+                "x".repeat(40),
+            ],
+        )
+        .unwrap();
+        assert_eq!(tagged.tags, vec!["技术".to_string(), "在读".to_string()]);
+        assert_eq!(
+            list_books(&conn).unwrap()[0].tags,
+            tagged.tags,
+            "joined row"
+        );
+
+        // Moving the file must not wipe the user's collections.
+        let reimported = import_book(&conn, path.to_str().unwrap()).unwrap();
+        assert_eq!(reimported.tags, tagged.tags);
+
+        let cleared = set_tags(&conn, &book.hash, &[]).unwrap();
+        assert!(cleared.tags.is_empty());
     }
 
     #[test]

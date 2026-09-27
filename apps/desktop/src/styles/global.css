@@ -572,6 +572,125 @@ button:disabled {
   animation: fade-up var(--duration-base) var(--ease-out);
 }
 
+/* ---------- Batch management ---------- */
+
+.shelf-manage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.shelf-manage:hover {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+.shelf-manage.is-active {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+/* Selection ring + check badge, shared by grid cards and list rows. */
+.book-card.is-selected .book-cover {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 2px var(--color-accent),
+    var(--shadow-cover);
+}
+
+.book-select {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #ffffff;
+}
+
+.book-card.is-selected .book-select {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.book-select.is-inline {
+  position: static;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+.book-select.is-inline.is-checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.book-row.is-selected .book-row-open {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+.shelf-bulk {
+  position: sticky;
+  bottom: var(--space-md);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding: 10px var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-floating);
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+.shelf-bulk-count {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.shelf-bulk-tag {
+  flex: 1 1 140px;
+  min-width: 120px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: 7px 14px;
+}
+
+.shelf-bulk-tag:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
 .shelf-skeleton {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
@@ -3329,5 +3448,75 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
 
   .reader-slider::-webkit-slider-thumb {
     transition: none;
+  }
+}
+
+/* ---------- Touch / coarse pointers ----------
+   触屏没有 hover:凡是靠 hover 才出现的控件都必须常显,命中区也要撑到 40px
+   (iOS/Android 出包已在跑,手指精度和鼠标不是一回事)。 */
+
+@media (hover: none), (pointer: coarse) {
+  /* hover 态在触屏上会"粘住",改成按下的反馈。 */
+  .book-cover:hover {
+    transform: none;
+    box-shadow: var(--shadow-cover);
+    border-color: var(--color-border);
+  }
+
+  .book-cover:hover .book-cover-img {
+    transform: none;
+  }
+
+  .book-cover:active {
+    transform: scale(0.982);
+  }
+
+  .book-cover:hover::after {
+    transform: translateX(-120%);
+    transition: none;
+  }
+
+  /* 移除按钮:不再藏在 hover 里,并放大命中区。 */
+  .book-remove {
+    opacity: 1;
+    transform: none;
+    width: 32px;
+    height: 32px;
+    top: -10px;
+    right: -10px;
+  }
+
+  .book-remove.is-confirm {
+    transform: none;
+  }
+
+  .chrome-button {
+    width: 42px;
+    height: 42px;
+  }
+
+  .toc-item {
+    padding: 12px var(--space-md);
+  }
+
+  .dropdown-option {
+    min-height: 44px;
+  }
+
+  .shelf-view-toggle button,
+  .shelf-manage,
+  .shelf-import,
+  .dropdown-trigger {
+    min-height: 40px;
+  }
+
+  .selection-toolbar button,
+  .tts-mini-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .reader-slider {
+    height: 28px;
   }
 }

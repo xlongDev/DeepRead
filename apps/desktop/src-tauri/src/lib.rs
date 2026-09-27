@@ -99,6 +99,7 @@ pub fn run() {
             library::library_import,
             library::library_remove,
             library::library_rename,
+            library::library_tag_set,
             library::library_cover_get,
             library::library_cover_put,
             dictionary::dictionary_list,
