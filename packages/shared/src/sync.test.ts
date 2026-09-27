@@ -105,6 +105,7 @@ describe('mergeLibrary', () => {
   const book = (hash: string, overrides = {}) => ({
     hash,
     fileName: '书.epub',
+    displayName: null,
     format: 'epub',
     path: '/books/book.epub',
     size: 1,

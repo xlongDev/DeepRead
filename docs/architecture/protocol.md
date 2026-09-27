@@ -42,16 +42,19 @@
 | Errors         | `SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO`、`STORAGE_CORRUPT`                                                   |
 | 用途           | 按书籍文件哈希持久化阅读进度(CFI)与批注锚点;SQLite 落地前的真实 JSON 存储。                                       |
 
-### `library.list` / `library.import` / `library.remove`
+### `library.list` / `library.import` / `library.remove` / `library.rename`
 
-|             |                                                                                                     |
-| ----------- | --------------------------------------------------------------------------------------------------- |
-| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                             |
-| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                     |
-| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                      |
-| LibraryBook | `{ hash, fileName, format, path, size, addedAt }`                                                   |
-| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT` |
-| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope            |
+|             |                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                                                   |
+| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                           |
+| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                            |
+| rename      | Request `{ bookHash, displayName }`;Response `{ book: LibraryBook }`                                                      |
+| LibraryBook | `{ hash, fileName, displayName: string \| null, format, path, size, addedAt }`                                            |
+| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                       |
+| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                  |
+| 约定        | `displayName` 为书籍自带元数据标题,前端惰性解析后经 `rename` 回写;`null` 表示尚未解析(书架回退到清洗后的文件名)           |
+| 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除) |
 
 ### `ai.*` 与 `secret.*`(Phase 3)
 

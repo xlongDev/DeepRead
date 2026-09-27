@@ -55,7 +55,7 @@ export function DropdownMenu<T extends string>({
       <button
         type="button"
         className={`dropdown-trigger${open ? ' is-open' : ''}`}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open}
         aria-label={ariaLabel}
         onClick={() => setOpen((openState) => !openState)}
@@ -66,28 +66,27 @@ export function DropdownMenu<T extends string>({
         <CaretDown size={11} weight="bold" aria-hidden />
       </button>
       {open && (
-        <ul className="dropdown-menu" role="listbox" aria-label={ariaLabel}>
+        <div className="dropdown-menu" role="menu" aria-label={ariaLabel}>
           {options.map((option) => (
-            <li key={option.value}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={option.value === value}
-                className={`dropdown-option${option.value === value ? ' is-active' : ''}`}
-                onClick={() => {
-                  onChange(option.value)
-                  setOpen(false)
-                }}
-              >
-                <span className="dropdown-option-label">
-                  {option.label}
-                  {option.hint && <span className="dropdown-hint">{option.hint}</span>}
-                </span>
-                {option.value === value && <Check size={13} weight="bold" aria-hidden />}
-              </button>
-            </li>
+            <button
+              key={option.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.value === value}
+              className={`dropdown-option${option.value === value ? ' is-active' : ''}`}
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+            >
+              <span className="dropdown-option-label">
+                {option.label}
+                {option.hint && <span className="dropdown-hint">{option.hint}</span>}
+              </span>
+              {option.value === value && <Check size={13} weight="bold" aria-hidden />}
+            </button>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   )

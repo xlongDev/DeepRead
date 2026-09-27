@@ -51,6 +51,27 @@ async function fetchAsFile(url: string, name: string, type: string): Promise<Fil
   }
 }
 
+async function openEpub(url: string): Promise<FoliateBook | null> {
+  const file = await fetchAsFile(url, 'book.epub', 'application/epub+zip')
+  if (!file) return null
+  try {
+    const loader = await makeZipLoader(file)
+    return await new EPUB(loader).init()
+  } catch {
+    return null
+  }
+}
+
+async function openMobi(url: string): Promise<FoliateBook | null> {
+  const file = await fetchAsFile(url, 'book.mobi', 'application/x-mobipocket-ebook')
+  if (!file) return null
+  try {
+    return await new MOBI({ unzlib: unzlibSync }).open(file)
+  } catch {
+    return null
+  }
+}
+
 export async function extractEpubCover(url: string): Promise<string | null> {
   const file = await fetchAsFile(url, 'book.epub', 'application/epub+zip')
   if (!file) return null
@@ -83,14 +104,8 @@ export async function extractEpubCover(url: string): Promise<string | null> {
 }
 
 export async function extractMobiCover(url: string): Promise<string | null> {
-  const file = await fetchAsFile(url, 'book.mobi', 'application/x-mobipocket-ebook')
-  if (!file) return null
-  try {
-    const book = await new MOBI({ unzlib: unzlibSync }).open(file)
-    return await kernelCover(book)
-  } catch {
-    return null
-  }
+  const book = await openMobi(url)
+  return book ? kernelCover(book) : null
 }
 
 /** Render the first non-blank PDF page (max 3) and return it as an object URL. */
@@ -156,6 +171,46 @@ async function isCanvasBlank(
     if (r < 245 || g < 245 || b < 245) nonWhite++
   }
   return sampled === 0 || nonWhite / sampled < 0.005
+}
+
+/**
+ * The book's own title. Download-site file names are noise ("…(z-library…)"),
+ * and PDFs often carry the source file name as metadata — both are rejected
+ * here so the shelf never shows them.
+ */
+function normalizeTitle(raw: string | undefined | null): string | null {
+  if (!raw) return null
+  const text = raw
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text.length === 0 || text.length > 200) return null
+  if (/\.(pdf|docx?|pptx?|xlsx?|epub|txt)$/i.test(text)) return null
+  return text
+}
+
+/** Extract the real title for a book; null means "fall back to the file name". */
+export async function extractTitle(url: string, format: BookFormat): Promise<string | null> {
+  switch (format) {
+    case 'epub':
+      return normalizeTitle((await openEpub(url))?.metadata?.title)
+    case 'mobi':
+    case 'azw3':
+      return normalizeTitle((await openMobi(url))?.metadata?.title)
+    case 'pdf': {
+      try {
+        const pdfjs = await import('pdfjs-dist')
+        const pdf = await pdfjs.getDocument({ url }).promise
+        const info = (await pdf.getMetadata()).info as { Title?: string } | undefined
+        void pdf.cleanup()
+        return normalizeTitle(info?.Title)
+      } catch {
+        return null
+      }
+    }
+    default:
+      return null
+  }
 }
 
 /** Extract a cover URL for a book; null means "draw the generated cover". */

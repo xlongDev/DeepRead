@@ -123,6 +123,12 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     );
     "#,
+    // v4 — shelf titles: the book's own metadata title, resolved lazily and
+    // backfilled by the frontend (file names carry download-site garbage like
+    // "(z-library…)" that must never reach the shelf).
+    r#"
+    ALTER TABLE books ADD COLUMN display_name TEXT;
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {

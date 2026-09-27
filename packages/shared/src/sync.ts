@@ -190,5 +190,9 @@ function preferBook(a: LibraryBook, b: LibraryBook): LibraryBook {
   const aPlaceholder = a.path === '' || a.fileName === a.hash
   const bPlaceholder = b.path === '' || b.fileName === b.hash
   if (aPlaceholder !== bPlaceholder) return aPlaceholder ? b : a
+  // A resolved title beats an unresolved one: titles are resolved lazily, so
+  // the record that has not been opened yet may also be the newer one.
+  if (a.displayName !== null && b.displayName === null) return a
+  if (b.displayName !== null && a.displayName === null) return b
   return a.addedAt <= b.addedAt ? a : b
 }

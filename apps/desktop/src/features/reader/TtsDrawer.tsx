@@ -501,7 +501,15 @@ export function TtsDrawer({
         }
       }
     },
-    [getSectionText, jumpSection, armTimer, playBlockFile, speakSystemBlock, stop],
+    [
+      getSectionText,
+      jumpSection,
+      armTimer,
+      playBlockFile,
+      speakSystemBlock,
+      stop,
+      bookLanguage,
+    ],
   )
 
   const play = useCallback((): void => {
@@ -676,7 +684,7 @@ export function TtsDrawer({
   // 迷你播放条:悬浮在底栏上方,不打断阅读;点击展开,× 停止。
   if (minimized) {
     return (
-      <div className="tts-mini" role="region" aria-label="朗读迷你条">
+      <section className="tts-mini" aria-label="朗读迷你条">
         {coverUrl ? (
           <img src={coverUrl} alt="" className="tts-mini-cover" />
         ) : (
@@ -708,7 +716,7 @@ export function TtsDrawer({
         <button type="button" className="tts-mini-btn" onClick={onClose} title="停止并关闭">
           <X size={14} weight="regular" aria-hidden />
         </button>
-      </div>
+      </section>
     )
   }
 

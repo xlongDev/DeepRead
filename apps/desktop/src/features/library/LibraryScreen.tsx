@@ -8,6 +8,7 @@ import {
   Plus,
   Sparkle,
   SquaresFour,
+  Trash,
   X,
 } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -15,11 +16,12 @@ import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { toAppError, type AppInfo, type LibraryBook } from '@deepread/shared'
-import { extractCover } from '@deepread/reader-adapter'
+import { extractCover, extractTitle } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
   DIALOG_EXTENSIONS,
   classifyFile,
+  cleanBookTitle,
   convertFileSrc,
   openedBookFromLibrary,
   type ImportProblem,
@@ -102,6 +104,14 @@ const viewFromStorage = (): ViewMode => {
 // the app run. Blob URLs are per-run by nature, so no cross-restart cache.
 const coverCache = new Map<string, string>()
 const coverAttempted = new Set<string>()
+/** Books whose title is not resolvable from metadata (txt/md/fb2/cbz) or already resolved. */
+const titleAttempted = new Set<string>()
+const TITLE_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
+
+/** The shelf title: the book's own metadata title once known, else cleaned file name. */
+function shelfTitle(book: LibraryBook): string {
+  return book.displayName ?? cleanBookTitle(book.fileName)
+}
 
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
@@ -131,6 +141,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       {
         hash: 'demo1',
         fileName: '化雪的季节.txt',
+        displayName: null,
         format: 'txt',
         path: '/fixtures/化雪的季节.txt',
         size: 382,
@@ -140,6 +151,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       {
         hash: 'demo2',
         fileName: '夜航书.epub',
+        displayName: null,
         format: 'epub',
         path: '/fixtures/夜航书.epub',
         size: 2391,
@@ -149,6 +161,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       {
         hash: 'demo3',
         fileName: '山中手记.fb2',
+        displayName: null,
         format: 'fb2',
         path: '/fixtures/山中手记.fb2',
         size: 619,
@@ -158,6 +171,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       {
         hash: 'demo4',
         fileName: '阅读笔记.md',
+        displayName: null,
         format: 'md',
         path: '/fixtures/阅读笔记.md',
         size: 300,
@@ -166,7 +180,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       },
       {
         hash: 'demo5',
-        fileName: '图解大模型生成式AI原理与实战.pdf',
+        fileName: '图解大模型生成式AI原理与实战 (z-library.sk, 1lib.sk, z-lib.sk).pdf',
+        displayName: '图解大模型生成式AI原理与实战',
         format: 'pdf',
         path: '/fixtures/demo.pdf',
         size: 11_000_000,
@@ -187,6 +202,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   )
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
+  /** Hash waiting for the second click — removing a book drops its progress and annotations. */
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
@@ -195,6 +212,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     document.documentElement.dataset['appTheme'] = appTheme
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
+
+  // 设置弹窗与云同步抽屉一致:Esc 关闭。
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setSettingsOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [settingsOpen])
 
   const loadBooks = useCallback(async (): Promise<void> => {
     if (!isTauriRuntime()) {
@@ -249,13 +276,53 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
     void (async () => {
       for (const book of books) {
+        if (book.format === 'unknown') continue
+        const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : book.path
+
+        // Resolve the real title once per book, then persist it so the shelf
+        // stops showing download-site file names forever.
+        if (book.displayName === null && !titleAttempted.has(book.hash)) {
+          if (!TITLE_FORMATS.includes(book.format)) {
+            titleAttempted.add(book.hash)
+          } else {
+            titleAttempted.add(book.hash)
+            const title = await extractTitle(
+              bookUrl,
+              book.format as Parameters<typeof extractTitle>[1],
+            )
+            if (title === null) titleAttempted.delete(book.hash)
+            else if (isTauriRuntime()) {
+              try {
+                const response = await invokeCommand('library.rename', {
+                  bookHash: book.hash,
+                  displayName: title,
+                })
+                setBooks((current) =>
+                  current.map((item) =>
+                    item.hash === book.hash
+                      ? { ...item, displayName: response.book.displayName }
+                      : item,
+                  ),
+                )
+              } catch {
+                titleAttempted.delete(book.hash)
+              }
+            } else {
+              setBooks((current) =>
+                current.map((item) =>
+                  item.hash === book.hash ? { ...item, displayName: title } : item,
+                ),
+              )
+            }
+          }
+        }
+
         if (coverAttempted.has(book.hash)) continue
         if (coverCache.has(book.hash)) {
           setCovers((current) => new Map(current).set(book.hash, coverCache.get(book.hash)!))
           continue
         }
         coverAttempted.add(book.hash)
-        const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : book.path
         const cover = await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1])
         if (cover) {
           coverCache.set(book.hash, cover)
@@ -335,6 +402,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       imported.push({
         hash,
         fileName: file.name,
+        displayName: null,
         format: classified.format,
         path: '',
         size: file.size,
@@ -459,11 +527,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const base = q ? books.filter((book) => book.fileName.toLowerCase().includes(q)) : books
+    const base = q
+      ? books.filter(
+          (book) =>
+            book.fileName.toLowerCase().includes(q) || shelfTitle(book).toLowerCase().includes(q),
+        )
+      : books
     const sorted = [...base]
     switch (sort) {
       case 'title':
-        sorted.sort((a, b) => a.fileName.localeCompare(b.fileName, 'zh'))
+        sorted.sort((a, b) => shelfTitle(a).localeCompare(shelfTitle(b), 'zh'))
         break
       case 'size':
         sorted.sort((a, b) => b.size - a.size)
@@ -478,6 +551,34 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
     return sorted
   }, [books, query, sort])
+
+  // Two-step: one stray click used to drop a book plus its progress forever.
+  const removeButton = (book: ShelfBook, extraClass?: string): React.JSX.Element => {
+    const pending = confirmRemove === book.hash
+    const label = shelfTitle(book)
+    return (
+      <button
+        type="button"
+        className={`book-remove${pending ? ' is-confirm' : ''}${extraClass ? ` ${extraClass}` : ''}`}
+        onClick={() => {
+          if (pending) {
+            setConfirmRemove(null)
+            void removeFromLibrary(book.hash)
+          } else {
+            setConfirmRemove(book.hash)
+          }
+        }}
+        title={pending ? '再次点击确认:进度与批注将一并移除' : '从书架移除(不删除原文件)'}
+        aria-label={pending ? `确认移除 ${label}` : `从书架移除 ${label}`}
+      >
+        {pending ? (
+          <Trash size={13} weight="fill" aria-hidden />
+        ) : (
+          <X size={13} weight="regular" aria-hidden />
+        )}
+      </button>
+    )
+  }
 
   const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
   const reading = books.filter((book) => (book.progress ?? 0) > 0).length
@@ -662,7 +763,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               <ul className="shelf-grid" aria-label="书架">
                 {filtered.map((book, index) => {
                   const palette = coverPalette(book.hash)
-                  const title = book.fileName.replace(/\.[^.]+$/, '')
+                  const title = shelfTitle(book)
                   const progress = book.progress
                   const coverUrl = covers.get(book.hash) ?? null
                   return (
@@ -715,7 +816,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                         )}
                       </button>
                       <div className="book-meta">
-                        <span className="book-meta-title" title={book.fileName}>
+                        <span className="book-meta-title" title={title}>
                           {title}
                         </span>
                         <span className="book-meta-sub">
@@ -726,14 +827,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                               : formatBytes(book.size)}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        className="book-remove"
-                        onClick={() => void removeFromLibrary(book.hash)}
-                        title="从书架移除(不删除原文件)"
-                      >
-                        <X size={13} weight="regular" aria-hidden />
-                      </button>
+                      {removeButton(book)}
                     </li>
                   )
                 })}
@@ -741,7 +835,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             ) : (
               <ul className="shelf-list" aria-label="书架">
                 {filtered.map((book, index) => {
-                  const title = book.fileName.replace(/\.[^.]+$/, '')
+                  const title = shelfTitle(book)
                   const progress = book.progress
                   const coverUrl = covers.get(book.hash) ?? null
                   const palette = coverPalette(book.hash)
@@ -786,14 +880,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                           </span>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        className="book-remove book-row-remove"
-                        onClick={() => void removeFromLibrary(book.hash)}
-                        title="从书架移除(不删除原文件)"
-                      >
-                        <X size={13} weight="regular" aria-hidden />
-                      </button>
+                      {removeButton(book, 'book-row-remove')}
                     </li>
                   )
                 })}
@@ -837,13 +924,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       )}
 
       {settingsOpen && (
-        <div
-          className="modal-overlay"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false)
-          }}
-        >
-          <section className="modal-panel" role="dialog" aria-label="设置">
+        <div className="modal-overlay">
+          {/* 遮罩本身不可点:关闭走这个铺满背景的按钮(键盘可达),面板在上层。 */}
+          <button
+            type="button"
+            className="modal-dismiss"
+            aria-label="关闭设置"
+            onClick={() => setSettingsOpen(false)}
+          />
+          <dialog className="modal-panel" open aria-label="设置">
             <header className="modal-head">
               <strong className="modal-title">设置</strong>
               <button
@@ -908,10 +997,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                             className="theme-swatch-line"
                             style={{ background: theme.ink, opacity: 0.35 }}
                           />
-                          <span
-                            className="theme-swatch-dot"
-                            style={{ background: theme.accent }}
-                          />
+                          <span className="theme-swatch-dot" style={{ background: theme.accent }} />
                         </span>
                         {theme.label}
                       </button>
@@ -1021,7 +1107,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 完成
               </button>
             </footer>
-          </section>
+          </dialog>
         </div>
       )}
 

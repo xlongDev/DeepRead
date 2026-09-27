@@ -20,7 +20,9 @@ pub fn fonts_dir(base: &std::path::Path) -> PathBuf {
 
 fn is_font_file(name: &str) -> bool {
     let lower = name.to_lowercase();
-    FONT_EXTENSIONS.iter().any(|extension| lower.ends_with(extension))
+    FONT_EXTENSIONS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -63,7 +65,7 @@ pub fn list_fonts(base: &std::path::Path) -> Vec<ReadingFont> {
             file_name,
         });
     }
-    fonts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    fonts.sort_by_key(|font| font.name.to_lowercase());
     fonts
 }
 
@@ -87,9 +89,8 @@ pub fn import_font(base: &std::path::Path, source_path: &str) -> Result<ReadingF
     std::fs::create_dir_all(&dir)
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "无法创建字体目录").with_cause(err))?;
     let destination = dir.join(&file_name);
-    std::fs::copy(source, &destination).map_err(|err| {
-        AppError::new(ErrorCode::StorageIo, "字体文件复制失败").with_cause(err)
-    })?;
+    std::fs::copy(source, &destination)
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "字体文件复制失败").with_cause(err))?;
     Ok(ReadingFont {
         id: font_id(&file_name),
         name: file_name

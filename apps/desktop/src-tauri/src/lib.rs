@@ -45,7 +45,10 @@ pub fn run() {
             }
             // Cached TTS audio is served to the webview the same way.
             let fonts_dir = fonts::fonts_dir(&base);
-            if let Err(err) = app.asset_protocol_scope().allow_directory(&fonts_dir, false) {
+            if let Err(err) = app
+                .asset_protocol_scope()
+                .allow_directory(&fonts_dir, false)
+            {
                 log::warn!("failed to allow fonts dir {}: {err}", fonts_dir.display());
             }
             let tts_cache = tts::cache_dir(&base);
@@ -87,6 +90,7 @@ pub fn run() {
             library::library_list,
             library::library_import,
             library::library_remove,
+            library::library_rename,
             dictionary::dictionary_list,
             dictionary::dictionary_register,
             dictionary::dictionary_remove,

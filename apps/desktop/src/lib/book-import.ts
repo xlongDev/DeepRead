@@ -34,6 +34,25 @@ export function convertFileSrc(path: string): string {
   return tauriConvertFileSrc(path)
 }
 
+/**
+ * Shelf title from a file name: extension off, download-site noise out.
+ * Shown until the book's own metadata title is resolved (`displayName`).
+ */
+export function cleanBookTitle(fileName: string): string {
+  const withoutExtension = fileName.replace(/\.[^.]+$/, '')
+  const cleaned = withoutExtension
+    // "(z-library.sk, 1lib.sk…)", "[Anna's Archive]", "- Z-Library" and friends.
+    .replace(
+      /\s*[（([【][^）)]】]*\b(?:z-?lib\w*|1lib|libgen|dokumen|annas?)[^）)]】]*[）)]】]/gi,
+      '',
+    )
+    .replace(/[\s\-–—_]*\b(?:z-?library|z-?lib\.\w+|1lib\.\w+)\b\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\s·•\-–—]+$/, '')
+    .trim()
+  return cleaned.length > 0 ? cleaned : withoutExtension.trim()
+}
+
 /** Library records open through the asset protocol, streamed from the original file. */
 export function openedBookFromLibrary(record: LibraryBook): OpenedBook {
   return {

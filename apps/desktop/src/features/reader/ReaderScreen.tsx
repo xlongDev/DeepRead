@@ -277,9 +277,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const turnPageRef = useRef<(dir: 'next' | 'prev') => void>(() => {})
   /** 进行中的 View Transition 计数:连翻两页时根节点的动画属性不能提前清掉。 */
   const vtDepthRef = useRef(0)
+  /** True while the progress slider is being dragged or key-stepped. */
+  const scrubbingRef = useRef(false)
 
   const [phase, setPhase] = useState<Phase>('opening')
   const [error, setError] = useState<string | null>(null)
+  /** Transient toast (rebuild/repair results); the error channel is fatal-only. */
+  const [notice, setNotice] = useState<{ text: string; danger: boolean } | null>(null)
   const [title, setTitle] = useState(book.name)
   const [toc, setToc] = useState<readonly TocItem[]>([])
   const [chromeVisible, setChromeVisible] = useState(true)
@@ -371,6 +375,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
   })
   const sectionIndexRef = useRef(0)
+  /** 本章字数请求的序号:乱序返回时丢弃过期结果。 */
+  const charCountTokenRef = useRef(0)
   const lastLightIndexRef = useRef(0)
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [rebuildPattern, setRebuildPattern] = useState(
@@ -388,6 +394,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   useEffect(() => {
     bookmarksRef.current = bookmarks
   }, [bookmarks])
+
+  useEffect(() => {
+    if (notice === null) return
+    const timer = window.setTimeout(() => setNotice(null), 2600)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   // 内核回调(constant closure)需要读到最新的面板状态。
   useEffect(() => {
@@ -449,9 +461,32 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
   }, [saveNow])
 
+  /**
+   * 当前章字数:后台取一次纯文本计数(与 TTS 同一数据面,廉价)。快速连翻
+   * 时结果可能乱序,token 保证只采用最后一次请求。
+   */
+  const countSectionChars = useCallback((sectionIndex: number): void => {
+    const token = charCountTokenRef.current + 1
+    charCountTokenRef.current = token
+    void adapterRef.current
+      ?.getSectionText(sectionIndex)
+      .then((text) => {
+        if (token === charCountTokenRef.current) setSectionChars(countChars(text))
+      })
+      .catch(() => {
+        if (token === charCountTokenRef.current) setSectionChars(null)
+      })
+  }, [])
+
   useEffect(() => {
     callbacksRef.current = {
       onRelocate: (location) => {
+        if (
+          location.sectionIndex !== undefined &&
+          location.sectionIndex !== sectionIndexRef.current
+        ) {
+          void countSectionChars(location.sectionIndex)
+        }
         if (location.sectionIndex !== undefined) sectionIndexRef.current = location.sectionIndex
         if (location.tocLabel !== undefined) setSectionLabel(location.tocLabel)
         const fraction =
@@ -538,6 +573,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
   useEffect(() => {
     if (!isTauriRuntime()) return
+    // 内核就绪前注入无效(adapter 还是 null),所以等进入阅读态再刷一次。
+    if (phase !== 'reading') return
     void adapterRef.current?.setFontFaces(
       buildFontFacesCss(customFonts.map((font) => ({ name: font.name, path: font.path }))),
     )
@@ -611,7 +648,11 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             await adapter.goTo({ cfi: restored.progress.cfi, progress: restored.progress.fraction })
           }
         }
-        if (!cancelled) setPhase('reading')
+        if (!cancelled) {
+          setPhase('reading')
+          // 开书即进入常规节奏:工具栏短暂可见后自动收起。
+          showChromeRef.current()
+        }
       } catch (err) {
         if (!cancelled) {
           setError(toAppError(err).message)
@@ -760,11 +801,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
   }, [chromeVisible, openPanel, selection, activeAnnotation])
 
-  // 开书即进入常规节奏:工具栏短暂可见后自动收起。
-  useEffect(() => {
-    if (phase === 'reading') showChrome()
-  }, [phase, showChrome])
-
   /**
    * 翻页动画(View Transitions):内核瞬时换页,浏览器对书页层做新旧快照
    * 分层过渡(.reader-host 携带 view-transition-name,顶栏/底栏/面板静止)。
@@ -847,7 +883,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         setActiveAnnotation(null)
       }
     },
-    [turnPage],
+    [turnPage, toggleFullscreen],
   )
 
   useEffect(() => {
@@ -856,15 +892,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     return () => window.removeEventListener('keydown', handleReaderKey)
   }, [handleReaderKey])
 
-  const updateLayout = (patch: {
-    viewMode?: ViewMode
-    fontSize?: number
-    lineHeight?: number | undefined
-    fontFamily?: string | undefined
-    fontWeight?: number | undefined
-    pageMargin?: number
-    paragraphMargin?: number | undefined
-  }): void => {
+  const updateLayout = useCallback(
+    (patch: {
+      viewMode?: ViewMode
+      fontSize?: number
+      lineHeight?: number | undefined
+      fontFamily?: string | undefined
+      fontWeight?: number | undefined
+      pageMargin?: number
+      paragraphMargin?: number | undefined
+    }): void => {
     // `in` checks, not ?? merges: an explicit undefined means "reset to the
     // book's own typography" and must win over the previous setting.
     const next = {
@@ -902,7 +939,17 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       margin: next.pageMargin,
       paragraphMargin: next.paragraphMargin,
     })
-  }
+    },
+    [
+      viewMode,
+      fontSize,
+      lineHeight,
+      fontFamily,
+      fontWeight,
+      pageMargin,
+      paragraphMargin,
+    ],
+  )
 
   const changeFontSize = (delta: number): void => {
     const current = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number])
@@ -945,23 +992,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     return true
   }, [])
 
-  // 当前章字数:切章时后台取一次纯文本计数(与 TTS 同一数据面,廉价)。
+  // 当前章字数:切章时后台取一次纯文本计数(与 TTS 同一数据面,廉价)。切章
+  // 信号来自内核 onRelocate,这里只负责进入阅读态时的首次计算。
   useEffect(() => {
     if (phase !== 'reading') return
-    let cancelled = false
-    void adapterRef.current
-      ?.getSectionText(sectionIndexRef.current)
-      .then((text) => {
-        if (cancelled) return
-        setSectionChars(countChars(text))
-      })
-      .catch(() => {
-        if (!cancelled) setSectionChars(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [phase, progress.location?.current])
+    void countSectionChars(sectionIndexRef.current)
+  }, [phase, countSectionChars])
 
   // 全书统计:打开书后一次性后台解析(逐节 createDocument,不挂载渲染),
   // 供"全书"字数与按字数的剩余时间估算;PDF 等固定排版为 null。
@@ -1075,7 +1111,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     } finally {
       setFontBusy(false)
     }
-  }, [])
+  }, [updateLayout])
 
   const removeReadingFont = useCallback(
     async (name: string): Promise<void> => {
@@ -1090,7 +1126,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         setPanelProblem(toAppError(fontError).message ?? null)
       }
     },
-    [customFonts, fontFamily],
+    [customFonts, fontFamily, updateLayout],
   )
 
   const removeDictionary = useCallback(async (id: string): Promise<void> => {
@@ -1124,6 +1160,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     await adapter.replaceSource(repaired)
     setToc(await adapter.getTableOfContents())
     setRepairReview(null)
+    setNotice({ text: `已应用 ${review.accepted.size} 处排版修复。`, danger: false })
     await adapter.goTo({ href: 's0', progress: 0 })
   }
 
@@ -1147,10 +1184,18 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       localStorage.setItem(`deepread.chapterPattern.${book.hash}`, rebuildPattern.trim())
       setToc(await adapter.getTableOfContents())
       setRebuildOpen(false)
-      setError(`章节重建完成:共 ${count} 节。`)
+      setNotice({ text: `章节重建完成:共 ${count} 节。`, danger: false })
     } catch (rebuildError) {
-      setError(toAppError(rebuildError).message)
+      setNotice({ text: toAppError(rebuildError).message, danger: true })
     }
+  }
+
+  /** Jump to the fraction the slider was released on (once per scrub). */
+  const commitScrub = (): void => {
+    if (!scrubbingRef.current) return
+    scrubbingRef.current = false
+    const fraction = progressRef.current?.fraction
+    if (fraction !== undefined) void adapterRef.current?.goTo({ progress: fraction })
   }
 
   const runLookup = async (): Promise<void> => {
@@ -1819,12 +1864,22 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           value={Math.round(progress.fraction * 1000)}
           aria-label="阅读进度"
           onChange={(event) => {
+            // Scrubbing only moves the thumb: a goTo per input event relayouts
+            // the whole book. The jump happens once, on release.
             const fraction = Number(event.target.value) / 1000
             setProgress((current) => ({ ...current, fraction }))
             progressRef.current =
               progressRef.current !== null ? { ...progressRef.current, fraction } : null
-            void adapterRef.current?.goTo({ progress: fraction })
           }}
+          onPointerDown={() => {
+            scrubbingRef.current = true
+          }}
+          onPointerUp={() => commitScrub()}
+          onKeyDown={() => {
+            scrubbingRef.current = true
+          }}
+          onKeyUp={() => commitScrub()}
+          onBlur={() => commitScrub()}
         />
         <span className="reader-arrow" aria-hidden>
           <ArrowLeft size={14} weight="regular" />
@@ -2032,6 +2087,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {notice !== null && (
+        <div
+          className={`reader-notice${notice.danger ? ' is-danger' : ''}`}
+          role={notice.danger ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {notice.text}
         </div>
       )}
 

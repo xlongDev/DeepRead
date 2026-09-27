@@ -37,6 +37,8 @@ const SUPPORTED_EXTENSIONS: &[(&str, &str)] = &[
 pub struct LibraryBook {
     pub hash: String,
     pub file_name: String,
+    /// Clean title from the book's own metadata; `None` until resolved.
+    pub display_name: Option<String>,
     pub format: String,
     pub path: String,
     pub size: u64,
@@ -71,6 +73,19 @@ pub struct LibraryRemoveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRemoveResponse {
     pub removed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibraryRenameRequest {
+    pub book_hash: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryRenameResponse {
+    pub book: LibraryBook,
 }
 
 pub fn detect_format(file_name: &str) -> Option<&'static str> {
@@ -109,6 +124,7 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
     Ok(LibraryBook {
         hash: row.get("hash")?,
         file_name: row.get("file_name")?,
+        display_name: row.get("display_name")?,
         format: row.get("format")?,
         path: row.get("path")?,
         size: row.get::<_, i64>("size")? as u64,
@@ -118,7 +134,7 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
 
 pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
-        .prepare("SELECT hash, file_name, format, path, size, added_at FROM books ORDER BY added_at DESC, rowid DESC")
+        .prepare("SELECT hash, file_name, display_name, format, path, size, added_at FROM books ORDER BY added_at DESC, rowid DESC")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query library").with_cause(err))?;
     let books = statement
         .query_map([], row_to_book)
@@ -132,14 +148,68 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     Ok(books)
 }
 
+/// Remove a book **and everything derived from it**. The `books` row used to be
+/// deleted alone, orphaning progress/annotations/bookmarks/cards/AI state that
+/// then rode along in every WebDAV sync forever.
 pub fn remove_book(conn: &Connection, hash: &str) -> Result<bool, AppError> {
     crate::state::validate_hash(hash)?;
-    let removed = conn
+    let tx = conn.unchecked_transaction().map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to begin transaction").with_cause(err)
+    })?;
+    // Foreign keys are declared ON DELETE CASCADE but SQLite only enforces
+    // them when `PRAGMA foreign_keys` is on, so the deletes stay explicit.
+    for table in [
+        "progress",
+        "annotations",
+        "bookmarks",
+        "cards",
+        "ai_index",
+        "ai_artifacts",
+    ] {
+        tx.execute(&format!("DELETE FROM {table} WHERE book_hash = ?1"), [hash])
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to remove book data").with_cause(err)
+            })?;
+    }
+    let removed = tx
         .execute("DELETE FROM books WHERE hash = ?1", [hash])
         .map_err(|err| {
             AppError::new(ErrorCode::StorageIo, "failed to remove book").with_cause(err)
         })?;
+    tx.commit().map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to commit removal").with_cause(err)
+    })?;
     Ok(removed > 0)
+}
+
+/// Set the shelf title for a book (the frontend resolves it from the book's
+/// own metadata and backfills older rows).
+pub fn rename_book(
+    conn: &Connection,
+    hash: &str,
+    display_name: &str,
+) -> Result<LibraryBook, AppError> {
+    crate::state::validate_hash(hash)?;
+    let updated = conn
+        .execute(
+            "UPDATE books SET display_name = ?1 WHERE hash = ?2",
+            rusqlite::params![display_name, hash],
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to rename book").with_cause(err)
+        })?;
+    if updated == 0 {
+        return Err(AppError::new(
+            ErrorCode::BookOpenFailed,
+            "book not in library",
+        ));
+    }
+    conn.query_row(
+        "SELECT hash, file_name, display_name, format, path, size, added_at FROM books WHERE hash = ?1",
+        [hash],
+        row_to_book,
+    )
+    .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read renamed book").with_cause(err))
 }
 
 /// Import flow: validate the picked file, hash it, upsert the record keeping
@@ -168,11 +238,13 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     }
 
     let (hash, size) = hash_file(&path)?;
-    let existing_added_at: Option<String> = conn
+    // Re-importing a known file keeps its added_at and the title we already
+    // resolved — the point of re-import is usually a moved file, not a reset.
+    let existing: Option<(String, Option<String>)> = conn
         .query_row(
-            "SELECT added_at FROM books WHERE hash = ?1",
+            "SELECT added_at, display_name FROM books WHERE hash = ?1",
             [&hash],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map(Some)
         .or_else(|err| match err {
@@ -185,17 +257,22 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     let book = LibraryBook {
         hash: hash.clone(),
         file_name,
+        display_name: existing.as_ref().and_then(|(_, name)| name.clone()),
         format: format.to_string(),
         path: raw_path.to_string(),
         size,
-        added_at: existing_added_at.unwrap_or_else(crate::timestamps::rfc3339_now),
+        added_at: existing
+            .as_ref()
+            .map(|(added_at, _)| added_at.clone())
+            .unwrap_or_else(crate::timestamps::rfc3339_now),
     };
     conn.execute(
-        "INSERT OR REPLACE INTO books (hash, file_name, format, path, size, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO books (hash, file_name, display_name, format, path, size, added_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             book.hash,
             book.file_name,
+            book.display_name,
             book.format,
             book.path,
             book.size as i64,
@@ -254,6 +331,19 @@ pub fn library_remove(
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
     Ok(LibraryRemoveResponse {
         removed: remove_book(&conn, &request.book_hash)?,
+    })
+}
+
+#[tauri::command(rename = "library.rename")]
+pub fn library_rename(
+    db: tauri::State<'_, Db>,
+    request: LibraryRenameRequest,
+) -> Result<LibraryRenameResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(LibraryRenameResponse {
+        book: rename_book(&conn, &request.book_hash, &request.display_name)?,
     })
 }
 
@@ -383,6 +473,7 @@ mod tests {
         let book = LibraryBook {
             hash: "0".repeat(64),
             file_name: "a.epub".into(),
+            display_name: Some("A Book".into()),
             format: "epub".into(),
             path: "/tmp/a.epub".into(),
             size: 3,
@@ -390,6 +481,99 @@ mod tests {
         };
         let json = serde_json::to_value(&book).unwrap();
         assert_eq!(json["fileName"], "a.epub");
+        assert_eq!(json["displayName"], "A Book");
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
+    }
+
+    #[test]
+    fn removing_a_book_removes_everything_derived_from_it() {
+        let conn = memory_db();
+        let base = std::env::temp_dir().join(format!(
+            "reader-lib-cascade-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("book.epub");
+        std::fs::write(&path, b"epub-bytes").unwrap();
+        let book = import_book(&conn, path.to_str().unwrap()).unwrap();
+
+        conn.execute(
+            "INSERT INTO progress (book_hash, cfi, fraction, updated_at) VALUES (?1, 'c', 0.5, 'now')",
+            [&book.hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO annotations (id, book_hash, cfi, color) VALUES ('a1', ?1, 'c', 'yellow')",
+            [&book.hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_hash, cfi, created_at) VALUES ('b1', ?1, 'c', 'now')",
+            [&book.hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cards (id, book_hash, front, back, source, due_at, created_at)
+             VALUES ('c1', ?1, 'q', 'a', 'manual', 'now', 'now')",
+            [&book.hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ai_index (book_hash, chunks, embedding_model, created_at)
+             VALUES (?1, '[]', 'm', 'now')",
+            [&book.hash],
+        )
+        .unwrap();
+
+        assert!(remove_book(&conn, &book.hash).unwrap());
+
+        let count = |table: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE book_hash = ?1"),
+                [&book.hash],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        for table in [
+            "progress",
+            "annotations",
+            "bookmarks",
+            "cards",
+            "ai_index",
+            "ai_artifacts",
+        ] {
+            assert_eq!(count(table), 0, "{table} must not keep orphan rows");
+        }
+    }
+
+    #[test]
+    fn rename_persists_the_shelf_title_and_survives_reimport() {
+        let conn = memory_db();
+        let base = std::env::temp_dir().join(format!(
+            "reader-lib-rename-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("garbage (z-library).epub");
+        std::fs::write(&path, b"epub-bytes").unwrap();
+
+        let imported = import_book(&conn, path.to_str().unwrap()).unwrap();
+        assert!(imported.display_name.is_none());
+
+        let renamed = rename_book(&conn, &imported.hash, "夜航书").unwrap();
+        assert_eq!(renamed.display_name.as_deref(), Some("夜航书"));
+        assert_eq!(renamed.file_name, "garbage (z-library).epub");
+
+        // Moving/renaming the file re-imports the same content: the resolved
+        // title must not be lost.
+        let reimported = import_book(&conn, path.to_str().unwrap()).unwrap();
+        assert_eq!(reimported.display_name.as_deref(), Some("夜航书"));
     }
 }

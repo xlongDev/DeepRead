@@ -19,6 +19,7 @@ export const COMMAND = {
   libraryList: 'library.list',
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
+  libraryRename: 'library.rename',
   dictionaryList: 'dictionary.list',
   dictionaryRegister: 'dictionary.register',
   dictionaryRemove: 'dictionary.remove',
@@ -113,6 +114,12 @@ export interface ReaderStatePayload {
 export interface LibraryBook {
   readonly hash: string
   readonly fileName: string
+  /**
+   * Clean, human-facing title (from the book's own metadata when available).
+   * `null` means "not resolved yet" — the shelf falls back to a cleaned file
+   * name and backfills lazily.
+   */
+  readonly displayName: string | null
   readonly format: string
   readonly path: string
   readonly size: number
@@ -137,6 +144,15 @@ export interface LibraryRemoveRequest {
 
 export interface LibraryRemoveResponse {
   readonly removed: boolean
+}
+
+export interface LibraryRenameRequest {
+  readonly bookHash: string
+  readonly displayName: string
+}
+
+export interface LibraryRenameResponse {
+  readonly book: LibraryBook
 }
 
 /** A registered StarDict dictionary (files stay at their original location). */
@@ -574,6 +590,10 @@ export interface CommandMap {
     readonly request: LibraryRemoveRequest
     readonly response: LibraryRemoveResponse
   }
+  [COMMAND.libraryRename]: {
+    readonly request: LibraryRenameRequest
+    readonly response: LibraryRenameResponse
+  }
   [COMMAND.dictionaryList]: {
     readonly request: undefined
     readonly response: DictionaryListResponse
@@ -777,6 +797,7 @@ export const readerStatePayloadSchema = z.object({
 export const libraryBookSchema = z.object({
   hash: bookHash,
   fileName: z.string().min(1).max(512),
+  displayName: z.string().min(1).max(512).nullable(),
   format: z.string().min(1).max(16),
   path: z.string().min(1).max(4096),
   size: z.number().int().min(0),
@@ -798,6 +819,11 @@ export const libraryImportRequestSchema = z.object({ path: z.string().min(1).max
 export const libraryImportResponseSchema = z.object({ book: libraryBookSchema })
 export const libraryRemoveRequestSchema = z.object({ bookHash: bookHash })
 export const libraryRemoveResponseSchema = z.object({ removed: z.boolean() })
+export const libraryRenameRequestSchema = z.object({
+  bookHash: bookHash,
+  displayName: z.string().min(1).max(512),
+})
+export const libraryRenameResponseSchema = z.object({ book: libraryBookSchema })
 
 const dictionaryMetaSchema = z.object({
   id: z.string().min(8).max(64),
@@ -1074,6 +1100,7 @@ export const responseValidators: {
   [COMMAND.libraryList]: libraryListResponseSchema,
   [COMMAND.libraryImport]: libraryImportResponseSchema,
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
+  [COMMAND.libraryRename]: libraryRenameResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
   [COMMAND.dictionaryRegister]: dictionaryRegisterResponseSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveResponseSchema,
@@ -1120,6 +1147,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryList]: undefined,
   [COMMAND.libraryImport]: libraryImportRequestSchema,
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
+  [COMMAND.libraryRename]: libraryRenameRequestSchema,
   [COMMAND.dictionaryList]: undefined,
   [COMMAND.dictionaryRegister]: dictionaryRegisterRequestSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveRequestSchema,

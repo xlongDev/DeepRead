@@ -17,8 +17,7 @@ use crate::error::{AppError, ErrorCode};
 pub const TRUSTED_CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const WSS_ENDPOINT: &str =
     "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
-const VOICES_ENDPOINT: &str =
-    "https://speech.platform.bing.com/consumer/speech/voices/list";
+const VOICES_ENDPOINT: &str = "https://speech.platform.bing.com/consumer/speech/voices/list";
 const SEC_MS_GEC_VERSION: &str = "1-143.0.3650.75";
 /// Output format: 24 kHz mono MP3 keeps segments small while staying clear.
 const AUDIO_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
@@ -80,8 +79,10 @@ pub fn handshake_messages(ssml: &str, request_id: &str, now_seconds: u64) -> (St
 pub fn rfc1123(now_seconds: u64) -> String {
     // time crate is already in the dependency tree.
     let offset = time::OffsetDateTime::from_unix_timestamp(now_seconds as i64)
-        .unwrap_or_else(|_| time::OffsetDateTime::UNIX_EPOCH);
-    format!("{}", offset.format(&time::format_description::well_known::Rfc2822).unwrap_or_default())
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    offset
+        .format(&time::format_description::well_known::Rfc2822)
+        .unwrap_or_default()
         .replace("+0000", "GMT")
 }
 
@@ -111,30 +112,43 @@ pub struct EdgeVoice {
 /// Chinese voices plus the most-used English ones.
 fn fallback_voices() -> Vec<EdgeVoice> {
     const ZH: &[&str] = &[
-        "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunjianNeural",
-        "zh-CN-YunxiNeural", "zh-CN-YunxiaNeural", "zh-CN-YunyangNeural",
-        "zh-CN-liaoning-XiaobeiNeural", "zh-CN-shaanxi-XiaoniNeural",
-        "zh-HK-HiuGaaiNeural", "zh-HK-HiuMaanNeural", "zh-HK-WanLungNeural",
-        "zh-TW-HsiaoChenNeural", "zh-TW-HsiaoYuNeural", "zh-TW-YunJheNeural",
+        "zh-CN-XiaoxiaoNeural",
+        "zh-CN-XiaoyiNeural",
+        "zh-CN-YunjianNeural",
+        "zh-CN-YunxiNeural",
+        "zh-CN-YunxiaNeural",
+        "zh-CN-YunyangNeural",
+        "zh-CN-liaoning-XiaobeiNeural",
+        "zh-CN-shaanxi-XiaoniNeural",
+        "zh-HK-HiuGaaiNeural",
+        "zh-HK-HiuMaanNeural",
+        "zh-HK-WanLungNeural",
+        "zh-TW-HsiaoChenNeural",
+        "zh-TW-HsiaoYuNeural",
+        "zh-TW-YunJheNeural",
     ];
     const EN: &[&str] = &[
-        "en-US-AriaNeural", "en-US-AnaNeural", "en-US-ChristopherNeural",
-        "en-US-EricNeural", "en-US-GuyNeural", "en-US-JennyNeural",
-        "en-MichelleNeural", "en-US-RogerNeural", "en-US-SteffanNeural",
-        "en-GB-SoniaNeural", "en-GB-RyanNeural", "en-GB-LibbyNeural",
+        "en-US-AriaNeural",
+        "en-US-AnaNeural",
+        "en-US-ChristopherNeural",
+        "en-US-EricNeural",
+        "en-US-GuyNeural",
+        "en-US-JennyNeural",
+        "en-MichelleNeural",
+        "en-US-RogerNeural",
+        "en-US-SteffanNeural",
+        "en-GB-SoniaNeural",
+        "en-GB-RyanNeural",
+        "en-GB-LibbyNeural",
     ];
     let mut voices: Vec<EdgeVoice> = ZH
         .iter()
         .chain(EN.iter())
         .map(|short| {
-            let locale = short
-                .split('-')
-                .take(2)
-                .collect::<Vec<_>>()
-                .join("-");
+            let locale = short.split('-').take(2).collect::<Vec<_>>().join("-");
             EdgeVoice {
                 short_name: (*short).to_string(),
-                friendly_name: format!("{short}"),
+                friendly_name: (*short).to_string(),
                 locale,
                 gender: "—".to_string(),
             }
@@ -200,8 +214,8 @@ pub async fn edge_voices() -> Result<Vec<EdgeVoice>, AppError> {
 /// Synthesize one segment over WebSocket, concatenating MP3 binary frames.
 async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Vec<u8>, AppError> {
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let seconds = now_seconds();
     let mut request = synthesize_url(seconds)
@@ -214,7 +228,10 @@ async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Ve
     // and a current Edge browser User-Agent.
     let headers = request.headers_mut();
     for (name, value) in [
-        ("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"),
+        (
+            "Origin",
+            "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+        ),
         ("Pragma", "no-cache"),
         ("Cache-Control", "no-cache"),
         ("Accept-Language", "en-US,en;q=0.9"),
@@ -233,17 +250,15 @@ async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Ve
                 .retryable()
         })?;
 
-    let (config, ssml_frame) = handshake_messages(&ssml_for(text, voice, lang, rate), &request_id(), seconds);
+    let (config, ssml_frame) =
+        handshake_messages(&ssml_for(text, voice, lang, rate), &request_id(), seconds);
+    socket.send(Message::Text(config)).await.map_err(|err| {
+        AppError::new(ErrorCode::TtsProviderError, "Edge TTS 握手发送失败")
+            .with_cause(err)
+            .retryable()
+    })?;
     socket
-        .send(Message::Text(config.into()))
-        .await
-        .map_err(|err| {
-            AppError::new(ErrorCode::TtsProviderError, "Edge TTS 握手发送失败")
-                .with_cause(err)
-                .retryable()
-        })?;
-    socket
-        .send(Message::Text(ssml_frame.into()))
+        .send(Message::Text(ssml_frame))
         .await
         .map_err(|err| {
             AppError::new(ErrorCode::TtsProviderError, "Edge TTS 请求发送失败")
@@ -261,8 +276,7 @@ async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Ve
         match message {
             Message::Binary(bytes) => {
                 if bytes.len() > 2 {
-                    let header_len =
-                        u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
+                    let header_len = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
                     if bytes.len() > header_len + 2 {
                         audio.extend_from_slice(&bytes[header_len + 2..]);
                     }
@@ -278,9 +292,7 @@ async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Ve
         }
     }
     if audio.is_empty() {
-        return Err(
-            AppError::new(ErrorCode::TtsProviderError, "Edge TTS 未返回音频").retryable()
-        );
+        return Err(AppError::new(ErrorCode::TtsProviderError, "Edge TTS 未返回音频").retryable());
     }
     Ok(audio)
 }
@@ -310,10 +322,16 @@ pub async fn edge_tts_audio(
 ) -> Result<EdgeTtsAudioResponse, AppError> {
     let text = request.text.trim().to_string();
     if text.is_empty() {
-        return Err(AppError::new(ErrorCode::SystemValidation, "合成文本不能为空"));
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "合成文本不能为空",
+        ));
     }
     if text.chars().count() > crate::tts::MAX_TTS_TEXT_CHARS {
-        return Err(AppError::new(ErrorCode::SystemValidation, "单次合成的文本过长"));
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "单次合成的文本过长",
+        ));
     }
     let rate = request.rate.unwrap_or(1.0);
     if !(0.25..=4.0).contains(&rate) {
@@ -396,7 +414,10 @@ mod tests {
         assert_eq!(a, c);
         assert_ne!(a, d);
         assert_eq!(a.len(), 64);
-        assert!(a.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit()));
+        assert!(
+            a.chars()
+                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        );
     }
 
     #[test]

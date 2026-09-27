@@ -31,6 +31,7 @@ const appInfo: AppInfo = {
 const shelfBook = {
   hash: 'a'.repeat(64),
   fileName: '夜航书.epub',
+  displayName: null,
   format: 'epub',
   path: '/books/夜航书.epub',
   size: 2391,

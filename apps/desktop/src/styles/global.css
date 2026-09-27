@@ -556,6 +556,17 @@ button:disabled {
   border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
 }
 
+/* Armed: stays visible after the pointer leaves and reads as destructive. */
+.book-remove.is-confirm {
+  opacity: 1;
+  transform: scale(1.06);
+  color: #ffffff;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--color-danger) 35%, transparent);
+  animation: scale-pop var(--duration-fast) var(--ease-spring);
+}
+
 .shelf-none {
   color: var(--color-text-tertiary);
   animation: fade-up var(--duration-base) var(--ease-out);
@@ -1008,6 +1019,32 @@ button:disabled {
 }
 
 .reader-error {
+  color: var(--color-danger);
+}
+
+/* Transient success pill (rebuild/repair results); failures use .reader-error. */
+.reader-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(420px, 80%);
+  padding: 8px var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-floating);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+.reader-notice.is-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
   color: var(--color-danger);
 }
 
@@ -1698,6 +1735,8 @@ button:disabled {
 
 .modal-panel {
   position: relative;
+  /* 面板在上层,遮罩按钮只铺在下层。 */
+  z-index: 1;
   width: min(460px, 100%);
   max-height: min(78dvh, 720px);
   overflow-y: auto;
@@ -1707,6 +1746,28 @@ button:disabled {
   padding: var(--space-lg);
   border-radius: var(--radius-xl);
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 原生 <dialog> 自带边框/内边距/居中,这里只保留语义,外观交给 tokens。 */
+dialog.modal-panel {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  background:
+    linear-gradient(135deg, var(--color-highlight), transparent 42%), var(--color-surface-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow:
+    var(--shadow-floating),
+    inset 0 1px 0 var(--color-highlight);
+}
+
+/* 点击遮罩关闭:用铺满的按钮,键盘也能到达。 */
+.modal-dismiss {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  cursor: default;
 }
 
 .modal-head {

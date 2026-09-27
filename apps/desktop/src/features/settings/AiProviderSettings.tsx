@@ -111,8 +111,10 @@ export function useAiProviders() {
       })
   }, [])
 
+  // 首次挂载拉一次列表(IPC 属外部系统同步)。放进微任务:同步 setState 会
+  // 触发级联渲染,而列表数据在第一帧之后才有意义。
   useEffect(() => {
-    void reload()
+    void Promise.resolve().then(reload)
   }, [reload])
 
   return {
