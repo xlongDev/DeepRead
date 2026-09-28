@@ -97,6 +97,7 @@ pub fn run() {
             state::reader_state_set,
             state::reader_stats_add,
             state::reader_stats_get,
+            state::reader_notes_list,
             library::library_list,
             library::library_import,
             library::library_remove,

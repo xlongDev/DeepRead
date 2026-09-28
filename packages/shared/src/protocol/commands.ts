@@ -23,6 +23,7 @@ export const COMMAND = {
   libraryTagSet: 'library.tag.set',
   readerStatsAdd: 'reader.stats.add',
   readerStatsGet: 'reader.stats.get',
+  readerNotesList: 'reader.notes.list',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
   dictionaryList: 'dictionary.list',
@@ -180,6 +181,33 @@ export interface ReaderStatsGetResponse {
   /** Per-day totals across all books, newest first. */
   readonly days: readonly { readonly day: string; readonly seconds: number }[]
   readonly totalSeconds: number
+}
+
+/**
+ * 一条批注,离开它所属的书出现在笔记页上。
+ *
+ * 标题两个字段都给:Rust 侧不做清洗(那套规则属于前端),前端用与书架同一个
+ * `shelfTitle` 回退逻辑,免得同一个书名在两处长得不一样。
+ */
+export interface NoteEntry {
+  readonly id: string
+  readonly bookHash: string
+  /** 书籍自带元数据标题;`null` = 尚未解析,回退到清洗后的文件名。 */
+  readonly displayName: string | null
+  readonly fileName: string
+  readonly cfi: string
+  readonly color: string
+  /** 用户自己写的那句话。 */
+  readonly note: string | null
+  /** 原文摘录。 */
+  readonly excerpt: string | null
+  /** 记录级合并时间戳(同步 §51);v3 之前的行为 `null`。 */
+  readonly updatedAt: ISO8601 | null
+}
+
+export interface ReaderNotesListResponse {
+  /** 未删除的批注,新→旧;没有时间戳的排在最后,整体上限 2000 条。 */
+  readonly notes: readonly NoteEntry[]
 }
 
 export interface LibraryTagSetRequest {
@@ -662,6 +690,10 @@ export interface CommandMap {
     readonly request: undefined
     readonly response: ReaderStatsGetResponse
   }
+  [COMMAND.readerNotesList]: {
+    readonly request: undefined
+    readonly response: ReaderNotesListResponse
+  }
   [COMMAND.libraryCoverGet]: {
     readonly request: LibraryCoverGetRequest
     readonly response: LibraryCoverGetResponse
@@ -913,6 +945,20 @@ export const readerStatsAddResponseSchema = z.object({ daySeconds: z.number().in
 export const readerStatsGetResponseSchema = z.object({
   days: z.array(z.object({ day: dayKey, seconds: z.number().int().min(0) })).max(400),
   totalSeconds: z.number().int().min(0),
+})
+const noteEntrySchema = z.object({
+  id: z.string().min(1).max(128),
+  bookHash,
+  displayName: z.string().max(512).nullable(),
+  fileName: z.string().min(1).max(1024),
+  cfi: z.string().min(1).max(2048),
+  color: z.string().min(1).max(32),
+  note: z.string().max(4000).nullable(),
+  excerpt: z.string().max(2000).nullable(),
+  updatedAt: iso8601.nullable(),
+})
+export const readerNotesListResponseSchema = z.object({
+  notes: z.array(noteEntrySchema).max(2000),
 })
 export const libraryTagSetRequestSchema = z.object({
   bookHash: bookHash,
@@ -1206,6 +1252,7 @@ export const responseValidators: {
   [COMMAND.libraryTagSet]: libraryTagSetResponseSchema,
   [COMMAND.readerStatsAdd]: readerStatsAddResponseSchema,
   [COMMAND.readerStatsGet]: readerStatsGetResponseSchema,
+  [COMMAND.readerNotesList]: readerNotesListResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
@@ -1258,6 +1305,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryTagSet]: libraryTagSetRequestSchema,
   [COMMAND.readerStatsAdd]: readerStatsAddRequestSchema,
   [COMMAND.readerStatsGet]: undefined,
+  [COMMAND.readerNotesList]: undefined,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.dictionaryList]: undefined,

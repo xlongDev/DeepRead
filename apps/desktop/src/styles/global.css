@@ -1187,6 +1187,123 @@ button:disabled {
   line-height: var(--line-height-body);
 }
 
+/* ---------- Notes list ---------- */
+
+.notes-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.note-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.note-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+
+.note-group-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+
+.note-group-count {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.note-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note-card {
+  position: relative;
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-md) var(--space-md) var(--space-lg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+
+.note-card:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 18%, var(--color-border));
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+/* 左侧那道颜色条 = 这条批注在书里用的高亮色:两处看到的是一回事。 */
+.note-swatch {
+  position: absolute;
+  top: var(--space-md);
+  bottom: var(--space-md);
+  left: 0;
+  width: 3px;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.note-excerpt {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-body);
+}
+
+.note-own {
+  margin: 0;
+  padding-left: var(--space-md);
+  border-left: 2px solid color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+}
+
+.note-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.note-jump {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.note-jump:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 860px) {
   .library {
     grid-template-columns: minmax(0, 1fr);

@@ -4,7 +4,13 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { dailySeries, localDayKey, toAppError, type AppInfo } from '@deepread/shared'
+import {
+  dailySeries,
+  localDayKey,
+  toAppError,
+  type AppInfo,
+  type NoteEntry,
+} from '@deepread/shared'
 import { extractCover, extractTitle } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
@@ -20,6 +26,7 @@ import {
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
+import { loadNotes } from '../../lib/notes'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
@@ -177,6 +184,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
   const [view, setView] = useState<LibraryView>('shelf')
   const [stats, setStats] = useState<ReadingStats | null>(null)
+  const [notes, setNotes] = useState<readonly NoteEntry[]>([])
+  const [notesLoaded, setNotesLoaded] = useState(false)
+  const [notesError, setNotesError] = useState<string | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
@@ -555,6 +565,28 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }, [view])
 
+  // 笔记页每次进入现取:刚划完一条高亮就切过来也该看得见,不值得缓存。
+  useEffect(() => {
+    if (view !== 'notes') return
+    let cancelled = false
+    setNotesLoaded(false)
+    setNotesError(null)
+    void loadNotes()
+      .then((loaded) => {
+        if (cancelled) return
+        setNotes(loaded)
+        setNotesLoaded(true)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setNotesError(toAppError(error).message)
+        setNotesLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [view])
+
   const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
   const statsSeries = dailySeries(stats?.days ?? [], 7)
   // 柱高按当日峰值归一;全零时给个地板值,免得除零。
@@ -726,6 +758,27 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     )
   }
 
+  /**
+   * 从笔记页回到原文:把批注的 CFI 一起交给阅读器,它会直接落到那一句。
+   * 书可能已经被移出书架(批注随之删除,但这一屏还是旧的),所以要如实说
+   * 清楚,而不是打开一本不存在的书。
+   */
+  const openNote = (entry: NoteEntry): void => {
+    const book = books.find((item) => item.hash === entry.bookHash)
+    if (book === undefined) {
+      setProblem('这本书已经不在书架里了,这条笔记暂时打不开。')
+      return
+    }
+    setProblem(null)
+    onOpenBook(
+      openedBookFromLibrary(
+        book,
+        isTauriRuntime() ? undefined : getBrowserFile(book.hash),
+        entry.cfi,
+      ),
+    )
+  }
+
   const {
     providers: aiProviders,
     loaded: aiLoaded,
@@ -872,7 +925,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
           </>
         )}
 
-        {view === 'notes' && <NotesView />}
+        {view === 'notes' && (
+          <NotesView
+            notes={notes}
+            loading={!notesLoaded}
+            error={notesError}
+            onOpenNote={openNote}
+          />
+        )}
 
         {view === 'stats' && (
           <StatsView

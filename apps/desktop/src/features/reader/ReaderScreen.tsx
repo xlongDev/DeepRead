@@ -504,9 +504,15 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             await adapter.createAnnotation(toDomainAnnotation(record, book.bookId))
           }
           setBookmarks(restored.bookmarks)
-          if (restored.progress) {
+          // 从笔记页点进来时以那条批注为准:用户点的是「回到原文」,不是
+          // 「继续阅读」,所以不能被上次读到的位置盖掉。
+          if (book.cfi !== undefined) {
+            await adapter.goTo({ cfi: book.cfi, progress: 0 })
+          } else if (restored.progress) {
             await adapter.goTo({ cfi: restored.progress.cfi, progress: restored.progress.fraction })
           }
+        } else if (book.cfi !== undefined) {
+          await adapter.goTo({ cfi: book.cfi, progress: 0 })
         }
         if (!cancelled) {
           setPhase('reading')

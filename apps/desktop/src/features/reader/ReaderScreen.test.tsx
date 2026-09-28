@@ -358,3 +358,54 @@ describe('阅读动作接到内核', () => {
     expect(await screen.findByTitle(/当前 夜间/)).toBeInTheDocument()
   })
 })
+
+describe('ReaderScreen 从笔记页跳回原文', () => {
+  it('带 CFI 打开时落在那条批注上,而不是上次读到的位置', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        // 这本书上次读到 90% 的位置 —— 正是不能被沿用的那一个。
+        return Promise.resolve({
+          state: {
+            progress: { cfi: 'epubcfi(/6/99!)', fraction: 0.9 },
+            annotations: [],
+            bookmarks: [],
+            updatedAt: '2026-09-28T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+
+    FakeFoliateAdapter.nextOptions = {}
+    render(<ReaderScreen book={{ ...BOOK, cfi: 'epubcfi(/6/4!2/2)' }} onBack={vi.fn()} />)
+    await waitFor(() => {
+      expect(document.querySelector('.reader-opening')).toBeNull()
+    })
+
+    const positions = latestAdapter().goTo.mock.calls.map((call) => call[0])
+    expect(positions).toContainEqual({ cfi: 'epubcfi(/6/4!2/2)', progress: 0 })
+    expect(positions.some((target) => target.progress === 0.9)).toBe(false)
+  })
+
+  it('不带 CFI 时照旧恢复到上次读到的位置', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state: {
+            progress: { cfi: 'epubcfi(/6/99!)', fraction: 0.9 },
+            annotations: [],
+            bookmarks: [],
+            updatedAt: '2026-09-28T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+
+    await renderReader()
+    expect(latestAdapter().goTo.mock.calls.map((call) => call[0])).toContainEqual({
+      cfi: 'epubcfi(/6/99!)',
+      progress: 0.9,
+    })
+  })
+})

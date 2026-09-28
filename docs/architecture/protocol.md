@@ -52,6 +52,19 @@
 | 约定 | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                              |
 | 约定 | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除               |
 
+### `reader.notes.list`(跨书批注聚合,W4)
+
+|           |                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Request   | `undefined`                                                                                                                                      |
+| Response  | `{ notes: NoteEntry[] }`,新→旧,没有时间戳的沉底,上限 2000 条                                                                                     |
+| NoteEntry | `{ id, bookHash, displayName: string \| null, fileName, cfi, color, note: string \| null, excerpt: string \| null, updatedAt: ISO8601 \| null }` |
+| Errors    | `STORAGE_IO`、`STORAGE_CORRUPT`                                                                                                                  |
+| 用途      | 笔记页:把散在各本书里的批注聚到一屏,每条都能靠 `bookHash + cfi` 跳回原文。                                                                       |
+| 约定      | `deleted = 0` 才出现(tombstone 是给同步用的,不是给界面用的);不返回书签 —— 书签没有正文可展示                                                     |
+| 约定      | 标题两个来源都给:Rust 不做文件名清洗,前端复用与书架同一个 `shelfTitle`(displayName → 清洗后的 fileName)                                          |
+| 约定      | 书被移出书架时批注随 `library.remove` 一并删除,前端只需处理「查不到这本书」这一种情况                                                            |
+
 ### `library.cover.get` / `library.cover.put`(封面缓存)
 
 |      |                                                                                                                |

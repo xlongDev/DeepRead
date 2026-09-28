@@ -174,8 +174,12 @@ export function formatStatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} 小时`
 }
 
-/** The shelf title: the book's own metadata title once known, else cleaned file name. */
-export function shelfTitle(book: LibraryBook): string {
+/**
+ * 书架标题:有书籍自带元数据就用它,否则回退到清洗过的文件名。
+ * 参数放宽成子集而不是整本 `LibraryBook` —— 笔记页的条目只要这两个字段,
+ * 免得为了复用一条规则去伪造一整本书。
+ */
+export function shelfTitle(book: Pick<LibraryBook, 'displayName' | 'fileName'>): string {
   return book.displayName ?? cleanBookTitle(book.fileName)
 }
 

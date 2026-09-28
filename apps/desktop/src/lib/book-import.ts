@@ -13,6 +13,11 @@ export interface OpenedBook {
   readonly hash: string
   readonly name: string
   readonly url: string
+  /**
+   * 打开后直接落到这条 CFI(笔记页「回到原文」用)。给了它就以它为准,
+   * 而不是恢复上次读到的位置 —— 用户点的是某条批注,不是「继续阅读」。
+   */
+  readonly cfi?: string
 }
 
 /**
@@ -98,13 +103,14 @@ export function browserBookUrl(hash: string): string {
  * protocol; in the browser `record.path` is empty and the registered `File`
  * provides the URL instead.
  */
-export function openedBookFromLibrary(record: LibraryBook, file?: File): OpenedBook {
+export function openedBookFromLibrary(record: LibraryBook, file?: File, cfi?: string): OpenedBook {
   return {
     bookId: record.hash,
     format: record.format as BookFormat,
     hash: record.hash,
     name: record.fileName,
     url: file !== undefined ? URL.createObjectURL(file) : convertFileSrc(record.path),
+    ...(cfi === undefined ? {} : { cfi }),
   }
 }
 

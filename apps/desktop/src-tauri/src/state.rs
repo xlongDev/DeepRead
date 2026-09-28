@@ -430,6 +430,82 @@ pub fn reader_stats_add(
     })
 }
 
+/// 一条跨书聚合的批注:笔记页要知道「哪本书的哪句话」,所以标题的两个来源
+/// 都给出去 —— 文件名清洗规则属于前端(`cleanBookTitle`),Rust 不猜。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEntry {
+    pub id: String,
+    pub book_hash: String,
+    pub display_name: Option<String>,
+    pub file_name: String,
+    pub cfi: String,
+    pub color: String,
+    pub note: Option<String>,
+    pub excerpt: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesListResponse {
+    pub notes: Vec<NoteEntry>,
+}
+
+/// 跨书批注聚合:只取未删除的,新→旧,没有时间戳的沉底。
+///
+/// 书签刻意不在里面 —— 这条路给的是"有内容的批注",书签没有正文可展示,
+/// 混进来只会让笔记页多一半空行。
+// ponytail: 一次全取 + LIMIT,超过这个量级再谈分页。
+pub fn list_notes(conn: &Connection) -> Result<Vec<NoteEntry>, AppError> {
+    const MAX_NOTES: usize = 2000;
+    let mut statement = conn
+        .prepare(
+            "SELECT a.id, a.book_hash, b.display_name, b.file_name, a.cfi, a.color,
+                    a.note, a.excerpt, a.updated_at
+             FROM annotations a
+             JOIN books b ON b.hash = a.book_hash
+             WHERE a.deleted = 0
+             ORDER BY a.updated_at IS NULL, a.updated_at DESC, a.rowid DESC
+             LIMIT ?1",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query notes").with_cause(err)
+        })?;
+    let notes = statement
+        .query_map([MAX_NOTES], |row| {
+            Ok(NoteEntry {
+                id: row.get(0)?,
+                book_hash: row.get(1)?,
+                display_name: row.get(2)?,
+                file_name: row.get(3)?,
+                cfi: row.get(4)?,
+                color: row.get(5)?,
+                note: row.get(6)?,
+                excerpt: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read notes").with_cause(err))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read note row").with_cause(err)
+        })?;
+    Ok(notes)
+}
+
+#[tauri::command(rename = "reader.notes.list")]
+pub fn reader_notes_list(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<NotesListResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(NotesListResponse {
+        notes: list_notes(&conn)?,
+    })
+}
+
 #[tauri::command(rename = "reader.stats.get")]
 pub fn reader_stats_get(
     db: tauri::State<'_, crate::storage::Db>,
@@ -483,6 +559,82 @@ mod tests {
             }],
             updated_at: "2026-09-09T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn notes_aggregate_across_books_newest_first_and_skip_tombstones() {
+        let conn = memory_db();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        seed_book(&conn, &first);
+        seed_book(&conn, &second);
+        conn.execute(
+            "UPDATE books SET display_name = '夜航书' WHERE hash = ?1",
+            [&first],
+        )
+        .unwrap();
+
+        let mut state = sample();
+        state.annotations = vec![
+            StoredAnnotation {
+                id: "a1".into(),
+                cfi: "cfi-1".into(),
+                color: "#f5d76e".into(),
+                note: Some("我自己写的".into()),
+                excerpt: Some("原文一".into()),
+                updated_at: Some("2026-09-09T00:00:00Z".into()),
+                deleted: false,
+            },
+            StoredAnnotation {
+                id: "a2".into(),
+                cfi: "cfi-2".into(),
+                color: "#f5d76e".into(),
+                note: None,
+                excerpt: Some("原文二".into()),
+                updated_at: Some("2026-09-10T00:00:00Z".into()),
+                deleted: false,
+            },
+            StoredAnnotation {
+                id: "a3".into(),
+                cfi: "cfi-3".into(),
+                color: "#f5d76e".into(),
+                note: None,
+                excerpt: Some("删掉的".into()),
+                updated_at: Some("2026-09-11T00:00:00Z".into()),
+                deleted: true,
+            },
+        ];
+        store_state(&conn, &first, &state).unwrap();
+
+        let mut other = sample();
+        // bookmarks.id 是全局主键:两本书不能用同一个 id,而这本书不需要书签。
+        other.bookmarks = vec![];
+        other.annotations = vec![StoredAnnotation {
+            id: "b1".into(),
+            cfi: "cfi-b1".into(),
+            color: "#a5d6f5".into(),
+            note: None,
+            excerpt: Some("另一本的摘录".into()),
+            updated_at: None,
+            deleted: false,
+        }];
+        store_state(&conn, &second, &other).unwrap();
+
+        let notes = list_notes(&conn).unwrap();
+        // 新→旧,没有时间戳的沉底;被软删除的 a3 不出现。
+        assert_eq!(
+            notes
+                .iter()
+                .map(|note| note.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a2", "a1", "b1"]
+        );
+        // 标题原样带出两个来源:清洗是前端的事。
+        assert_eq!(notes[0].display_name.as_deref(), Some("夜航书"));
+        assert_eq!(notes[2].display_name, None);
+        assert_eq!(notes[2].file_name, "t");
+        assert_eq!(notes[0].note, None);
+        assert_eq!(notes[1].note.as_deref(), Some("我自己写的"));
     }
 
     #[test]

@@ -11,7 +11,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { localDayKey, type AppInfo, type LibraryBook } from '@deepread/shared'
+import { localDayKey, type AppInfo, type LibraryBook, type NoteEntry } from '@deepread/shared'
 import { LibraryScreen } from './LibraryScreen'
 import { invokeCommand } from '../../lib/ipc'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -131,10 +131,48 @@ const STATS = {
   totalSeconds: 3000,
 }
 
-function mockBackend(books: readonly LibraryBook[]): void {
+/** 跨书批注:两本在架上的书 + 一条没有时间戳的老记录。 */
+const NOTES: readonly NoteEntry[] = [
+  {
+    id: 'n1',
+    bookHash: HASH_A,
+    displayName: '夜航书',
+    fileName: '夜航书.epub',
+    cfi: 'epubcfi(/6/4!2/2)',
+    color: '#f5d76e',
+    note: '我自己写的',
+    excerpt: '原文一',
+    updatedAt: '2026-09-27T12:00:00Z',
+  },
+  {
+    id: 'n2',
+    bookHash: HASH_A,
+    displayName: '夜航书',
+    fileName: '夜航书.epub',
+    cfi: 'epubcfi(/6/8!2/2)',
+    color: '#a5d6f5',
+    note: null,
+    excerpt: '原文二',
+    updatedAt: null,
+  },
+  {
+    id: 'n3',
+    bookHash: HASH_B,
+    displayName: '化雪的季节',
+    fileName: '化雪的季节.txt',
+    cfi: 'epubcfi(/6/2!4)',
+    color: '#f5d76e',
+    note: null,
+    excerpt: '第三本的摘录',
+    updatedAt: '2026-09-26T09:00:00Z',
+  },
+]
+
+function mockBackend(books: readonly LibraryBook[], notes: readonly NoteEntry[] = NOTES): void {
   invokeCommandMock.mockImplementation((command, request) => {
     if (command === 'library.list') return Promise.resolve({ books: [...books] })
     if (command === 'reader.stats.get') return Promise.resolve(STATS)
+    if (command === 'reader.notes.list') return Promise.resolve({ notes: [...notes] })
     if (command === 'library.remove') return Promise.resolve({ ok: true })
     if (command === 'library.tag.set') {
       const { bookHash, tags } = request as { bookHash: string; tags: readonly string[] }
@@ -612,6 +650,60 @@ describe('LibraryScreen 排序方向', () => {
     fireEvent.click(screen.getByLabelText('切换排序方向(当前降序)'))
     // 升序:42% 在前、100% 在后,但未开始的仍然沉底
     expect(order()).toEqual(['夜航书', '山中手记', '化雪的季节'])
+  })
+})
+
+describe('LibraryScreen 笔记页', () => {
+  it('按书分组显示跨书批注,并带上总数', async () => {
+    await renderLibrary()
+    fireEvent.click(
+      within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
+        name: '笔记',
+      }),
+    )
+
+    expect(invokeCommandMock).toHaveBeenCalledWith('reader.notes.list', undefined)
+    await waitFor(() => expect(document.querySelectorAll('.note-group').length).toBe(2))
+    expect(screen.getByLabelText('夜航书').textContent).toContain('2 条')
+    expect(screen.getByLabelText('化雪的季节').textContent).toContain('1 条')
+    expect(screen.getAllByText('回到原文').length).toBe(3)
+    // 用户自己写的那句话与原文摘录分开显示,不是糊成一段。
+    expect(screen.getByText('我自己写的')).toBeInTheDocument()
+    expect(screen.getByText('原文一')).toBeInTheDocument()
+  })
+
+  it('回到原文时把书的 hash 与那条批注的 CFI 一起交给阅读器', async () => {
+    const { onOpenBook } = await renderLibrary()
+    fireEvent.click(
+      within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
+        name: '笔记',
+      }),
+    )
+    await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
+
+    fireEvent.click(screen.getAllByText('回到原文')[0]!)
+    expect(onOpenBook).toHaveBeenCalledTimes(1)
+    expect(onOpenBook.mock.calls[0]?.[0]).toMatchObject({
+      bookId: HASH_A,
+      hash: HASH_A,
+      format: 'epub',
+      cfi: 'epubcfi(/6/4!2/2)',
+    })
+  })
+
+  it('没有批注时说清楚怎么才会有,而不是空白页', async () => {
+    await renderLibrary(BOOKS)
+    invokeCommandMock.mockImplementation((command) => {
+      if (command === 'library.list') return Promise.resolve({ books: [...BOOKS] })
+      if (command === 'reader.notes.list') return Promise.resolve({ notes: [] })
+      return Promise.resolve(APP_INFO)
+    })
+    fireEvent.click(
+      within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
+        name: '笔记',
+      }),
+    )
+    expect(await screen.findByText('还没有批注')).toBeInTheDocument()
   })
 })
 
