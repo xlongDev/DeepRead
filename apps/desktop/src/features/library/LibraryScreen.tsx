@@ -22,6 +22,7 @@ import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
+import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar } from './LibrarySidebar'
 import { NotesView } from './NotesView'
 import { ShelfView } from './ShelfView'
@@ -33,6 +34,7 @@ import {
   PROBLEM_MESSAGE,
   shelfTitle,
   sortFromStorage,
+  toggleFavoriteTag,
   viewFromStorage,
   type AppTheme,
   type LibraryView,
@@ -157,6 +159,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  /** 正在编辑书籍信息的那一本;null = 弹窗关闭。 */
+  const [editBook, setEditBook] = useState<ShelfBook | null>(null)
+  const [infoBusy, setInfoBusy] = useState(false)
+  const [infoError, setInfoError] = useState<string | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   /** null = 全部标签。 */
@@ -656,6 +662,60 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }
 
+  /** 收藏 = 一个标签。零协议改动,侧栏与工具栏的标签筛选自动带上它。 */
+  const toggleFavorite = (book: ShelfBook): void => {
+    void (async () => {
+      try {
+        const saved = await saveTags(book, toggleFavoriteTag(book.tags))
+        setBooks((current) => current.map((item) => (item.hash === saved.hash ? saved : item)))
+      } catch (error) {
+        setProblem(toAppError(error).message)
+      }
+    })()
+  }
+
+  const openBookInfo = (book: ShelfBook): void => {
+    setConfirmRemove(null)
+    setInfoError(null)
+    setEditBook(book)
+  }
+
+  /**
+   * 保存书籍信息:标题走 `library.rename`,标签走 `library.tag.set`。两条都是
+   * 既有命令 —— 这一版没有新协议、没有迁移。两者分开提交:标题失败不会连带
+   * 把标签一起丢掉,弹窗留在原地让用户重试。
+   */
+  const saveBookInfo = async (draft: BookInfoDraft): Promise<void> => {
+    const book = editBook
+    if (book === null) return
+    setInfoBusy(true)
+    setInfoError(null)
+    try {
+      let saved = book
+      const title = draft.title.trim()
+      if (title !== '' && title !== shelfTitle(book)) {
+        if (isTauriRuntime()) {
+          const response = await invokeCommand('library.rename', {
+            bookHash: book.hash,
+            displayName: title,
+          })
+          saved = response.book
+        } else {
+          saved = { ...saved, displayName: title }
+        }
+      }
+      if (draft.tags.join('\u0000') !== book.tags.join('\u0000')) {
+        saved = await saveTags(saved, draft.tags)
+      }
+      setBooks((current) => current.map((item) => (item.hash === saved.hash ? saved : item)))
+      setEditBook(null)
+    } catch (error) {
+      setInfoError(toAppError(error).message)
+    } finally {
+      setInfoBusy(false)
+    }
+  }
+
   const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
   const reading = books.filter((book) => (book.progress ?? 0) > 0).length
 
@@ -792,6 +852,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
                 onToggleSelected={toggleSelected}
                 onOpenBook={openBook}
+                onToggleFavorite={toggleFavorite}
+                onEditInfo={openBookInfo}
                 onImport={triggerImport}
                 onOpenStats={() => setView('stats')}
                 confirmRemove={confirmRemove}
@@ -851,6 +913,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
       {syncOpen && (
         <SyncDrawer onRestored={() => void loadBooks()} onClose={() => setSyncOpen(false)} />
+      )}
+
+      {editBook !== null && (
+        <BookInfoDialog
+          book={editBook}
+          busy={infoBusy}
+          error={infoError}
+          onSave={(draft) => void saveBookInfo(draft)}
+          onClose={() => setEditBook(null)}
+        />
       )}
 
       {settingsOpen && (

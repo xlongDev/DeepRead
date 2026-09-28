@@ -20,6 +20,44 @@ export type LibraryView = 'shelf' | 'notes' | 'stats'
 export const ALL_TAGS = '__all__'
 /** 整批移出的待确认哨兵(单本待确认用的是真实 hash)。 */
 export const BULK_CONFIRM = '__bulk__'
+
+/**
+ * 收藏就是标签 —— 不新增字段、不加迁移,`library.tag.set` 本来就能存它。
+ * 侧栏与工具栏的标签筛选会自动带上它,不需要另开一条路径。
+ */
+export const FAVORITE_TAG = '收藏'
+
+/** Rust 侧 `set_tags` 的上限,前端保持一致,免得用户输入被静默截断。 */
+export const MAX_TAGS = 20
+export const MAX_TAG_LENGTH = 32
+
+export function isFavorite(book: Pick<LibraryBook, 'tags'>): boolean {
+  return book.tags.includes(FAVORITE_TAG)
+}
+
+/** 切换收藏,返回新的标签数组(纯函数,顺序稳定)。 */
+export function toggleFavoriteTag(tags: readonly string[]): readonly string[] {
+  return tags.includes(FAVORITE_TAG)
+    ? tags.filter((tag) => tag !== FAVORITE_TAG)
+    : [...tags, FAVORITE_TAG]
+}
+
+/**
+ * 解析标签输入框:中英文逗号 / 分号 / 斜杠 / 顿号 / 空白都算分隔符。
+ * 规则与 Rust 端 `set_tags` 对齐(trim、丢空、单标签上限、去重、总量上限),
+ * 这样前端显示的结果与真正落库的结果一致。
+ */
+export function parseTagInput(raw: string): readonly string[] {
+  const parsed: string[] = []
+  for (const piece of raw.split(/[,，;；/、\s]+/)) {
+    const tag = piece.trim()
+    if (tag === '' || tag.length > MAX_TAG_LENGTH) continue
+    if (parsed.includes(tag)) continue
+    parsed.push(tag)
+    if (parsed.length >= MAX_TAGS) break
+  }
+  return parsed
+}
 export type AppTheme =
   'pure-white' | 'warm-paper' | 'ivory' | 'soft-gray' | 'dark' | 'oled' | 'liquid-glass'
 

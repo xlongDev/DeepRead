@@ -132,10 +132,20 @@ const STATS = {
 }
 
 function mockBackend(books: readonly LibraryBook[]): void {
-  invokeCommandMock.mockImplementation((command) => {
+  invokeCommandMock.mockImplementation((command, request) => {
     if (command === 'library.list') return Promise.resolve({ books: [...books] })
     if (command === 'reader.stats.get') return Promise.resolve(STATS)
     if (command === 'library.remove') return Promise.resolve({ ok: true })
+    if (command === 'library.tag.set') {
+      const { bookHash, tags } = request as { bookHash: string; tags: readonly string[] }
+      const book = books.find((item) => item.hash === bookHash) ?? books[0]!
+      return Promise.resolve({ book: { ...book, tags: [...tags] } })
+    }
+    if (command === 'library.rename') {
+      const { bookHash, displayName } = request as { bookHash: string; displayName: string }
+      const book = books.find((item) => item.hash === bookHash) ?? books[0]!
+      return Promise.resolve({ book: { ...book, displayName } })
+    }
     return Promise.resolve(APP_INFO)
   })
 }
@@ -423,6 +433,139 @@ describe('LibraryScreen 弹窗', () => {
     await renderLibrary()
     fireEvent.click(screen.getByLabelText('打开云同步'))
     expect(screen.getByTestId('sync-drawer')).toBeInTheDocument()
+  })
+})
+
+describe('LibraryScreen 卡片操作', () => {
+  it('每张卡片都给继续阅读、收藏与更多三个入口', async () => {
+    await renderLibrary()
+    expect(screen.getAllByText(/继续阅读|开始阅读/).length).toBe(3)
+    expect(screen.getByLabelText('收藏 夜航书')).toBeInTheDocument()
+    expect(screen.getByLabelText('更多操作 夜航书')).toBeInTheDocument()
+  })
+
+  it('更多菜单能由按钮、右键与键盘三种方式唤起', async () => {
+    await renderLibrary()
+    const menuName = '夜航书 的操作'
+
+    fireEvent.click(screen.getByLabelText('更多操作 夜航书'))
+    expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    // 右键:触屏没有 Shift+F10,鼠标用户也不该被逼着去点小按钮。
+    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    // 键盘:Shift+F10 是桌面平台约定俗成的右键替代。处理器挂在封面按钮上 ——
+    // 它是卡片里真正的交互元素,不是那个非交互的 <li>。
+    fireEvent.keyDown(screen.getByTitle('打开《夜航书》'), { key: 'F10', shiftKey: true })
+    expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
+  })
+
+  it('菜单只提供真的能工作的两项', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('更多操作 夜航书'))
+    const menu = screen.getByRole('menu', { name: '夜航书 的操作' })
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent?.trim()),
+    ).toEqual(['编辑书籍信息', '从书架移除'])
+  })
+
+  it('收藏写进标签系统,不新增字段也不新增命令', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('收藏 夜航书'))
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_A,
+        tags: ['收藏'],
+      }),
+    )
+    // 收藏之后按钮变成「取消收藏」,状态是回写的而不是本地假设。
+    expect(await screen.findByLabelText('取消收藏 夜航书')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('菜单里的移除也要两次点击,确认项直接写明后果', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('更多操作 夜航书'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '从书架移除' }))
+    expect(invokeCommandMock).not.toHaveBeenCalledWith('library.remove', expect.anything())
+
+    const confirmItem = screen.getByRole('menuitem', {
+      name: '确认移除(进度与批注一并删除)',
+    })
+    fireEvent.click(confirmItem)
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.remove', { bookHash: HASH_A }),
+    )
+  })
+
+  it('列表视图同样有收藏与更多(不是只有网格能用)', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByTitle('列表视图'))
+    expect(screen.getByLabelText('更多操作 夜航书')).toBeInTheDocument()
+    expect(screen.getByLabelText('收藏 夜航书')).toBeInTheDocument()
+  })
+})
+
+describe('LibraryScreen 编辑书籍信息', () => {
+  async function openInfo(): Promise<HTMLElement> {
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('更多操作 夜航书'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '编辑书籍信息' }))
+    return screen.findByLabelText('书籍信息')
+  }
+
+  it('标题走 library.rename,标签走 library.tag.set', async () => {
+    const dialog = await openInfo()
+    fireEvent.change(within(dialog).getByLabelText('书名'), {
+      target: { value: '夜航书(修订版)' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('标签'), { target: { value: '文学, 收藏' } })
+    fireEvent.click(within(dialog).getByText('保存'))
+
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.rename', {
+        bookHash: HASH_A,
+        displayName: '夜航书(修订版)',
+      }),
+    )
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_A,
+        tags: ['文学', '收藏'],
+      }),
+    )
+    await waitFor(() => expect(screen.queryByLabelText('书籍信息')).toBeNull())
+  })
+
+  it('没有改动时保存是禁用的,避免无谓写库', async () => {
+    const dialog = await openInfo()
+    expect(within(dialog).getByText('保存')).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('标签'), { target: { value: '文学' } })
+    expect(within(dialog).getByText('保存')).toBeEnabled()
+  })
+
+  it('标签输入按分隔符拆开并去重', async () => {
+    const dialog = await openInfo()
+    fireEvent.change(within(dialog).getByLabelText('标签'), {
+      target: { value: '文学，收藏, 文学 / 在读' },
+    })
+    expect(
+      within(dialog)
+        .getAllByText(/^(文学|收藏|在读)$/)
+        .map((chip) => chip.textContent),
+    ).toEqual(['文学', '收藏', '在读'])
+  })
+
+  it('Esc 关闭弹窗', async () => {
+    await openInfo()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByLabelText('书籍信息')).toBeNull())
   })
 })
 

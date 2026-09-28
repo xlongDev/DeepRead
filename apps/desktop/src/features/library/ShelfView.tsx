@@ -6,14 +6,18 @@
  * 视图 —— 状态仍然只有一个归属地(LibraryScreen)。
  */
 
+import { useEffect, useRef, useState } from 'react'
 import {
   Check,
   CheckSquare,
   ChartLineUp,
+  DotsThree,
   ListBullets,
   MagnifyingGlass,
+  PencilSimple,
   Plus,
   SquaresFour,
+  Star,
   Trash,
   X,
 } from '@phosphor-icons/react'
@@ -23,6 +27,7 @@ import {
   BULK_CONFIRM,
   coverPalette,
   formatBytes,
+  isFavorite,
   shelfTitle,
   SORT_LABELS,
   type ShelfBook,
@@ -48,6 +53,8 @@ export interface ShelfViewProps {
   readonly onToggleSelecting: () => void
   readonly onToggleSelected: (hash: string) => void
   readonly onOpenBook: (book: ShelfBook) => void
+  readonly onToggleFavorite: (book: ShelfBook) => void
+  readonly onEditInfo: (book: ShelfBook) => void
   readonly onImport: () => void
   /** 工具栏上的统计快捷入口:侧栏之外再给一条直达路径,高频动作不吃灰。 */
   readonly onOpenStats: () => void
@@ -82,6 +89,8 @@ export function ShelfView({
   onToggleSelecting,
   onToggleSelected,
   onOpenBook,
+  onToggleFavorite,
+  onEditInfo,
   onImport,
   onOpenStats,
   confirmRemove,
@@ -94,6 +103,96 @@ export function ShelfView({
   bulkBusy,
   emptyHint,
 }: ShelfViewProps) {
+  /**
+   * 卡片操作菜单。hover 只是**最快**的入口,不是唯一入口:同一个菜单必须
+   * 能被右键与键盘(Shift+F10 / 菜单键)唤起,否则触屏和键盘用户够不到
+   * 这些动作 —— 那是无障碍红线,不是体验偏好。
+   */
+  const [menuHash, setMenuHash] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (menuHash === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuHash(null)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setMenuHash(null)
+        return
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      const items = Array.from(
+        menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+      )
+      if (items.length === 0) return
+      event.preventDefault()
+      const current = items.indexOf(document.activeElement as HTMLButtonElement)
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      items[current === -1 ? 0 : (current + delta + items.length) % items.length]?.focus()
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuHash])
+
+  const openMenu = (hash: string): void => {
+    setMenuHash(hash)
+    requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+    })
+  }
+
+  /** 键盘唤起:Shift+F10 与菜单键是桌面平台约定俗成的右键替代。 */
+  const menuKeyHandler =
+    (hash: string) =>
+    (event: React.KeyboardEvent): void => {
+      if (!(event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey))) return
+      event.preventDefault()
+      openMenu(hash)
+    }
+
+  const renderMenu = (book: ShelfBook, extraClass: string): React.JSX.Element | null => {
+    if (menuHash !== book.hash) return null
+    const pendingRemove = confirmRemove === book.hash
+    return (
+      <div
+        ref={menuRef}
+        className={`card-menu ${extraClass}`}
+        role="menu"
+        aria-label={`${shelfTitle(book)} 的操作`}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setMenuHash(null)
+            onEditInfo(book)
+          }}
+        >
+          <PencilSimple size={14} weight="regular" aria-hidden />
+          编辑书籍信息
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className={pendingRemove ? 'is-danger' : ''}
+          onClick={() => {
+            // 移除始终是两次点击:第一次进待确认态,菜单留着让用户看清后果。
+            onRemoveClick(book.hash)
+            if (pendingRemove) setMenuHash(null)
+          }}
+        >
+          <Trash size={14} weight="regular" aria-hidden />
+          {pendingRemove ? '确认移除(进度与批注一并删除)' : '从书架移除'}
+        </button>
+      </div>
+    )
+  }
+
   const pending = (hash: string): boolean => confirmRemove === hash
 
   const removeButton = (book: ShelfBook, extraClass?: string): React.JSX.Element => {
@@ -210,61 +309,106 @@ export function ShelfView({
                 className={`book-card${isSelected ? ' is-selected' : ''}`}
                 style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
               >
-                <button
-                  type="button"
-                  className="book-cover"
-                  style={
-                    coverUrl
-                      ? undefined
-                      : {
-                          background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
-                        }
-                  }
-                  onClick={
-                    selecting
-                      ? () => onToggleSelected(book.hash)
-                      : book.format === 'unknown'
+                <div className="book-cover-shell">
+                  <button
+                    type="button"
+                    className="book-cover"
+                    onContextMenu={(event) => {
+                      if (selecting) return
+                      event.preventDefault()
+                      openMenu(book.hash)
+                    }}
+                    onKeyDown={menuKeyHandler(book.hash)}
+                    style={
+                      coverUrl
                         ? undefined
-                        : () => onOpenBook(book)
-                  }
-                  aria-pressed={selecting ? isSelected : undefined}
-                  title={
-                    selecting
-                      ? isSelected
-                        ? '取消选择'
-                        : '选择这本书'
-                      : book.format === 'unknown'
-                        ? '重新导入同一文件即可恢复此书的进度与批注'
-                        : `打开《${title}》`
-                  }
-                >
-                  {book.format === 'unknown' ? (
-                    <span className="book-cover-missing">待重新导入</span>
-                  ) : coverUrl ? (
-                    <img src={coverUrl} alt="" className="book-cover-img" loading="lazy" />
-                  ) : (
-                    <>
-                      <span className="book-cover-char">{title.charAt(0)}</span>
-                      <span className="book-cover-title">{title}</span>
-                    </>
+                        : {
+                            background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
+                          }
+                    }
+                    onClick={
+                      selecting
+                        ? () => onToggleSelected(book.hash)
+                        : book.format === 'unknown'
+                          ? undefined
+                          : () => onOpenBook(book)
+                    }
+                    aria-pressed={selecting ? isSelected : undefined}
+                    title={
+                      selecting
+                        ? isSelected
+                          ? '取消选择'
+                          : '选择这本书'
+                        : book.format === 'unknown'
+                          ? '重新导入同一文件即可恢复此书的进度与批注'
+                          : `打开《${title}》`
+                    }
+                  >
+                    {book.format === 'unknown' ? (
+                      <span className="book-cover-missing">待重新导入</span>
+                    ) : coverUrl ? (
+                      <img src={coverUrl} alt="" className="book-cover-img" loading="lazy" />
+                    ) : (
+                      <>
+                        <span className="book-cover-char">{title.charAt(0)}</span>
+                        <span className="book-cover-title">{title}</span>
+                      </>
+                    )}
+                    {book.format !== 'unknown' && (
+                      <span className="book-format">{book.format.toUpperCase()}</span>
+                    )}
+                    {progress !== null && progress > 0 && (
+                      <span className="book-progress" aria-hidden>
+                        <span
+                          className="book-progress-fill"
+                          style={{ width: `${progress * 100}%` }}
+                        />
+                      </span>
+                    )}
+                    {selecting && (
+                      <span className="book-select" aria-hidden>
+                        {isSelected && <Check size={13} weight="bold" />}
+                      </span>
+                    )}
+                  </button>
+                  {!selecting && (
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="card-action-go"
+                        onClick={() => onOpenBook(book)}
+                      >
+                        {progress !== null && progress > 0 ? '继续阅读' : '开始阅读'}
+                      </button>
+                      <button
+                        type="button"
+                        className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
+                        aria-pressed={isFavorite(book)}
+                        aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
+                        onClick={() => onToggleFavorite(book)}
+                      >
+                        <Star
+                          size={15}
+                          weight={isFavorite(book) ? 'fill' : 'regular'}
+                          aria-hidden
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        className="card-action-icon"
+                        aria-haspopup="menu"
+                        aria-expanded={menuHash === book.hash}
+                        aria-label={`更多操作 ${title}`}
+                        onClick={() =>
+                          menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
+                        }
+                      >
+                        <DotsThree size={16} weight="bold" aria-hidden />
+                      </button>
+                    </div>
                   )}
-                  {book.format !== 'unknown' && (
-                    <span className="book-format">{book.format.toUpperCase()}</span>
-                  )}
-                  {progress !== null && progress > 0 && (
-                    <span className="book-progress" aria-hidden>
-                      <span
-                        className="book-progress-fill"
-                        style={{ width: `${progress * 100}%` }}
-                      />
-                    </span>
-                  )}
-                  {selecting && (
-                    <span className="book-select" aria-hidden>
-                      {isSelected && <Check size={13} weight="bold" />}
-                    </span>
-                  )}
-                </button>
+                  {renderMenu(book, 'is-card')}
+                </div>
                 <div className="book-meta">
                   <span className="book-meta-title" title={title}>
                     {title}
@@ -300,6 +444,12 @@ export function ShelfView({
                 <button
                   type="button"
                   className="book-row-open"
+                  onContextMenu={(event) => {
+                    if (selecting) return
+                    event.preventDefault()
+                    openMenu(book.hash)
+                  }}
+                  onKeyDown={menuKeyHandler(book.hash)}
                   onClick={() => (selecting ? onToggleSelected(book.hash) : onOpenBook(book))}
                   aria-pressed={selecting ? isSelected : undefined}
                 >
@@ -342,7 +492,33 @@ export function ShelfView({
                     </span>
                   )}
                 </button>
+                {!selecting && (
+                  <div className="book-row-actions">
+                    <button
+                      type="button"
+                      className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
+                      aria-pressed={isFavorite(book)}
+                      aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
+                      onClick={() => onToggleFavorite(book)}
+                    >
+                      <Star size={15} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className="card-action-icon"
+                      aria-haspopup="menu"
+                      aria-expanded={menuHash === book.hash}
+                      aria-label={`更多操作 ${title}`}
+                      onClick={() =>
+                        menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
+                      }
+                    >
+                      <DotsThree size={16} weight="bold" aria-hidden />
+                    </button>
+                  </div>
+                )}
                 {!selecting && removeButton(book, 'book-row-remove')}
+                {renderMenu(book, 'is-row')}
               </li>
             )
           })}

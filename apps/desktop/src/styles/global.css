@@ -586,6 +586,196 @@ button:disabled {
   animation: scale-pop var(--duration-fast) var(--ease-spring);
 }
 
+/* ---------- Card actions: hover / context menu / keyboard ---------- */
+
+.book-cover-shell {
+  position: relative;
+}
+
+.card-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--color-surface) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-elevated);
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-base) var(--ease-spring);
+}
+
+/* hover 只是最快的入口:焦点进入这一组时同样要出现,否则键盘用户看不见
+   自己正在操作什么。 */
+.book-card:hover .card-actions,
+.book-card:focus-within .card-actions,
+.card-actions:focus-within {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.card-action-go {
+  flex: 1;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.card-action-go:hover {
+  background: color-mix(in srgb, var(--color-accent) 88%, #000000);
+}
+
+.card-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.card-action-icon:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-primary);
+}
+
+.card-action-icon.is-on {
+  color: var(--color-accent);
+}
+
+.card-menu {
+  position: absolute;
+  z-index: 15;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-floating);
+  animation: scale-pop var(--duration-fast) var(--ease-spring);
+}
+
+.card-menu.is-card {
+  right: 8px;
+  bottom: 52px;
+}
+
+.card-menu.is-row {
+  right: 12px;
+  top: 48px;
+}
+
+.card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.card-menu button:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+.card-menu button.is-danger {
+  color: var(--color-danger);
+}
+
+.card-menu button.is-danger:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+.book-row-actions {
+  position: absolute;
+  top: 50%;
+  right: 44px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.book-row:hover .book-row-actions,
+.book-row-actions:focus-within {
+  opacity: 1;
+}
+
+/* ---------- Book info dialog ---------- */
+
+.book-info-field {
+  display: grid;
+  gap: 6px;
+}
+
+.book-info-field input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.book-info-field input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  outline-offset: 1px;
+  border-color: var(--color-accent);
+}
+
+.book-info-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-sm);
+}
+
+.book-info-tag {
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: 12px;
+}
+
 .shelf-none {
   color: var(--color-text-tertiary);
   animation: fade-up var(--duration-base) var(--ease-out);
@@ -3702,6 +3892,26 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
 
   .book-remove.is-confirm {
     transform: none;
+  }
+
+  /* 卡片操作条:触屏没有 hover,常显;图标按钮放大到可点的尺寸。 */
+  .card-actions {
+    opacity: 1;
+    transform: none;
+    gap: 6px;
+  }
+
+  .card-action-go,
+  .card-action-icon {
+    height: 36px;
+  }
+
+  .card-action-icon {
+    width: 36px;
+  }
+
+  .book-row-actions {
+    opacity: 1;
   }
 
   .chrome-button {
