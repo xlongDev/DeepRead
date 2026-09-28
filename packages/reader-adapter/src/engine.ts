@@ -81,7 +81,8 @@ const FONT_STACKS: Readonly<Record<string, string>> = {
     '-apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
   songti: '"Songti SC", "STSong", "SimSun", "NSimSun", "Noto Serif CJK SC", serif',
   kaiti: '"Kaiti SC", "STKaiti", "KaiTi", "BiauKai", "Noto Serif CJK SC", serif',
-  heiti: '"Heiti SC", "STHeiti", "SimHei", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
+  heiti:
+    '"Heiti SC", "STHeiti", "SimHei", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
   serif: 'Georgia, "Times New Roman", "Songti SC", "Noto Serif CJK SC", serif',
   sans: '-apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif',
 }
@@ -173,7 +174,9 @@ export class FoliateAdapter implements ReaderEngine {
   #applyStyles(): void {
     const view = this.#view
     if (!view || view.isFixedLayout || !this.#theme) return
-    view.renderer.setStyles?.(buildReaderCSS(this.#theme, this.#layout, this.#flow, this.#fontFaces))
+    view.renderer.setStyles?.(
+      buildReaderCSS(this.#theme, this.#layout, this.#flow, this.#fontFaces),
+    )
   }
 
   #requireView(): View {

@@ -597,7 +597,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     [books],
   )
   const visible = useMemo(
-    () => (tagFilter === null ? filtered : filtered.filter((book) => book.tags.includes(tagFilter))),
+    () =>
+      tagFilter === null ? filtered : filtered.filter((book) => book.tags.includes(tagFilter)),
     [filtered, tagFilter],
   )
   const selectedBooks = books.filter((book) => selected.has(book.hash))
@@ -868,9 +869,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             </div>
 
             {visible.length === 0 ? (
-              <p className="shelf-none">
-                没有匹配“{tagFilter ?? query}”的书。
-              </p>
+              <p className="shelf-none">没有匹配“{tagFilter ?? query}”的书。</p>
             ) : view === 'grid' ? (
               <ul className="shelf-grid" aria-label="书架">
                 {visible.map((book, index) => {
@@ -979,7 +978,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                         aria-pressed={selecting ? isSelected : undefined}
                       >
                         {selecting && (
-                          <span className={`book-select is-inline${isSelected ? ' is-checked' : ''}`} aria-hidden>
+                          <span
+                            className={`book-select is-inline${isSelected ? ' is-checked' : ''}`}
+                            aria-hidden
+                          >
                             {isSelected && <Check size={12} weight="bold" />}
                           </span>
                         )}
@@ -1062,9 +1064,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                   disabled={bulkBusy || selected.size === 0}
                   onClick={() => void removeSelected()}
                 >
-                  {confirmRemove === BULK_CONFIRM
-                    ? `确认移除 ${selected.size} 本?`
-                    : '移出书架'}
+                  {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
                 </button>
               </div>
             )}

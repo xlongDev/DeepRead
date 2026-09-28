@@ -15,6 +15,7 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "build": "pnpm --filter @deepread/desktop build",
+    "verify": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
     "dev": "pnpm --filter @deepread/desktop dev",
     "tauri": "pnpm --filter @deepread/desktop tauri",
     "cargo:check": "cargo check --workspace --all-targets",

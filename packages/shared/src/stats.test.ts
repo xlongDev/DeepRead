@@ -44,10 +44,6 @@ describe('dailySeries', () => {
   it('fills gaps with zeros, oldest first', () => {
     const series = dailySeries([{ day: '2026-09-26', seconds: 300 }], 3, today)
     expect(series.map((entry) => entry.seconds)).toEqual([300, 0, 0])
-    expect(series.map((entry) => entry.day)).toEqual([
-      '2026-09-26',
-      '2026-09-27',
-      '2026-09-28',
-    ])
+    expect(series.map((entry) => entry.day)).toEqual(['2026-09-26', '2026-09-27', '2026-09-28'])
   })
 })

@@ -44,23 +44,23 @@
 
 ### `reader.stats.add` / `reader.stats.get`(阅读时长)
 
-|      |                                                                                                                            |
-| ---- | -------------------------------------------------------------------------------------------------------------------------- |
-| add  | Request `{ bookHash, day: 'YYYY-MM-DD', seconds }`;Response `{ daySeconds }`(该书当天累计)                                  |
-| get  | Request `undefined`;Response `{ days: { day, seconds }[], totalSeconds }`(按日汇总、新→旧,最多 400 天)                      |
-| 约定 | 时钟在前端:只有"书在屏上且窗口可见"才累计,每 30s 上报一次增量;单次上报上限 1 小时(睡眠唤醒的跃变不能算阅读)               |
-| 约定 | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                                              |
-| 约定 | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除                               |
+|      |                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------- |
+| add  | Request `{ bookHash, day: 'YYYY-MM-DD', seconds }`;Response `{ daySeconds }`(该书当天累计)                  |
+| get  | Request `undefined`;Response `{ days: { day, seconds }[], totalSeconds }`(按日汇总、新→旧,最多 400 天)      |
+| 约定 | 时钟在前端:只有"书在屏上且窗口可见"才累计,每 30s 上报一次增量;单次上报上限 1 小时(睡眠唤醒的跃变不能算阅读) |
+| 约定 | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                              |
+| 约定 | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除               |
 
 ### `library.cover.get` / `library.cover.put`(封面缓存)
 
-|      |                                                                                                                        |
-| ---- | ---------------------------------------------------------------------------------------------------------------------- |
-| get  | Request `{ bookHash }`;Response `{ path: string \| null }`(未缓存为 `null`)                                             |
-| put  | Request `{ bookHash, data }`,`data` 为封面的 base64;Response `{ path }`                                                |
-| 约定 | 落盘在 `<data>/covers/<hash>.<png\|jpg\|webp\|gif>`,扩展名按 magic bytes 嗅探(决定 asset 协议返回的 MIME)              |
-| 约定 | 启动时整目录加入 asset 协议 scope;`library.remove` 顺带删除该书的缓存封面                                               |
-| 约定 | 浏览器模式(无 IPC)走 IndexedDB,键同为 book hash;`apps/desktop/src/lib/cover-store.ts` 是唯一知道两种后端的地方        |
+|      |                                                                                                                |
+| ---- | -------------------------------------------------------------------------------------------------------------- |
+| get  | Request `{ bookHash }`;Response `{ path: string \| null }`(未缓存为 `null`)                                    |
+| put  | Request `{ bookHash, data }`,`data` 为封面的 base64;Response `{ path }`                                        |
+| 约定 | 落盘在 `<data>/covers/<hash>.<png\|jpg\|webp\|gif>`,扩展名按 magic bytes 嗅探(决定 asset 协议返回的 MIME)      |
+| 约定 | 启动时整目录加入 asset 协议 scope;`library.remove` 顺带删除该书的缓存封面                                      |
+| 约定 | 浏览器模式(无 IPC)走 IndexedDB,键同为 book hash;`apps/desktop/src/lib/cover-store.ts` 是唯一知道两种后端的地方 |
 
 ### `library.list` / `library.import` / `library.remove` / `library.rename`
 
@@ -70,13 +70,13 @@
 | import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                           |
 | remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                            |
 | rename      | Request `{ bookHash, displayName }`;Response `{ book: LibraryBook }`                                                      |
-| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                          |
-| LibraryBook | `{ hash, fileName, displayName: string \| null, format, path, size, addedAt, progress: number \| null, tags: string[] }`    |
+| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                         |
+| LibraryBook | `{ hash, fileName, displayName: string \| null, format, path, size, addedAt, progress: number \| null, tags: string[] }`  |
 | Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                       |
 | 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                  |
 | 约定        | `displayName` 为书籍自带元数据标题,前端惰性解析后经 `rename` 回写;`null` 表示尚未解析(书架回退到清洗后的文件名)           |
-| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                 |
-| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)          |
+| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                  |
+| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)           |
 | 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除) |
 
 ### `ai.*` 与 `secret.*`(Phase 3)

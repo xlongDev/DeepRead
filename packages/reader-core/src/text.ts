@@ -7,9 +7,7 @@ const CJK_PATTERN = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/g
 
 export function countChars(text: string): number {
   const cjk = (text.match(CJK_PATTERN) ?? []).length
-  const latinWords = (
-    text.replace(CJK_PATTERN, ' ').match(/[A-Za-z0-9'’-]+/g) ?? []
-  ).length
+  const latinWords = (text.replace(CJK_PATTERN, ' ').match(/[A-Za-z0-9'’-]+/g) ?? []).length
   return cjk + latinWords
 }
 

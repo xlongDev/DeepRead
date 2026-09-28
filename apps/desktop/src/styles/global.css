@@ -192,7 +192,11 @@ button:disabled {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(1100px 460px at 18% -8%, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 68%),
+    radial-gradient(
+      1100px 460px at 18% -8%,
+      color-mix(in srgb, var(--color-accent) 7%, transparent),
+      transparent 68%
+    ),
     radial-gradient(900px 420px at 88% -12%, rgba(255, 166, 87, 0.05), transparent 66%),
     var(--color-bg);
   overflow-y: auto;
@@ -228,7 +232,11 @@ button:disabled {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: linear-gradient(140deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 62%, #7c4dcf));
+  background: linear-gradient(
+    140deg,
+    var(--color-accent),
+    color-mix(in srgb, var(--color-accent) 62%, #7c4dcf)
+  );
   color: #ffffff;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--color-accent) 45%, transparent);
   flex-shrink: 0;
@@ -348,13 +356,15 @@ button:disabled {
   font-weight: var(--font-weight-medium);
   padding: 9px 18px;
   cursor: pointer;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
     0 6px 18px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 .shelf-import:hover {
   filter: brightness(1.07);
-  box-shadow: 0 2px 4px color-mix(in srgb, var(--color-accent) 40%, transparent),
+  box-shadow:
+    0 2px 4px color-mix(in srgb, var(--color-accent) 40%, transparent),
     0 10px 26px color-mix(in srgb, var(--color-accent) 34%, transparent);
 }
 
@@ -857,8 +867,16 @@ button:disabled {
 .reader .ai-drawer,
 .reader .dropdown-menu {
   --color-text-primary: var(--reader-fg, var(--color-text-primary));
-  --color-text-secondary: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 72%, transparent);
-  --color-text-tertiary: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 52%, transparent);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--reader-fg, var(--color-text-primary)) 72%,
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--reader-fg, var(--color-text-primary)) 52%,
+    transparent
+  );
   --color-surface: var(--reader-panel-solid, var(--color-surface));
   --color-border: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent);
   color: var(--reader-fg, var(--color-text-primary));
@@ -931,7 +949,8 @@ button:disabled {
 .segmented button {
   border: none;
   border-radius: var(--radius-full);
-  background: transparent;  color: var(--color-text-secondary);
+  background: transparent;
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   white-space: nowrap;
   padding: 4px 11px;
@@ -1181,7 +1200,8 @@ button:disabled {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
     0 6px 18px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
@@ -2361,7 +2381,8 @@ dialog.modal-panel {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-accent) 40%, transparent),
+  box-shadow:
+    0 2px 6px color-mix(in srgb, var(--color-accent) 40%, transparent),
     0 10px 28px color-mix(in srgb, var(--color-accent) 32%, transparent);
 }
 
@@ -2907,7 +2928,6 @@ dialog.modal-panel {
   transform: rotate(180deg);
 }
 
-
 .dropdown-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -3047,7 +3067,6 @@ dialog.modal-panel {
   opacity: 0.8;
   transform: translateY(-50%) scale(0.94);
 }
-
 
 /* ---------- Reader: page-turn animations (View Transitions) ---------- */
 
@@ -3583,7 +3602,11 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   width: 100%;
   min-height: 3px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 55%, transparent));
+  background: linear-gradient(
+    180deg,
+    var(--color-accent),
+    color-mix(in srgb, var(--color-accent) 55%, transparent)
+  );
   transition: height var(--duration-base) var(--ease-emphasized);
 }
 

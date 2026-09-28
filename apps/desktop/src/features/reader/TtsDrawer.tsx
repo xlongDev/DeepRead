@@ -501,15 +501,7 @@ export function TtsDrawer({
         }
       }
     },
-    [
-      getSectionText,
-      jumpSection,
-      armTimer,
-      playBlockFile,
-      speakSystemBlock,
-      stop,
-      bookLanguage,
-    ],
+    [getSectionText, jumpSection, armTimer, playBlockFile, speakSystemBlock, stop, bookLanguage],
   )
 
   const play = useCallback((): void => {
@@ -562,7 +554,13 @@ export function TtsDrawer({
     }, 80)
     return () => clearTimeout(delay)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.narratorEdge, settings.narratorCloud, settings.narratorSystem, settings.rate, settings.engine])
+  }, [
+    settings.narratorEdge,
+    settings.narratorCloud,
+    settings.narratorSystem,
+    settings.rate,
+    settings.engine,
+  ])
 
   useEffect(() => {
     voiceSettingsProbe.current = true
@@ -584,29 +582,32 @@ export function TtsDrawer({
   }, [sentences, charPos])
 
   /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
-  const seekToChar = useCallback((target: number): void => {
-    if (phaseRef.current === 'idle') return
-    const audio = audioRef.current
-    const list = sentencesRef.current
-    // 优先:目标就在当前音频对应的块内,直接 currentTime 精确 seek。
-    // 块边界未知于 UI 层,统一走重载路径:token 中断 + run(目标位置)。
-    if (audio && !audio.paused) {
-      // 粗判:目标位置仍在当前句块内时也可跳,但块信息不在 UI;重载即合成缓存命中(同文本同音色同语速),代价是秒级。
-    }
-    sectionTokenRef.current += 1
-    stopFlagRef.current = true
-    window.speechSynthesis?.cancel()
-    if (audio) {
-      audio.pause()
-      audio.removeAttribute('src')
-      audioRef.current = null
-    }
-    setPhase('loading')
-    setTimeout(() => {
-      void run(Math.max(0, Math.min(target, totalChars > 0 ? totalChars - 1 : target)))
-    }, 60)
-    void list
-  }, [run, totalChars])
+  const seekToChar = useCallback(
+    (target: number): void => {
+      if (phaseRef.current === 'idle') return
+      const audio = audioRef.current
+      const list = sentencesRef.current
+      // 优先:目标就在当前音频对应的块内,直接 currentTime 精确 seek。
+      // 块边界未知于 UI 层,统一走重载路径:token 中断 + run(目标位置)。
+      if (audio && !audio.paused) {
+        // 粗判:目标位置仍在当前句块内时也可跳,但块信息不在 UI;重载即合成缓存命中(同文本同音色同语速),代价是秒级。
+      }
+      sectionTokenRef.current += 1
+      stopFlagRef.current = true
+      window.speechSynthesis?.cancel()
+      if (audio) {
+        audio.pause()
+        audio.removeAttribute('src')
+        audioRef.current = null
+      }
+      setPhase('loading')
+      setTimeout(() => {
+        void run(Math.max(0, Math.min(target, totalChars > 0 ? totalChars - 1 : target)))
+      }, 60)
+      void list
+    },
+    [run, totalChars],
+  )
 
   const jumpSentences = useCallback(
     (delta: number): void => {
@@ -620,7 +621,10 @@ export function TtsDrawer({
             window.speechSynthesis?.cancel()
             audioRef.current?.pause()
             setPhase('loading')
-            setTimeout(() => void run(Number.MAX_SAFE_INTEGER / 2 - 1, { stopAtChapterEnd: true }), 60)
+            setTimeout(
+              () => void run(Number.MAX_SAFE_INTEGER / 2 - 1, { stopAtChapterEnd: true }),
+              60,
+            )
           }
         })
         return
@@ -1028,9 +1032,7 @@ export function TtsDrawer({
             className={`stats-toggle tts-auto-next${settings.autoNext ? ' is-on' : ''}`}
             role="switch"
             aria-checked={settings.autoNext}
-            onClick={() =>
-              setSettings((current) => ({ ...current, autoNext: !current.autoNext }))
-            }
+            onClick={() => setSettings((current) => ({ ...current, autoNext: !current.autoNext }))}
           >
             <span className="stats-toggle-label">连读下一章</span>
             <span className="stats-toggle-track" aria-hidden>

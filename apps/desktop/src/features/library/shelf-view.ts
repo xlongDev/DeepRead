@@ -13,13 +13,7 @@ export type ShelfBook = LibraryBook
 export type SortKey = 'added' | 'title' | 'size' | 'progress'
 export type ViewMode = 'grid' | 'list'
 export type AppTheme =
-  | 'pure-white'
-  | 'warm-paper'
-  | 'ivory'
-  | 'soft-gray'
-  | 'dark'
-  | 'oled'
-  | 'liquid-glass'
+  'pure-white' | 'warm-paper' | 'ivory' | 'soft-gray' | 'dark' | 'oled' | 'liquid-glass'
 
 export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   added: '最近添加',

@@ -288,7 +288,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       pageMargin,
       paragraphMargin,
     }
-  }, [viewMode, fontSize, lineHeight, fontFamily, fontWeight, themeIndex, pageMargin, paragraphMargin])
+  }, [
+    viewMode,
+    fontSize,
+    lineHeight,
+    fontFamily,
+    fontWeight,
+    themeIndex,
+    pageMargin,
+    paragraphMargin,
+  ])
 
   const saveNow = useCallback((): void => {
     if (!isTauriRuntime()) return
@@ -652,9 +661,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
   /** 夜间一键切换:记住亮色主题,再点返回;背景细选仍走排版设置。 */
   const toggleNightTheme = useCallback((): void => {
-    const nightIndex = READER_THEMES.findIndex(
-      (option) => option.theme.colorScheme === 'dark',
-    )
+    const nightIndex = READER_THEMES.findIndex((option) => option.theme.colorScheme === 'dark')
     if (themeIndex === nightIndex) {
       const restore = lastLightIndexRef.current ?? 0
       setThemeIndex(restore)
@@ -814,53 +821,45 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       pageMargin?: number
       paragraphMargin?: number | undefined
     }): void => {
-    // `in` checks, not ?? merges: an explicit undefined means "reset to the
-    // book's own typography" and must win over the previous setting.
-    const next = {
-      viewMode: patch.viewMode ?? viewMode,
-      fontSize: patch.fontSize ?? fontSize,
-      lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
-      fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
-      fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
-      pageMargin: patch.pageMargin ?? pageMargin,
-      paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
-    }
-    setViewMode(next.viewMode)
-    setFontSize(next.fontSize)
-    setLineHeight(next.lineHeight)
-    setFontFamily(next.fontFamily)
-    setFontWeight(next.fontWeight)
-    setPageMargin(next.pageMargin)
-    setParagraphMargin(next.paragraphMargin)
-    persistTypography({
-      viewMode: next.viewMode,
-      fontSize: next.fontSize,
-      lineHeight: next.lineHeight,
-      fontFamily: next.fontFamily,
-      fontWeight: next.fontWeight,
-      pageMargin: next.pageMargin,
-      paragraphMargin: next.paragraphMargin,
-    })
-    void adapterRef.current?.setLayout({
-      flow: next.viewMode === 'scroll' ? 'scrolled' : 'paginated',
-      pageMode: next.viewMode === 'dual' ? 'dual' : 'single',
-      fontSize: next.fontSize,
-      lineHeight: next.lineHeight,
-      fontFamily: next.fontFamily,
-      fontWeight: next.fontWeight,
-      margin: next.pageMargin,
-      paragraphMargin: next.paragraphMargin,
-    })
+      // `in` checks, not ?? merges: an explicit undefined means "reset to the
+      // book's own typography" and must win over the previous setting.
+      const next = {
+        viewMode: patch.viewMode ?? viewMode,
+        fontSize: patch.fontSize ?? fontSize,
+        lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
+        fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
+        fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
+        pageMargin: patch.pageMargin ?? pageMargin,
+        paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
+      }
+      setViewMode(next.viewMode)
+      setFontSize(next.fontSize)
+      setLineHeight(next.lineHeight)
+      setFontFamily(next.fontFamily)
+      setFontWeight(next.fontWeight)
+      setPageMargin(next.pageMargin)
+      setParagraphMargin(next.paragraphMargin)
+      persistTypography({
+        viewMode: next.viewMode,
+        fontSize: next.fontSize,
+        lineHeight: next.lineHeight,
+        fontFamily: next.fontFamily,
+        fontWeight: next.fontWeight,
+        pageMargin: next.pageMargin,
+        paragraphMargin: next.paragraphMargin,
+      })
+      void adapterRef.current?.setLayout({
+        flow: next.viewMode === 'scroll' ? 'scrolled' : 'paginated',
+        pageMode: next.viewMode === 'dual' ? 'dual' : 'single',
+        fontSize: next.fontSize,
+        lineHeight: next.lineHeight,
+        fontFamily: next.fontFamily,
+        fontWeight: next.fontWeight,
+        margin: next.pageMargin,
+        paragraphMargin: next.paragraphMargin,
+      })
     },
-    [
-      viewMode,
-      fontSize,
-      lineHeight,
-      fontFamily,
-      fontWeight,
-      pageMargin,
-      paragraphMargin,
-    ],
+    [viewMode, fontSize, lineHeight, fontFamily, fontWeight, pageMargin, paragraphMargin],
   )
 
   const changeFontSize = (delta: number): void => {
@@ -1149,9 +1148,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           id: crypto.randomUUID(),
           cfi: current.cfi,
           // 记下当时的章节名:书签列表里比原始 CFI 有意义得多。
-          ...(sectionLabel !== null && sectionLabel.trim() !== ''
-            ? { label: sectionLabel }
-            : {}),
+          ...(sectionLabel !== null && sectionLabel.trim() !== '' ? { label: sectionLabel } : {}),
           createdAt: new Date().toISOString(),
         },
       ])
@@ -1189,9 +1186,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const readingStats = useMemo(() => {
     const location = progress.location
     const pages =
-      location && location.total > 0
-        ? { current: location.current, total: location.total }
-        : null
+      location && location.total > 0 ? { current: location.current, total: location.total } : null
     const isCjk = bookLanguage === undefined || /^(zh|ja|ko)/i.test(bookLanguage)
     let timeLabel: string | null = null
     if (bookCharStats !== null && bookCharStats.total > 0) {
@@ -1204,10 +1199,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     } else if (pages && progress.fraction > 0) {
       const secondsPerPage = isCjk ? 90 : 45
       timeLabel = formatDurationLabel(
-        Math.max(
-          1,
-          Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60),
-        ),
+        Math.max(1, Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60)),
       )
     }
     const charsLabel =
@@ -1223,7 +1215,14 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       chars: charsLabel,
       time: timeLabel,
     }
-  }, [progress.location, progress.fraction, bookLanguage, sectionChars, bookCharStats, statsSettings.wordsScope])
+  }, [
+    progress.location,
+    progress.fraction,
+    bookLanguage,
+    sectionChars,
+    bookCharStats,
+    statsSettings.wordsScope,
+  ])
 
   const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
     items.map((item) => (
@@ -1252,787 +1251,783 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         } as React.CSSProperties
       }
     >
-    <div
-      className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
-      onPointerDown={() => showChrome()}
-    >
       <div
-        ref={hostRef}
-        className="reader-host"
-      />
-
-      {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
-      <button
-        type="button"
-        className="page-flip page-flip-left"
-        onClick={() => void turnPage('prev')}
-        title="上一页"
-        aria-label="上一页"
+        className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
+        onPointerDown={() => showChrome()}
       >
-        <CaretLeft size={20} weight="bold" aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="page-flip page-flip-right"
-        onClick={() => void turnPage('next')}
-        title="下一页"
-        aria-label="下一页"
-      >
-        <CaretRight size={20} weight="bold" aria-hidden />
-      </button>
+        <div ref={hostRef} className="reader-host" />
 
-      {phase === 'opening' && <div className="reader-opening" data-title={`正在打开 ${title}…`} />}
-      {phase === 'error' && (
-        <div className="reader-error" role="alert">
-          <p>{error}</p>
-          <button type="button" className="reader-error-button" onClick={onBack}>
-            返回书架
+        {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
+        <button
+          type="button"
+          className="page-flip page-flip-left"
+          onClick={() => void turnPage('prev')}
+          title="上一页"
+          aria-label="上一页"
+        >
+          <CaretLeft size={20} weight="bold" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="page-flip page-flip-right"
+          onClick={() => void turnPage('next')}
+          title="下一页"
+          aria-label="下一页"
+        >
+          <CaretRight size={20} weight="bold" aria-hidden />
+        </button>
+
+        {phase === 'opening' && (
+          <div className="reader-opening" data-title={`正在打开 ${title}…`} />
+        )}
+        {phase === 'error' && (
+          <div className="reader-error" role="alert">
+            <p>{error}</p>
+            <button type="button" className="reader-error-button" onClick={onBack}>
+              返回书架
+            </button>
+          </div>
+        )}
+
+        <header className="reader-top">
+          <button type="button" className="chrome-button" onClick={onBack} title="返回书架">
+            <ArrowLeft size={18} weight="regular" aria-hidden />
           </button>
-        </div>
-      )}
+          <span className="reader-title">{title}</span>
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={toggleBookmark}
+            title={bookmarkedHere ? '移除书签' : '在此页添加书签'}
+          >
+            <BookmarkSimple
+              size={18}
+              weight={bookmarkedHere ? 'fill' : 'regular'}
+              aria-hidden
+              color={bookmarkedHere ? 'var(--color-accent)' : undefined}
+            />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
+            onClick={toggleNightTheme}
+            title={`阅读背景:点击切换夜间(当前 ${theme.label},在排版设置中可选)`}
+          >
+            {theme.theme.colorScheme === 'dark' ? (
+              <Moon size={18} weight="regular" aria-hidden />
+            ) : (
+              <Sun size={18} weight="regular" aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${fullscreen ? ' is-active' : ''}`}
+            onClick={() => void toggleFullscreen()}
+            title="全屏阅读(F11 / Ctrl+⌘+F)"
+          >
+            <CornersOut size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${openPanel === 'settings' ? ' is-active' : ''}`}
+            onClick={() => setOpenPanel((panel) => (panel === 'settings' ? null : 'settings'))}
+            title="排版设置"
+          >
+            <TextAa size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${openPanel === 'display' ? ' is-active' : ''}`}
+            onClick={() => setOpenPanel((panel) => (panel === 'display' ? null : 'display'))}
+            title="显示设置"
+          >
+            <SlidersHorizontal size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
+            onClick={() => setOpenPanel((panel) => (panel === 'ai' ? null : 'ai'))}
+            title="AI 助手"
+          >
+            <Sparkle size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${openPanel === 'tts' ? ' is-active' : ''}`}
+            onClick={() => setOpenPanel((panel) => (panel === 'tts' ? null : 'tts'))}
+            title="朗读 / 听书"
+          >
+            <Headphones size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
+            onClick={() => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))}
+            title="学习(卡片 / 测验 / 错题本)"
+          >
+            <GraduationCap size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={() => {
+              setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
+              setChromeVisible(true)
+            }}
+            title="目录与搜索"
+          >
+            <List size={18} weight="regular" aria-hidden />
+          </button>
+        </header>
 
-      <header className="reader-top">
-        <button type="button" className="chrome-button" onClick={onBack} title="返回书架">
-          <ArrowLeft size={18} weight="regular" aria-hidden />
-        </button>
-        <span className="reader-title">{title}</span>
-        <button
-          type="button"
-          className="chrome-button"
-          onClick={toggleBookmark}
-          title={bookmarkedHere ? '移除书签' : '在此页添加书签'}
-        >
-          <BookmarkSimple
-            size={18}
-            weight={bookmarkedHere ? 'fill' : 'regular'}
-            aria-hidden
-            color={bookmarkedHere ? 'var(--color-accent)' : undefined}
-          />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
-          onClick={toggleNightTheme}
-          title={`阅读背景:点击切换夜间(当前 ${theme.label},在排版设置中可选)`}
-        >
-          {theme.theme.colorScheme === 'dark' ? (
-            <Moon size={18} weight="regular" aria-hidden />
-          ) : (
-            <Sun size={18} weight="regular" aria-hidden />
-          )}
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${fullscreen ? ' is-active' : ''}`}
-          onClick={() => void toggleFullscreen()}
-          title="全屏阅读(F11 / Ctrl+⌘+F)"
-        >
-          <CornersOut size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${openPanel === 'settings' ? ' is-active' : ''}`}
-          onClick={() => setOpenPanel((panel) => (panel === 'settings' ? null : 'settings'))}
-          title="排版设置"
-        >
-          <TextAa size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${openPanel === 'display' ? ' is-active' : ''}`}
-          onClick={() => setOpenPanel((panel) => (panel === 'display' ? null : 'display'))}
-          title="显示设置"
-        >
-          <SlidersHorizontal size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
-          onClick={() =>
-            setOpenPanel((panel) => (panel === 'ai' ? null : 'ai'))
-          }
-          title="AI 助手"
-        >
-          <Sparkle size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${openPanel === 'tts' ? ' is-active' : ''}`}
-          onClick={() =>
-            setOpenPanel((panel) => (panel === 'tts' ? null : 'tts'))
-          }
-          title="朗读 / 听书"
-        >
-          <Headphones size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
-          onClick={() => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))}
-          title="学习(卡片 / 测验 / 错题本)"
-        >
-          <GraduationCap size={18} weight="regular" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="chrome-button"
-          onClick={() => {
-            setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
-            setChromeVisible(true)
-          }}
-          title="目录与搜索"
-        >
-          <List size={18} weight="regular" aria-hidden />
-        </button>
-      </header>
-
-      {openPanel === 'settings' && (
-        <section className="reader-settings" aria-label="排版设置">
-          <div className="settings-column">
-            <span className="settings-label">阅读背景</span>
-            <div className="reader-theme-row">
-              {READER_THEMES.map((option, index) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
-                  style={{
-                    background: option.theme.background,
-                    color: option.theme.foreground,
-                  }}
-                  onClick={() => {
-                    setThemeIndex(index)
-                    persistTypography({ themeIndex: index })
-                    void adapterRef.current?.setTheme(option.theme)
-                  }}
-                  aria-pressed={themeIndex === index}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">字号</span>
-            <div className="segmented">
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => changeFontSize(-1)}
-                title="减小字号"
-              >
-                <Minus size={14} weight="regular" aria-hidden />
-              </button>
-              <span className="segmented-value">{fontSize}px</span>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => changeFontSize(1)}
-                title="增大字号"
-              >
-                <Plus size={14} weight="regular" aria-hidden />
-              </button>
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">行距</span>
-            <div className="segmented">
-              {LINE_HEIGHT_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={lineHeight === option.value ? 'is-active' : ''}
-                  onClick={() => updateLayout({ lineHeight: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">段间距</span>
-            <div className="segmented">
-              {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={paragraphMargin === option.value ? 'is-active' : ''}
-                  onClick={() => updateLayout({ paragraphMargin: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">字重</span>
-            <div className="segmented">
-              {FONT_WEIGHT_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={fontWeight === option.value ? 'is-active' : ''}
-                  style={{ fontWeight: option.cssWeight }}
-                  onClick={() => updateLayout({ fontWeight: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">页边距</span>
-            <div className="segmented">
-              {PAGE_MARGIN_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={pageMargin === option.value ? 'is-active' : ''}
-                  onClick={() => updateLayout({ pageMargin: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-column">
-            <span className="settings-label">字体</span>
-            <div className="segmented segmented-wrap">
-              {FONT_FAMILY_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={fontFamily === option.value ? 'is-active' : ''}
-                  style={
-                    option.value !== undefined && FONT_STACK_PREVIEW[option.value]
-                      ? { fontFamily: FONT_STACK_PREVIEW[option.value] }
-                      : undefined
-                  }
-                  onClick={() => updateLayout({ fontFamily: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-              {customFonts.map((font) => (
-                <button
-                  key={font.id}
-                  type="button"
-                  className={fontFamily === font.name ? 'is-active' : ''}
-                  onClick={() => updateLayout({ fontFamily: font.name })}
-                  title={`${font.name}(点按使用;长按列表删除)`}
-                >
-                  {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
-                </button>
-              ))}
-            </div>
-            <div className="font-custom-row">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => void importReadingFont()}
-                disabled={fontBusy}
-              >
-                <Plus size={13} weight="bold" aria-hidden />
-                {fontBusy ? '导入中…' : '导入字体'}
-              </button>
-              {fontFamily !== undefined &&
-                !FONT_FAMILY_OPTIONS.some((option) => option.value === fontFamily) && (
+        {openPanel === 'settings' && (
+          <section className="reader-settings" aria-label="排版设置">
+            <div className="settings-column">
+              <span className="settings-label">阅读背景</span>
+              <div className="reader-theme-row">
+                {READER_THEMES.map((option, index) => (
                   <button
+                    key={option.label}
                     type="button"
-                    className="btn btn-ghost font-remove"
-                    onClick={() => void removeReadingFont(fontFamily)}
-                    title="删除当前使用的自定义字体"
+                    className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
+                    style={{
+                      background: option.theme.background,
+                      color: option.theme.foreground,
+                    }}
+                    onClick={() => {
+                      setThemeIndex(index)
+                      persistTypography({ themeIndex: index })
+                      void adapterRef.current?.setTheme(option.theme)
+                    }}
+                    aria-pressed={themeIndex === index}
                   >
-                    <Trash size={13} aria-hidden /> 删除当前字体
+                    {option.label}
                   </button>
-                )}
+                ))}
+              </div>
             </div>
-          </div>
-          {panelProblem !== null && (
-            <p className="lookup-empty" role="alert">
-              {panelProblem}
-            </p>
-          )}
-          {dictionaries.length > 0 && <p className="settings-label">词典</p>}
-          {dictionaries.map((dictionary) => (
-            <div key={dictionary.id} className="settings-row dictionary-row">
-              <span className="settings-label">
-                {dictionary.name} · {dictionary.wordCount}
-              </span>
+            <div className="settings-row">
+              <span className="settings-label">字号</span>
+              <div className="segmented">
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => changeFontSize(-1)}
+                  title="减小字号"
+                >
+                  <Minus size={14} weight="regular" aria-hidden />
+                </button>
+                <span className="segmented-value">{fontSize}px</span>
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => changeFontSize(1)}
+                  title="增大字号"
+                >
+                  <Plus size={14} weight="regular" aria-hidden />
+                </button>
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">行距</span>
+              <div className="segmented">
+                {LINE_HEIGHT_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={lineHeight === option.value ? 'is-active' : ''}
+                    onClick={() => updateLayout({ lineHeight: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">段间距</span>
+              <div className="segmented">
+                {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={paragraphMargin === option.value ? 'is-active' : ''}
+                    onClick={() => updateLayout({ paragraphMargin: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">字重</span>
+              <div className="segmented">
+                {FONT_WEIGHT_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={fontWeight === option.value ? 'is-active' : ''}
+                    style={{ fontWeight: option.cssWeight }}
+                    onClick={() => updateLayout({ fontWeight: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">页边距</span>
+              <div className="segmented">
+                {PAGE_MARGIN_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={pageMargin === option.value ? 'is-active' : ''}
+                    onClick={() => updateLayout({ pageMargin: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-column">
+              <span className="settings-label">字体</span>
+              <div className="segmented segmented-wrap">
+                {FONT_FAMILY_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={fontFamily === option.value ? 'is-active' : ''}
+                    style={
+                      option.value !== undefined && FONT_STACK_PREVIEW[option.value]
+                        ? { fontFamily: FONT_STACK_PREVIEW[option.value] }
+                        : undefined
+                    }
+                    onClick={() => updateLayout({ fontFamily: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+                {customFonts.map((font) => (
+                  <button
+                    key={font.id}
+                    type="button"
+                    className={fontFamily === font.name ? 'is-active' : ''}
+                    onClick={() => updateLayout({ fontFamily: font.name })}
+                    title={`${font.name}(点按使用;长按列表删除)`}
+                  >
+                    {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
+                  </button>
+                ))}
+              </div>
+              <div className="font-custom-row">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => void importReadingFont()}
+                  disabled={fontBusy}
+                >
+                  <Plus size={13} weight="bold" aria-hidden />
+                  {fontBusy ? '导入中…' : '导入字体'}
+                </button>
+                {fontFamily !== undefined &&
+                  !FONT_FAMILY_OPTIONS.some((option) => option.value === fontFamily) && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost font-remove"
+                      onClick={() => void removeReadingFont(fontFamily)}
+                      title="删除当前使用的自定义字体"
+                    >
+                      <Trash size={13} aria-hidden /> 删除当前字体
+                    </button>
+                  )}
+              </div>
+            </div>
+            {panelProblem !== null && (
+              <p className="lookup-empty" role="alert">
+                {panelProblem}
+              </p>
+            )}
+            {dictionaries.length > 0 && <p className="settings-label">词典</p>}
+            {dictionaries.map((dictionary) => (
+              <div key={dictionary.id} className="settings-row dictionary-row">
+                <span className="settings-label">
+                  {dictionary.name} · {dictionary.wordCount}
+                </span>
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => void removeDictionary(dictionary.id)}
+                  title="移除词典"
+                >
+                  <X size={12} weight="regular" aria-hidden />
+                </button>
+              </div>
+            ))}
+            <div className="settings-row">
+              <span className="settings-label">导入词典</span>
+              <div className="segmented">
+                <button type="button" onClick={() => void importDictionary()}>
+                  选择 .ifo
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {openPanel === 'display' && (
+          <section className="reader-settings reader-display" aria-label="显示设置">
+            <div className="settings-column">
+              <span className="settings-label">显示</span>
+              <div className="stats-toggles">
+                {(
+                  [
+                    { key: 'progress', label: '进度条与页码' },
+                    { key: 'words', label: '字数' },
+                    { key: 'time', label: '预计时间' },
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`stats-toggle${statsSettings[item.key] ? ' is-on' : ''}`}
+                    role="switch"
+                    aria-checked={statsSettings[item.key]}
+                    onClick={() => {
+                      setStatsSettings((current) => {
+                        const next = { ...current, [item.key]: !current[item.key] }
+                        localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                        return next
+                      })
+                    }}
+                  >
+                    <span className="stats-toggle-label">{item.label}</span>
+                    <span className="stats-toggle-track" aria-hidden>
+                      <span className="stats-toggle-thumb" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-column">
+              <span className="settings-label">翻页动画</span>
+              <div className="segmented">
+                {PAGE_TURN_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={pageTurnStyle === option.value ? 'is-active' : ''}
+                    onClick={() => {
+                      setPageTurnStyle(option.value)
+                      localStorage.setItem('deepread.reader.pageTurn', option.value)
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">方式</span>
+              <div className="segmented">
+                {VIEW_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={viewMode === option.value ? 'is-active' : ''}
+                    onClick={() => updateLayout({ viewMode: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="ai-privacy">关闭进度条后,底部工具栏整体隐藏,阅读更沉浸。</p>
+          </section>
+        )}
+
+        {openPanel === 'toc' && (
+          <nav className="reader-toc" aria-label="目录与搜索">
+            <div className="reader-toc-head">
+              <span>目录</span>
               <button
                 type="button"
                 className="chrome-button"
-                onClick={() => void removeDictionary(dictionary.id)}
-                title="移除词典"
+                onClick={() => setOpenPanel(null)}
+                title="关闭"
+              >
+                <X size={16} weight="regular" aria-hidden />
+              </button>
+            </div>
+
+            <div className="reader-search">
+              <input
+                ref={searchInputRef}
+                type="search"
+                className="reader-search-input"
+                placeholder="搜索全书…"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void runSearch()
+                }}
+              />
+              <button
+                type="button"
+                className="chrome-button"
+                onClick={() => void runSearch()}
+                title="搜索"
+              >
+                <MagnifyingGlass size={16} weight="regular" aria-hidden />
+              </button>
+            </div>
+            {searchState === 'searching' && <p className="reader-toc-empty">搜索中…</p>}
+            {searchState === 'done' && searchResults.length === 0 && (
+              <p className="reader-toc-empty">没有找到匹配的正文。</p>
+            )}
+            {searchResults.map((result) => (
+              <button
+                key={result.cfi}
+                type="button"
+                className="toc-item search-result"
+                onClick={() => goToCfi(result.cfi)}
+                title="跳转到此处"
+              >
+                {result.excerpt}
+              </button>
+            ))}
+            {searchTruncated && (
+              <p className="reader-toc-empty">
+                仅显示前 {MAX_SHOWN_SEARCH_RESULTS} 条,请细化关键词。
+              </p>
+            )}
+
+            {book.format === 'txt' && (
+              <>
+                <div className="settings-row repair-row">
+                  <span className="settings-label">文本修整</span>
+                  <div className="segmented">
+                    <button type="button" onClick={startRepair}>
+                      检查
+                    </button>
+                  </div>
+                </div>
+                <div className="settings-row repair-row">
+                  <span className="settings-label">章节重建</span>
+                  <div className="segmented">
+                    <button type="button" onClick={() => setRebuildOpen((open) => !open)}>
+                      {rebuildOpen ? '收起' : '自定义'}
+                    </button>
+                  </div>
+                </div>
+                {rebuildOpen && (
+                  <div className="rebuild-form">
+                    <input
+                      className="ai-input"
+                      placeholder="正则,如 第\s*\d+\s*章(留空用内置规则)"
+                      value={rebuildPattern}
+                      onChange={(event) => setRebuildPattern(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void applyRebuild()
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="reader-error-button"
+                      onClick={() => void applyRebuild()}
+                    >
+                      重建
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {liveBookmarks.length > 0 && <p className="reader-section-label">书签</p>}
+            {liveBookmarks.map((bookmark) => (
+              <div key={bookmark.id} className="bookmark-row">
+                <button
+                  type="button"
+                  className="toc-item"
+                  onClick={() => goToCfi(bookmark.cfi)}
+                  title="跳转到书签"
+                >
+                  {bookmark.label ?? `书签 ${bookmark.cfi.slice(0, 18)}…`}
+                </button>
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => removeBookmark(bookmark.id)}
+                  title="删除书签"
+                >
+                  <X size={12} weight="regular" aria-hidden />
+                </button>
+              </div>
+            ))}
+
+            {toc.length === 0 && searchResults.length === 0 && liveBookmarks.length === 0 ? (
+              <p className="reader-toc-empty">这本书没有目录信息。</p>
+            ) : (
+              renderTocItems(toc, 0)
+            )}
+          </nav>
+        )}
+
+        {statsSettings.progress && (
+          <footer className="reader-bottom">
+            <input
+              type="range"
+              className="reader-slider"
+              min={0}
+              max={1000}
+              value={Math.round(progress.fraction * 1000)}
+              aria-label="阅读进度"
+              onChange={(event) => {
+                // Scrubbing only moves the thumb: a goTo per input event relayouts
+                // the whole book. The jump happens once, on release.
+                const fraction = Number(event.target.value) / 1000
+                setProgress((current) => ({ ...current, fraction }))
+                progressRef.current =
+                  progressRef.current !== null ? { ...progressRef.current, fraction } : null
+              }}
+              onPointerDown={() => {
+                scrubbingRef.current = true
+              }}
+              onPointerUp={() => commitScrub()}
+              onKeyDown={() => {
+                scrubbingRef.current = true
+              }}
+              onKeyUp={() => commitScrub()}
+              onBlur={() => commitScrub()}
+            />
+            <span className="reader-arrow" aria-hidden>
+              <ArrowLeft size={14} weight="regular" />
+            </span>
+            <span className="reader-arrow" aria-hidden>
+              <ArrowRight size={14} weight="regular" />
+            </span>
+            {statsSettings.words && readingStats.chars && (
+              <button
+                type="button"
+                className="reader-count-toggle"
+                title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
+                onClick={() => {
+                  setStatsSettings((current) => {
+                    const next = {
+                      ...current,
+                      wordsScope:
+                        current.wordsScope === 'book' ? ('section' as const) : ('book' as const),
+                    }
+                    localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                    return next
+                  })
+                }}
+              >
+                {readingStats.chars}
+              </button>
+            )}
+            {statsSettings.time && readingStats.time && (
+              <span className="reader-percent">{readingStats.time}</span>
+            )}
+            {statsSettings.progress && readingStats.page && (
+              <span className="reader-percent reader-percent-strong">{readingStats.page}</span>
+            )}
+          </footer>
+        )}
+
+        {repairReview !== null && (
+          <section className="repair-panel" aria-label="修整评审">
+            <div className="lookup-head">
+              <strong>修整建议({repairReview.proposals.length})</strong>
+              <button
+                type="button"
+                className="chrome-button"
+                onClick={() => setRepairReview(null)}
+                title="放弃"
               >
                 <X size={12} weight="regular" aria-hidden />
               </button>
             </div>
-          ))}
-          <div className="settings-row">
-            <span className="settings-label">导入词典</span>
-            <div className="segmented">
-              <button type="button" onClick={() => void importDictionary()}>
-                选择 .ifo
+            {repairReview.proposals.length === 0 && (
+              <p className="lookup-empty">没有发现可修整的内容。</p>
+            )}
+            {repairReview.proposals.map((proposal) => (
+              <label
+                key={proposal.id}
+                className="repair-item"
+                aria-label={`应用${proposal.rule === 'hard-break' ? '合并断行' : '多余空格'}修整`}
+              >
+                <input
+                  type="checkbox"
+                  checked={repairReview.accepted.has(proposal.id)}
+                  onChange={() => toggleRepairProposal(proposal.id)}
+                />
+                <span className="repair-body">
+                  <span className="repair-rule">
+                    {proposal.rule === 'hard-break' ? '合并断行' : '多余空格'}
+                  </span>
+                  <s className="repair-before">{proposal.before.replace(/\n/g, ' ⏎ ')}</s>
+                  <span className="repair-after">{proposal.after}</span>
+                </span>
+              </label>
+            ))}
+            {repairReview.proposals.length > 0 && (
+              <button
+                type="button"
+                className="reader-error-button"
+                onClick={() => void applyAcceptedRepairs()}
+              >
+                应用已选({repairReview.accepted.size}/{repairReview.proposals.length})
+              </button>
+            )}
+          </section>
+        )}
+
+        {openPanel === 'ai' && (
+          <AiDrawer
+            selection={selection?.text ?? null}
+            contextText={aiContext}
+            sections={ragSections}
+            bookHash={book.hash}
+            title={title}
+            sourceText={sourceText}
+            onReplaceSource={async (text) => {
+              const adapter = adapterRef.current
+              if (!adapter) return
+              await adapter.replaceSource(text)
+              const source = adapter.getSourceText()
+              if (source !== null) {
+                setSourceText(source)
+                setRagSections(chapterSections(source))
+              }
+              setToc(await adapter.getTableOfContents())
+            }}
+            onClose={() => setOpenPanel(null)}
+          />
+        )}
+
+        {(openPanel === 'tts' || ttsActive) && (
+          <TtsDrawer
+            bookHash={book.hash}
+            bookTitle={title}
+            bookLanguage={bookLanguage}
+            coverUrl={ttsCoverUrl}
+            sectionLabel={sectionLabel}
+            minimized={ttsMinimized || openPanel !== 'tts'}
+            onPlayingChange={setTtsActive}
+            getSectionText={ttsGetSectionText}
+            jumpSection={ttsJumpSection}
+            onExpand={() => {
+              setTtsMinimized(false)
+              setOpenPanel('tts')
+            }}
+            onMinimize={() => setTtsMinimized(true)}
+            onClose={() => {
+              setOpenPanel((panel) => (panel === 'tts' ? null : panel))
+              setTtsMinimized(false)
+            }}
+          />
+        )}
+
+        {openPanel === 'learning' && (
+          <LearningDrawer
+            bookHash={book.hash}
+            bookTitle={title}
+            annotations={annotations}
+            getChapterText={ttsGetSectionText}
+            onClose={() => setOpenPanel(null)}
+          />
+        )}
+
+        {selection !== null && (
+          <div
+            className="selection-toolbar"
+            style={{
+              top: Math.max(12, selection.rect.top - 52),
+              left: Math.max(12, Math.min(selection.rect.left, window.innerWidth - 180)),
+            }}
+          >
+            <button type="button" onClick={() => void copySelection()} title="复制">
+              <Copy size={16} weight="regular" aria-hidden />
+            </button>
+            <button type="button" onClick={() => void addHighlight()} title="划线">
+              <Highlighter size={16} weight="regular" aria-hidden />
+            </button>
+            {selection.text.trim().length <= 40 && (
+              <button type="button" onClick={() => void runLookup()} title="查词典">
+                <BookOpen size={16} weight="regular" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
+
+        {(lookupLoading || lookup !== null) && (
+          <div
+            className="lookup-card"
+            style={{
+              top: Math.min(
+                Math.max(64, (lookup?.rect.top ?? selection?.rect.top ?? 100) - 12),
+                window.innerHeight - 260,
+              ),
+              left: Math.max(12, Math.min(lookup?.rect.left ?? 100, window.innerWidth - 320)),
+            }}
+          >
+            <div className="lookup-head">
+              <strong>{lookup?.word ?? '查询中…'}</strong>
+              <button
+                type="button"
+                className="chrome-button"
+                onClick={() => setLookup(null)}
+                title="关闭"
+              >
+                <X size={12} weight="regular" aria-hidden />
               </button>
             </div>
+            {lookupLoading && <p className="lookup-empty">查询中…</p>}
+            {lookup !== null && lookup.results.length === 0 && !lookupLoading && (
+              <p className="lookup-empty">词典中没有这个词条。</p>
+            )}
+            {lookup?.results.map((result, index) => (
+              <div key={`${result.dictName}-${index}`} className="lookup-entry">
+                <p className="lookup-dict">{result.dictName}</p>
+                {result.fields.map((field, fieldIndex) =>
+                  field.type === 'html' ? (
+                    <div
+                      key={fieldIndex}
+                      className="lookup-def"
+                      dangerouslySetInnerHTML={{
+                        __html: sanitizeDefinitionHtml(field.content, new DOMParser()),
+                      }}
+                    />
+                  ) : (
+                    <div key={fieldIndex} className="lookup-def">
+                      {field.content}
+                    </div>
+                  ),
+                )}
+              </div>
+            ))}
           </div>
-        </section>
-      )}
+        )}
 
-      {openPanel === 'display' && (
-        <section className="reader-settings reader-display" aria-label="显示设置">
-          <div className="settings-column">
-            <span className="settings-label">显示</span>
-            <div className="stats-toggles">
-              {(
-                [
-                  { key: 'progress', label: '进度条与页码' },
-                  { key: 'words', label: '字数' },
-                  { key: 'time', label: '预计时间' },
-                ] as const
-              ).map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className={`stats-toggle${statsSettings[item.key] ? ' is-on' : ''}`}
-                  role="switch"
-                  aria-checked={statsSettings[item.key]}
-                  onClick={() => {
-                    setStatsSettings((current) => {
-                      const next = { ...current, [item.key]: !current[item.key] }
-                      localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
-                      return next
-                    })
-                  }}
-                >
-                  <span className="stats-toggle-label">{item.label}</span>
-                  <span className="stats-toggle-track" aria-hidden>
-                    <span className="stats-toggle-thumb" />
-                  </span>
-                </button>
-              ))}
-            </div>
+        {notice !== null && (
+          <div
+            className={`reader-notice${notice.danger ? ' is-danger' : ''}`}
+            role={notice.danger ? 'alert' : 'status'}
+            aria-live="polite"
+          >
+            {notice.text}
           </div>
-          <div className="settings-column">
-            <span className="settings-label">翻页动画</span>
-            <div className="segmented">
-              {PAGE_TURN_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={pageTurnStyle === option.value ? 'is-active' : ''}
-                  onClick={() => {
-                    setPageTurnStyle(option.value)
-                    localStorage.setItem('deepread.reader.pageTurn', option.value)
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">方式</span>
-            <div className="segmented">
-              {VIEW_MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={viewMode === option.value ? 'is-active' : ''}
-                  onClick={() => updateLayout({ viewMode: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="ai-privacy">关闭进度条后,底部工具栏整体隐藏,阅读更沉浸。</p>
-        </section>
-      )}
+        )}
 
-      {openPanel === 'toc' && (
-        <nav className="reader-toc" aria-label="目录与搜索">
-          <div className="reader-toc-head">
-            <span>目录</span>
-            <button
-              type="button"
-              className="chrome-button"
-              onClick={() => setOpenPanel(null)}
-              title="关闭"
-            >
+        {activeAnnotation !== null && (
+          <div className="selection-toolbar annotation-toolbar">
+            <button type="button" onClick={() => void removeHighlight()} title="删除划线">
+              <Trash size={16} weight="regular" aria-hidden />
+            </button>
+            <button type="button" onClick={() => setActiveAnnotation(null)} title="关闭">
               <X size={16} weight="regular" aria-hidden />
             </button>
           </div>
-
-          <div className="reader-search">
-            <input
-              ref={searchInputRef}
-              type="search"
-              className="reader-search-input"
-              placeholder="搜索全书…"
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void runSearch()
-              }}
-            />
-            <button
-              type="button"
-              className="chrome-button"
-              onClick={() => void runSearch()}
-              title="搜索"
-            >
-              <MagnifyingGlass size={16} weight="regular" aria-hidden />
-            </button>
-          </div>
-          {searchState === 'searching' && <p className="reader-toc-empty">搜索中…</p>}
-          {searchState === 'done' && searchResults.length === 0 && (
-            <p className="reader-toc-empty">没有找到匹配的正文。</p>
-          )}
-          {searchResults.map((result) => (
-            <button
-              key={result.cfi}
-              type="button"
-              className="toc-item search-result"
-              onClick={() => goToCfi(result.cfi)}
-              title="跳转到此处"
-            >
-              {result.excerpt}
-            </button>
-          ))}
-          {searchTruncated && (
-            <p className="reader-toc-empty">
-              仅显示前 {MAX_SHOWN_SEARCH_RESULTS} 条,请细化关键词。
-            </p>
-          )}
-
-          {book.format === 'txt' && (
-            <>
-              <div className="settings-row repair-row">
-                <span className="settings-label">文本修整</span>
-                <div className="segmented">
-                  <button type="button" onClick={startRepair}>
-                    检查
-                  </button>
-                </div>
-              </div>
-              <div className="settings-row repair-row">
-                <span className="settings-label">章节重建</span>
-                <div className="segmented">
-                  <button type="button" onClick={() => setRebuildOpen((open) => !open)}>
-                    {rebuildOpen ? '收起' : '自定义'}
-                  </button>
-                </div>
-              </div>
-              {rebuildOpen && (
-                <div className="rebuild-form">
-                  <input
-                    className="ai-input"
-                    placeholder="正则,如 第\s*\d+\s*章(留空用内置规则)"
-                    value={rebuildPattern}
-                    onChange={(event) => setRebuildPattern(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void applyRebuild()
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="reader-error-button"
-                    onClick={() => void applyRebuild()}
-                  >
-                    重建
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-
-          {liveBookmarks.length > 0 && <p className="reader-section-label">书签</p>}
-          {liveBookmarks.map((bookmark) => (
-            <div key={bookmark.id} className="bookmark-row">
-              <button
-                type="button"
-                className="toc-item"
-                onClick={() => goToCfi(bookmark.cfi)}
-                title="跳转到书签"
-              >
-                {bookmark.label ?? `书签 ${bookmark.cfi.slice(0, 18)}…`}
-              </button>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => removeBookmark(bookmark.id)}
-                title="删除书签"
-              >
-                <X size={12} weight="regular" aria-hidden />
-              </button>
-            </div>
-          ))}
-
-          {toc.length === 0 && searchResults.length === 0 && liveBookmarks.length === 0 ? (
-            <p className="reader-toc-empty">这本书没有目录信息。</p>
-          ) : (
-            renderTocItems(toc, 0)
-          )}
-        </nav>
-      )}
-
-      {statsSettings.progress && (
-      <footer className="reader-bottom">
-        <input
-          type="range"
-          className="reader-slider"
-          min={0}
-          max={1000}
-          value={Math.round(progress.fraction * 1000)}
-          aria-label="阅读进度"
-          onChange={(event) => {
-            // Scrubbing only moves the thumb: a goTo per input event relayouts
-            // the whole book. The jump happens once, on release.
-            const fraction = Number(event.target.value) / 1000
-            setProgress((current) => ({ ...current, fraction }))
-            progressRef.current =
-              progressRef.current !== null ? { ...progressRef.current, fraction } : null
-          }}
-          onPointerDown={() => {
-            scrubbingRef.current = true
-          }}
-          onPointerUp={() => commitScrub()}
-          onKeyDown={() => {
-            scrubbingRef.current = true
-          }}
-          onKeyUp={() => commitScrub()}
-          onBlur={() => commitScrub()}
-        />
-        <span className="reader-arrow" aria-hidden>
-          <ArrowLeft size={14} weight="regular" />
-        </span>
-        <span className="reader-arrow" aria-hidden>
-          <ArrowRight size={14} weight="regular" />
-        </span>
-        {statsSettings.words && readingStats.chars && (
-          <button
-            type="button"
-            className="reader-count-toggle"
-            title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
-            onClick={() => {
-              setStatsSettings((current) => {
-                const next = {
-                  ...current,
-                  wordsScope: current.wordsScope === 'book' ? ('section' as const) : ('book' as const),
-                }
-                localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
-                return next
-              })
-            }}
-          >
-            {readingStats.chars}
-          </button>
         )}
-        {statsSettings.time && readingStats.time && (
-          <span className="reader-percent">{readingStats.time}</span>
-        )}
-        {statsSettings.progress && readingStats.page && (
-          <span className="reader-percent reader-percent-strong">{readingStats.page}</span>
-        )}
-      </footer>
-      )}
-
-      {repairReview !== null && (
-        <section className="repair-panel" aria-label="修整评审">
-          <div className="lookup-head">
-            <strong>修整建议({repairReview.proposals.length})</strong>
-            <button
-              type="button"
-              className="chrome-button"
-              onClick={() => setRepairReview(null)}
-              title="放弃"
-            >
-              <X size={12} weight="regular" aria-hidden />
-            </button>
-          </div>
-          {repairReview.proposals.length === 0 && (
-            <p className="lookup-empty">没有发现可修整的内容。</p>
-          )}
-          {repairReview.proposals.map((proposal) => (
-            <label
-              key={proposal.id}
-              className="repair-item"
-              aria-label={`应用${proposal.rule === 'hard-break' ? '合并断行' : '多余空格'}修整`}
-            >
-              <input
-                type="checkbox"
-                checked={repairReview.accepted.has(proposal.id)}
-                onChange={() => toggleRepairProposal(proposal.id)}
-              />
-              <span className="repair-body">
-                <span className="repair-rule">
-                  {proposal.rule === 'hard-break' ? '合并断行' : '多余空格'}
-                </span>
-                <s className="repair-before">{proposal.before.replace(/\n/g, ' ⏎ ')}</s>
-                <span className="repair-after">{proposal.after}</span>
-              </span>
-            </label>
-          ))}
-          {repairReview.proposals.length > 0 && (
-            <button
-              type="button"
-              className="reader-error-button"
-              onClick={() => void applyAcceptedRepairs()}
-            >
-              应用已选({repairReview.accepted.size}/{repairReview.proposals.length})
-            </button>
-          )}
-        </section>
-      )}
-
-      {openPanel === 'ai' && (
-        <AiDrawer
-          selection={selection?.text ?? null}
-          contextText={aiContext}
-          sections={ragSections}
-          bookHash={book.hash}
-          title={title}
-          sourceText={sourceText}
-          onReplaceSource={async (text) => {
-            const adapter = adapterRef.current
-            if (!adapter) return
-            await adapter.replaceSource(text)
-            const source = adapter.getSourceText()
-            if (source !== null) {
-              setSourceText(source)
-              setRagSections(chapterSections(source))
-            }
-            setToc(await adapter.getTableOfContents())
-          }}
-          onClose={() => setOpenPanel(null)}
-        />
-      )}
-
-      {(openPanel === 'tts' || ttsActive) && (
-        <TtsDrawer
-          bookHash={book.hash}
-          bookTitle={title}
-          bookLanguage={bookLanguage}
-          coverUrl={ttsCoverUrl}
-          sectionLabel={sectionLabel}
-          minimized={ttsMinimized || openPanel !== 'tts'}
-          onPlayingChange={setTtsActive}
-          getSectionText={ttsGetSectionText}
-          jumpSection={ttsJumpSection}
-          onExpand={() => {
-            setTtsMinimized(false)
-            setOpenPanel('tts')
-          }}
-          onMinimize={() => setTtsMinimized(true)}
-          onClose={() => {
-            setOpenPanel((panel) => (panel === 'tts' ? null : panel))
-            setTtsMinimized(false)
-          }}
-        />
-      )}
-
-      {openPanel === 'learning' && (
-        <LearningDrawer
-          bookHash={book.hash}
-          bookTitle={title}
-          annotations={annotations}
-          getChapterText={ttsGetSectionText}
-          onClose={() => setOpenPanel(null)}
-        />
-      )}
-
-      {selection !== null && (
-        <div
-          className="selection-toolbar"
-          style={{
-            top: Math.max(12, selection.rect.top - 52),
-            left: Math.max(12, Math.min(selection.rect.left, window.innerWidth - 180)),
-          }}
-        >
-          <button type="button" onClick={() => void copySelection()} title="复制">
-            <Copy size={16} weight="regular" aria-hidden />
-          </button>
-          <button type="button" onClick={() => void addHighlight()} title="划线">
-            <Highlighter size={16} weight="regular" aria-hidden />
-          </button>
-          {selection.text.trim().length <= 40 && (
-            <button type="button" onClick={() => void runLookup()} title="查词典">
-              <BookOpen size={16} weight="regular" aria-hidden />
-            </button>
-          )}
-        </div>
-      )}
-
-      {(lookupLoading || lookup !== null) && (
-        <div
-          className="lookup-card"
-          style={{
-            top: Math.min(
-              Math.max(64, (lookup?.rect.top ?? selection?.rect.top ?? 100) - 12),
-              window.innerHeight - 260,
-            ),
-            left: Math.max(12, Math.min(lookup?.rect.left ?? 100, window.innerWidth - 320)),
-          }}
-        >
-          <div className="lookup-head">
-            <strong>{lookup?.word ?? '查询中…'}</strong>
-            <button
-              type="button"
-              className="chrome-button"
-              onClick={() => setLookup(null)}
-              title="关闭"
-            >
-              <X size={12} weight="regular" aria-hidden />
-            </button>
-          </div>
-          {lookupLoading && <p className="lookup-empty">查询中…</p>}
-          {lookup !== null && lookup.results.length === 0 && !lookupLoading && (
-            <p className="lookup-empty">词典中没有这个词条。</p>
-          )}
-          {lookup?.results.map((result, index) => (
-            <div key={`${result.dictName}-${index}`} className="lookup-entry">
-              <p className="lookup-dict">{result.dictName}</p>
-              {result.fields.map((field, fieldIndex) =>
-                field.type === 'html' ? (
-                  <div
-                    key={fieldIndex}
-                    className="lookup-def"
-                    dangerouslySetInnerHTML={{
-                      __html: sanitizeDefinitionHtml(field.content, new DOMParser()),
-                    }}
-                  />
-                ) : (
-                  <div key={fieldIndex} className="lookup-def">
-                    {field.content}
-                  </div>
-                ),
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {notice !== null && (
-        <div
-          className={`reader-notice${notice.danger ? ' is-danger' : ''}`}
-          role={notice.danger ? 'alert' : 'status'}
-          aria-live="polite"
-        >
-          {notice.text}
-        </div>
-      )}
-
-      {activeAnnotation !== null && (
-        <div className="selection-toolbar annotation-toolbar">
-          <button type="button" onClick={() => void removeHighlight()} title="删除划线">
-            <Trash size={16} weight="regular" aria-hidden />
-          </button>
-          <button type="button" onClick={() => setActiveAnnotation(null)} title="关闭">
-            <X size={16} weight="regular" aria-hidden />
-          </button>
-        </div>
-      )}
-    </div>
+      </div>
     </div>
   )
 }
