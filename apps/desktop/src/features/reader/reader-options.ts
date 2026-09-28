@@ -148,6 +148,63 @@ export function persistTypography(patch: TypographySettings): void {
   cachedTypography = next
 }
 
+/* ---------- 底栏显示偏好与翻页动画(同样只落 localStorage)。 ---------- */
+
+export interface StatsSettings {
+  progress: boolean
+  words: boolean
+  time: boolean
+  wordsScope: 'section' | 'book'
+}
+
+export const DEFAULT_STATS_SETTINGS: StatsSettings = {
+  progress: true,
+  words: true,
+  time: true,
+  wordsScope: 'section',
+}
+
+const PAGE_TURN_KEY = 'deepread.reader.pageTurn'
+const STATS_KEY = 'deepread.reader.stats'
+
+/**
+ * 翻页动画偏好。存储值要按档位表校验:写成 `as PageTurnStyle` 直接信任
+ * localStorage,一旦存进去过非法值(旧版本遗留 / 手改),翻页样式就永久坏掉
+ * 且看不出原因。不认识的值一律回落默认档。
+ */
+export function loadPageTurnStyle(): PageTurnStyle {
+  const stored = localStorage.getItem(PAGE_TURN_KEY)
+  const known = PAGE_TURN_OPTIONS.some((option) => option.value === stored)
+  return known ? (stored as PageTurnStyle) : 'slide'
+}
+
+export function persistPageTurnStyle(style: PageTurnStyle): void {
+  localStorage.setItem(PAGE_TURN_KEY, style)
+}
+
+/** 底栏显示偏好。逐字段校验,坏值只丢那一项、不影响其余。 */
+export function loadStatsSettings(): StatsSettings {
+  try {
+    const stored = localStorage.getItem(STATS_KEY)
+    if (stored === null) return { ...DEFAULT_STATS_SETTINGS }
+    const parsed: unknown = JSON.parse(stored)
+    if (parsed === null || typeof parsed !== 'object') return { ...DEFAULT_STATS_SETTINGS }
+    const record = parsed as Record<string, unknown>
+    return {
+      progress: typeof record['progress'] === 'boolean' ? record['progress'] : true,
+      words: typeof record['words'] === 'boolean' ? record['words'] : true,
+      time: typeof record['time'] === 'boolean' ? record['time'] : true,
+      wordsScope: record['wordsScope'] === 'book' ? 'book' : 'section',
+    }
+  } catch {
+    return { ...DEFAULT_STATS_SETTINGS }
+  }
+}
+
+export function persistStatsSettings(next: StatsSettings): void {
+  localStorage.setItem(STATS_KEY, JSON.stringify(next))
+}
+
 /** 书籍文档的 @font-face:内置霞鹜文楷 + 用户导入字体。 */
 export function buildFontFacesCss(
   customFonts: readonly { readonly name: string; readonly path: string }[],

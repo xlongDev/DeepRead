@@ -285,6 +285,44 @@ describe('错误态', () => {
   })
 })
 
+describe('键盘事件契约', () => {
+  it('翻页键与全屏键 preventDefault,Escape 不 preventDefault', async () => {
+    // fireEvent 返回 dispatchEvent 的结果:false = 事件已被 preventDefault。
+    // Escape 故意不拦:要留给宿主自己的默认处理(原生 <dialog> 的 Esc 关闭等)。
+    await renderReader()
+    expect(fireEvent.keyDown(window, { key: 'ArrowRight' })).toBe(false)
+    expect(fireEvent.keyDown(window, { key: 'PageUp' })).toBe(false)
+    expect(fireEvent.keyDown(window, { key: 'F11' })).toBe(false)
+    expect(fireEvent.keyDown(window, { key: 'Escape' })).toBe(true)
+  })
+
+  it('未绑定的键既不拦也不动作', async () => {
+    const { adapter } = await renderReader()
+    expect(fireEvent.keyDown(window, { key: 'ArrowUp' })).toBe(true)
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+  })
+})
+
+describe('Escape 关面板', () => {
+  it('阅读态下 Escape 关闭已开的面板', async () => {
+    await renderReader()
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+  })
+
+  it('错误态下 Escape 也能关闭面板(错误态顶栏仍在,面板可开)', async () => {
+    await renderReader({ openError: new Error('书籍文件损坏') })
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+  })
+})
+
 describe('阅读动作接到内核', () => {
   it('点下一页 / 上一页分别调内核翻页', async () => {
     const { adapter } = await renderReader()

@@ -35,12 +35,7 @@ import {
 } from '@deepread/shared'
 import type { TocItem } from '@deepread/reader-core'
 import { localDayKey } from '@deepread/shared'
-import {
-  countChars,
-  estimateReadingMinutes,
-  formatCharCount,
-  formatDurationLabel,
-} from '@deepread/reader-core'
+import { countChars } from '@deepread/reader-core'
 import {
   applyRepair,
   buildIndex,
@@ -65,17 +60,24 @@ import {
   FONT_WEIGHT_OPTIONS,
   HIGHLIGHT_COLOR,
   LINE_HEIGHT_OPTIONS,
+  loadPageTurnStyle,
+  loadStatsSettings,
   loadTypography,
   PAGE_MARGIN_OPTIONS,
   PAGE_TURN_OPTIONS,
   PARAGRAPH_MARGIN_OPTIONS,
+  persistPageTurnStyle,
+  persistStatsSettings,
   persistTypography,
   READER_THEMES,
   VIEW_MODE_OPTIONS,
   withAlpha,
   type PageTurnStyle,
+  type StatsSettings,
   type ViewMode,
 } from './reader-options'
+import { buildReadingStats } from './reading-indicators'
+import { readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
 import { LearningDrawer } from './LearningDrawer'
@@ -221,30 +223,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [customFonts, setCustomFonts] = useState<readonly ReadingFont[]>([])
   const [fontBusy, setFontBusy] = useState(false)
   /** 翻页动画:滑动/覆盖/仿真/淡入。 */
-  const [pageTurnStyle, setPageTurnStyle] = useState<PageTurnStyle>(
-    () => (localStorage.getItem('deepread.reader.pageTurn') as PageTurnStyle | null) ?? 'slide',
-  )
-  const [statsSettings, setStatsSettings] = useState<{
-    progress: boolean
-    words: boolean
-    time: boolean
-    wordsScope: 'section' | 'book'
-  }>(() => {
-    try {
-      const stored = localStorage.getItem('deepread.reader.stats')
-      return stored
-        ? {
-            progress: true,
-            words: true,
-            time: true,
-            wordsScope: 'section',
-            ...(JSON.parse(stored) as object),
-          }
-        : { progress: true, words: true, time: true, wordsScope: 'section' as const }
-    } catch {
-      return { progress: true, words: true, time: true, wordsScope: 'section' as const }
-    }
-  })
+  const [pageTurnStyle, setPageTurnStyle] = useState<PageTurnStyle>(loadPageTurnStyle)
+  const [statsSettings, setStatsSettings] = useState<StatsSettings>(loadStatsSettings)
   const sectionIndexRef = useRef(0)
   /** 本章字数请求的序号:乱序返回时丢弃过期结果。 */
   const charCountTokenRef = useRef(0)
@@ -783,20 +763,25 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   // 方向键切页:window 与书内 iframe 两个入口共用同一处理。
   const handleReaderKey = useCallback(
     (event: KeyboardEvent): void => {
-      if (event.key === 'F11' || (event.key === 'f' && event.ctrlKey && event.metaKey)) {
-        event.preventDefault()
+      const action = readerKeyAction(event)
+      if (action === null) return
+      // 除全屏外,内核未就绪时不处理按键。
+      // 实测结论(别照直觉推):adapterRef 在挂载 effect 起始处就同步赋值,
+      // 开书失败只走 catch、并不清 ref,只有卸载 cleanup 才置 null。所以这条
+      // 守卫实际只在「挂载 effect 还没跑」那一瞬生效 —— error 态下 ref 非空,
+      // Escape 关面板与翻页都是通的。见 ReaderScreen.test 的「错误态下
+      // Escape 也能关闭面板」。
+      if (action !== 'fullscreen' && adapterRef.current === null) return
+      // Escape 不 preventDefault —— 原实现只在翻页分支里调用,别顺手扩大范围,
+      // 否则会挡掉宿主对 Esc 的默认处理(原生 <dialog> 的 Esc 关闭等)。
+      if (action !== 'escape') event.preventDefault()
+      if (action === 'fullscreen') {
         void toggleFullscreen()
-        return
-      }
-      const adapter = adapterRef.current
-      if (!adapter) return
-      if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
-        event.preventDefault()
+      } else if (action === 'next') {
         void turnPage('next')
-      } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
-        event.preventDefault()
+      } else if (action === 'prev') {
         void turnPage('prev')
-      } else if (event.key === 'Escape') {
+      } else {
         setOpenPanel(null)
         setSelection(null)
         setActiveAnnotation(null)
@@ -1180,49 +1165,26 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const liveBookmarks = bookmarks.filter((b) => !b.deleted)
   const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
 
-  // 页码 / 字数(本章或全书,大数用"万"单位)/ 预计剩余阅读时间。
-  // 时间用全书实测的中西文单位数加权估算(CJK ~400 字/分,西文 ~250 词/分),
-  // 对字号/边距/翻页模式不敏感;固定排版(无正文字数)退回按页估算。
-  const readingStats = useMemo(() => {
-    const location = progress.location
-    const pages =
-      location && location.total > 0 ? { current: location.current, total: location.total } : null
-    const isCjk = bookLanguage === undefined || /^(zh|ja|ko)/i.test(bookLanguage)
-    let timeLabel: string | null = null
-    if (bookCharStats !== null && bookCharStats.total > 0) {
-      const remaining = Math.min(1, Math.max(0, 1 - progress.fraction))
-      const minutes = estimateReadingMinutes(
-        bookCharStats.cjk * remaining,
-        (bookCharStats.total - bookCharStats.cjk) * remaining,
-      )
-      timeLabel = formatDurationLabel(minutes)
-    } else if (pages && progress.fraction > 0) {
-      const secondsPerPage = isCjk ? 90 : 45
-      timeLabel = formatDurationLabel(
-        Math.max(1, Math.round(((1 - progress.fraction) * pages.total * secondsPerPage) / 60)),
-      )
-    }
-    const charsLabel =
-      statsSettings.wordsScope === 'book'
-        ? bookCharStats !== null && bookCharStats.total > 0
-          ? `全书 ${formatCharCount(bookCharStats.total)} 字`
-          : null
-        : sectionChars !== null
-          ? `本章 ${sectionChars.toLocaleString('zh-Hans-CN')} 字`
-          : null
-    return {
-      page: pages ? `${pages.current} / ${pages.total} 页` : null,
-      chars: charsLabel,
-      time: timeLabel,
-    }
-  }, [
-    progress.location,
-    progress.fraction,
-    bookLanguage,
-    sectionChars,
-    bookCharStats,
-    statsSettings.wordsScope,
-  ])
+  // 页码 / 字数(本章或全书)/ 预计剩余阅读时间。算法见 reading-indicators.ts。
+  const readingStats = useMemo(
+    () =>
+      buildReadingStats({
+        location: progress.location,
+        fraction: progress.fraction,
+        bookLanguage,
+        sectionChars,
+        bookCharStats,
+        wordsScope: statsSettings.wordsScope,
+      }),
+    [
+      progress.location,
+      progress.fraction,
+      bookLanguage,
+      sectionChars,
+      bookCharStats,
+      statsSettings.wordsScope,
+    ],
+  )
 
   const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
     items.map((item) => (
@@ -1595,7 +1557,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                     onClick={() => {
                       setStatsSettings((current) => {
                         const next = { ...current, [item.key]: !current[item.key] }
-                        localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                        persistStatsSettings(next)
                         return next
                       })
                     }}
@@ -1618,7 +1580,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                     className={pageTurnStyle === option.value ? 'is-active' : ''}
                     onClick={() => {
                       setPageTurnStyle(option.value)
-                      localStorage.setItem('deepread.reader.pageTurn', option.value)
+                      persistPageTurnStyle(option.value)
                     }}
                   >
                     {option.label}
@@ -1815,7 +1777,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                       wordsScope:
                         current.wordsScope === 'book' ? ('section' as const) : ('book' as const),
                     }
-                    localStorage.setItem('deepread.reader.stats', JSON.stringify(next))
+                    persistStatsSettings(next)
                     return next
                   })
                 }}
