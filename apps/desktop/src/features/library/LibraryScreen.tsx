@@ -18,103 +18,41 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import {
-  dailySeries,
-  localDayKey,
-  readingStreak,
-  toAppError,
-  type AppInfo,
-  type LibraryBook,
-} from '@deepread/shared'
+import { dailySeries, localDayKey, readingStreak, toAppError, type AppInfo } from '@deepread/shared'
 import { extractCover, extractTitle } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
   DIALOG_EXTENSIONS,
   classifyFile,
   browserBookUrl,
-  cleanBookTitle,
   convertFileSrc,
   deleteBrowserFile,
   getBrowserFile,
   openedBookFromLibrary,
   registerBrowserFile,
-  type ImportProblem,
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
+import {
+  APP_THEMES,
+  coverPalette,
+  formatBytes,
+  formatStatDuration,
+  PROBLEM_MESSAGE,
+  shelfTitle,
+  SORT_LABELS,
+  sortFromStorage,
+  viewFromStorage,
+  type AppTheme,
+  type ShelfBook,
+  type SortKey,
+  type ViewMode,
+} from './shelf-view'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiProviderForm, useAiProviders } from '../settings/AiProviderSettings'
-
-const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {
-  unsupported: '暂时不认识这个文件格式。目前支持 EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown。',
-  chm: 'CHM 暂不支持:阅读内核(foliate-js)还没有 CHM 解析器,我们如实告诉你,而不是假装能打开。',
-}
-
-/** Muted generated-cover palettes; picked deterministically by book hash. */
-const COVER_PALETTES: readonly (readonly [string, string])[] = [
-  ['#dfe7f5', '#b9c8e8'], // indigo mist
-  ['#dcf0ea', '#aedccf'], // sage
-  ['#f7ecdb', '#eed7b3'], // sand
-  ['#fbe7df', '#f2c9bc'], // clay
-  ['#e9e4f4', '#cfc4e6'], // lavender gray
-  ['#e2eef4', '#bcd8e6'], // dusk blue
-  ['#f5e0e8', '#e8becd'], // rose
-  ['#e4efdd', '#c8e0b8'], // leaf
-]
-
-function coverPalette(hash: string): readonly [string, string] {
-  let value = 0
-  for (const char of hash) value = (value * 31 + char.charCodeAt(0)) | 0
-  return COVER_PALETTES[Math.abs(value) % COVER_PALETTES.length] ?? COVER_PALETTES[0]!
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
-
-type SortKey = 'added' | 'title' | 'size' | 'progress'
-type ViewMode = 'grid' | 'list'
-type AppTheme =
-  'pure-white' | 'warm-paper' | 'ivory' | 'soft-gray' | 'dark' | 'oled' | 'liquid-glass'
-
-const SORT_LABELS: Readonly<Record<SortKey, string>> = {
-  added: '最近添加',
-  title: '书名',
-  size: '文件大小',
-  progress: '阅读进度',
-}
-
-const APP_THEMES: readonly {
-  readonly id: AppTheme
-  readonly label: string
-  /** Mini page preview: background, ink, and accent of this world. */
-  readonly swatch: string
-  readonly ink: string
-  readonly accent: string
-}[] = [
-  { id: 'pure-white', label: '纯白', swatch: '#f6f5f2', ink: '#1d1b17', accent: '#3d6deb' },
-  { id: 'warm-paper', label: '暖纸', swatch: '#f3ecdd', ink: '#2b2620', accent: '#3d6deb' },
-  { id: 'ivory', label: '象牙', swatch: '#f8f4ea', ink: '#33302a', accent: '#3d6deb' },
-  { id: 'soft-gray', label: '浅灰', swatch: '#ebebeb', ink: '#222222', accent: '#3d6deb' },
-  { id: 'dark', label: '深色', swatch: '#131210', ink: '#ece9e3', accent: '#6e93f6' },
-  { id: 'oled', label: 'OLED 纯黑', swatch: '#000000', ink: '#e8e5df', accent: '#7d9ef7' },
-  { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec', ink: '#1c2430', accent: '#3d6deb' },
-]
-
-const sortFromStorage = (): SortKey => {
-  const stored = localStorage.getItem('deepread.shelf.sort')
-  return stored && stored in SORT_LABELS ? (stored as SortKey) : 'added'
-}
-
-const viewFromStorage = (): ViewMode => {
-  const stored = localStorage.getItem('deepread.shelf.view')
-  return stored === 'list' ? 'list' : 'grid'
-}
 
 // Module-level: survives LibraryScreen remounts (reader roundtrips) within
 // the app run. Blob URLs are per-run by nature, so no cross-restart cache.
@@ -137,25 +75,10 @@ const BULK_CONFIRM = '__bulk__'
 /** `tagFilter` sentinel: the tag dropdown needs a value for "no filter". */
 const ALL_TAGS = '__all__'
 
-/** 统计数字的紧凑格式:秒 → 分 → 小时。 */
-function formatStatDuration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)} 秒`
-  if (seconds < 3600) return `${Math.round(seconds / 60)} 分`
-  return `${(seconds / 3600).toFixed(1)} 小时`
-}
-
-/** The shelf title: the book's own metadata title once known, else cleaned file name. */
-function shelfTitle(book: LibraryBook): string {
-  return book.displayName ?? cleanBookTitle(book.fileName)
-}
-
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
   readonly backend: AppInfo | null
 }
-
-/** `library.list` already joins the reading fraction — no per-book IPC. */
-type ShelfBook = LibraryBook
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)

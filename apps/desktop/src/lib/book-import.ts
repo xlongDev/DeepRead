@@ -42,8 +42,10 @@ export function cleanBookTitle(fileName: string): string {
   const withoutExtension = fileName.replace(/\.[^.]+$/, '')
   const cleaned = withoutExtension
     // "(z-library.sk, 1lib.sk…)", "[Anna's Archive]", "- Z-Library" and friends.
+    // NB: `\]` inside the class is required — an unescaped `]` closes it and
+    // the whole bracket-noise match silently stops working.
     .replace(
-      /\s*[（([【][^）)]】]*\b(?:z-?lib\w*|1lib|libgen|dokumen|annas?)[^）)]】]*[）)]】]/gi,
+      /\s*[（([【][^）)\]】]*\b(?:z-?lib\w*|1lib|libgen|dokumen|annas?)[^）)\]】]*[）)\]】]/gi,
       '',
     )
     .replace(/[\s\-–—_]*\b(?:z-?library|z-?lib\.\w+|1lib\.\w+)\b\s*$/i, '')
