@@ -16,6 +16,20 @@ import { toAppError, type AiProviderConfig } from '@deepread/shared'
 import { splitSentences } from '@deepread/reader-core'
 import { invokeCommand } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
+import {
+  blockSeekRatio,
+  CHARS_PER_SECOND,
+  formatClock,
+  locateBlock,
+  nextRate,
+  sentenceIndexAt,
+  splitChapterBlocks,
+  totalChars as sumChars,
+  voicesForLanguage,
+  withOffsets,
+  type Block,
+  type Sentence,
+} from './tts-plan'
 
 type Engine = 'edge' | 'system' | 'cloud'
 
@@ -25,11 +39,6 @@ const ENGINE_LABELS: Readonly<Record<Engine, string>> = {
   system: '系统语音',
   cloud: '云端语音',
 }
-/** 中文语速基线:每秒约 4.2 字,用于时间估算。 */
-const CHARS_PER_SECOND = 4.2
-/** 合成块大小:约 2-4 句。小块首响快(1-3 秒),配合预取无缝衔接——
- * 参考 readest 的按句流水线,整章一次合成要等几十秒。 */
-const MAX_SYNTH_CHARS = 300
 
 const SETTINGS_KEY = 'deepread.tts.settings'
 
@@ -81,59 +90,6 @@ interface TtsDrawerProps {
 }
 
 type Phase = 'idle' | 'loading' | 'playing' | 'paused'
-
-interface Sentence {
-  readonly text: string
-  /** 全章字符起点。 */
-  readonly start: number
-}
-
-interface Block {
-  readonly text: string
-  readonly start: number
-}
-
-/** 按句边界把整章切成 ≤max 的合成块,块与块的语音首尾相接。 */
-function splitChapterBlocks(text: string, max = MAX_SYNTH_CHARS): Block[] {
-  const sentences = splitSentences(text)
-  const blocks: Block[] = []
-  let current = ''
-  let currentStart = 0
-  let cursor = 0
-  for (const sentence of sentences) {
-    if (current.length + sentence.length > max && current.length > 0) {
-      blocks.push({ text: current, start: currentStart })
-      current = sentence
-      currentStart = cursor
-    } else {
-      if (current.length === 0) currentStart = cursor
-      current += sentence
-    }
-    cursor += sentence.length
-  }
-  if (current.length > 0) blocks.push({ text: current, start: currentStart })
-  return blocks
-}
-
-/** 优先保留与书同语言的语音;同语言不足两条时回退全部。 */
-function voicesForLanguage<T extends { lang: string }>(
-  voices: readonly T[],
-  language: string | undefined,
-): readonly T[] {
-  if (!language) return voices
-  const prefix = language.slice(0, 2).toLowerCase()
-  const matched = voices.filter((voice) =>
-    voice.lang.toLowerCase().replace('_', '-').startsWith(prefix),
-  )
-  return matched.length >= 2 ? matched : voices
-}
-
-function formatClock(seconds: number): string {
-  const safe = Math.max(0, Math.round(seconds))
-  const minutes = Math.floor(safe / 60)
-  const rest = safe % 60
-  return `${minutes}:${String(rest).padStart(2, '0')}`
-}
 
 export function TtsDrawer({
   bookTitle,
@@ -384,16 +340,11 @@ export function TtsDrawer({
           const text = (await getSectionText()).trim()
           if (text === '' || text === previous) return
           previous = text
-          let sentenceCursor = 0
-          const sentenceList = splitSentences(text).map((sentence) => {
-            const entry = { text: sentence, start: sentenceCursor }
-            sentenceCursor += sentence.length
-            return entry
-          })
+          const sentenceList = withOffsets(splitSentences(text))
           sentencesRef.current = sentenceList
           setSentences(sentenceList)
           setPhase('playing')
-          const blocks = splitChapterBlocks(text)
+          const blocks = splitChapterBlocks(sentenceList)
           // 流水线:块 N 播放时后台合成块 N+1(readest 的 preload 思路)。
           // 缓存命中时预取立即返回,重听零等待。
           type Fetch = Promise<{ block: Block; path: string } | null>
@@ -416,29 +367,16 @@ export function TtsDrawer({
             return { block, path: response.path }
           }
           let prefetch: Fetch | null = null
-          const nextIndexAfter = (from: number): number => {
-            for (let i = from + 1; i < blocks.length; i++) {
-              if (blocks[i]!.start + blocks[i]!.text.length > startChar) return i
-            }
-            return -1
-          }
           // 找到起点块。
-          let cursor = -1
-          for (let i = 0; i < blocks.length; i++) {
-            if (blocks[i]!.start + blocks[i]!.text.length > startChar) {
-              cursor = i
-              break
-            }
-          }
+          let cursor = locateBlock(blocks, startChar)
           while (cursor !== -1) {
             if (stopFlagRef.current || sectionTokenRef.current !== token) return
             const block = blocks[cursor]!
-            const seekRatio =
-              block.start < startChar ? (startChar - block.start) / block.text.length : 0
+            const seekRatio = blockSeekRatio(block, startChar)
             setCharPos(Math.max(block.start, startChar))
             if (settingsRef.current.engine === 'system') {
               await speakSystemBlock(block)
-              cursor = nextIndexAfter(cursor)
+              cursor = locateBlock(blocks, block.start + block.text.length)
               continue
             }
             let attempt = 0
@@ -459,7 +397,7 @@ export function TtsDrawer({
               }
             }
             if (stopFlagRef.current || sectionTokenRef.current !== token) return
-            const next = nextIndexAfter(cursor)
+            const next = locateBlock(blocks, blocks[cursor]!.start + blocks[cursor]!.text.length)
             // 预取下一块:不等它,失败留给播放时重试。
             if (next !== -1) {
               prefetch = fetchBlock(blocks[next]!).catch(() => null)
@@ -566,20 +504,10 @@ export function TtsDrawer({
     voiceSettingsProbe.current = true
   }, [])
 
-  const totalChars = useMemo(
-    () => sentences.reduce((sum, sentence) => sum + sentence.text.length, 0),
-    [sentences],
-  )
+  const totalChars = useMemo(() => sumChars(sentences), [sentences])
 
   /** 当前句:charPos 落在哪句区间。 */
-  const sentenceIndex = useMemo(() => {
-    let index = 0
-    for (const sentence of sentences) {
-      if (sentence.start > charPos) break
-      index += 1
-    }
-    return Math.max(0, index - 1)
-  }, [sentences, charPos])
+  const sentenceIndex = useMemo(() => sentenceIndexAt(sentences, charPos), [sentences, charPos])
 
   /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
   const seekToChar = useCallback(
@@ -964,9 +892,10 @@ export function TtsDrawer({
               type="button"
               className="tts-card"
               onClick={() => {
-                const index = RATE_OPTIONS.indexOf(settings.rate as (typeof RATE_OPTIONS)[number])
-                const next = RATE_OPTIONS[(index + 1) % RATE_OPTIONS.length] ?? 1
-                setSettings((current) => ({ ...current, rate: next }))
+                setSettings((current) => ({
+                  ...current,
+                  rate: nextRate(RATE_OPTIONS, current.rate),
+                }))
               }}
             >
               <span className="tts-card-value">{settings.rate}×</span>
