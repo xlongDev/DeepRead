@@ -438,6 +438,18 @@ describe('LibraryScreen 统计页', () => {
     expect(within(page).getByText('累计')).toBeInTheDocument()
     expect(within(page).getByText('50 分')).toBeInTheDocument()
     expect(document.querySelectorAll('.stats-bar').length).toBe(7)
+
+    // 柱子按顺序错开生长(W5 的状态性动效):错开值写在 DOM 上,所以能被锁住。
+    const fills = [...document.querySelectorAll<HTMLElement>('.stats-bar-fill')]
+    expect(fills.map((fill) => fill.style.animationDelay)).toEqual([
+      '0ms',
+      '40ms',
+      '80ms',
+      '120ms',
+      '160ms',
+      '200ms',
+      '240ms',
+    ])
   })
 })
 

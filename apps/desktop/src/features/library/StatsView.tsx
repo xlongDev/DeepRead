@@ -41,7 +41,7 @@ export function StatsView({ stats, todaySeconds, series, peak }: StatsViewProps)
           <section className="modal-section">
             <p className="modal-section-label">最近 7 天</p>
             <div className="stats-chart">
-              {series.map((entry) => (
+              {series.map((entry, index) => (
                 <div
                   key={entry.day}
                   className="stats-bar"
@@ -50,7 +50,11 @@ export function StatsView({ stats, todaySeconds, series, peak }: StatsViewProps)
                   <span className="stats-bar-track">
                     <span
                       className="stats-bar-fill"
-                      style={{ height: `${Math.round((entry.seconds / peak) * 100)}%` }}
+                      style={{
+                        height: `${Math.round((entry.seconds / peak) * 100)}%`,
+                        // 从周一到周日依次长起来:一排同时弹满的柱子读不出先后。
+                        animationDelay: `${index * 40}ms`,
+                      }}
                     />
                   </span>
                   <span className="stats-bar-label">{entry.label}</span>

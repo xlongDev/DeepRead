@@ -8,7 +8,9 @@ Committed visual world for AI Reader. Token source of truth: `packages/design-sy
 - Accent: one muted indigo-blue (`--color-accent`) used only for primary actions, current selection, and focus states.
 - Radius system: interactive = pill (`--radius-full`), containers = `--radius-xl`, inner chips = `--radius-md`. Applied uniformly.
 - Shadows: soft, tinted to the warm hue, low alpha; glass panels (toolbars/panels only, never reading content) use `backdrop-filter` with a solid-surface fallback under `prefers-reduced-transparency`.
-- Motion: 150-250 ms, `--ease-out`; conveys state only (toolbar fade, panel slide, button feedback); everything collapses under `prefers-reduced-motion`.
+- Motion comes in three layers, each with one job: **structural** (view switch, panel enter — 150-400 ms via `--duration-*`), **feedback** (press/hover — `--duration-fast`), **state** (list entrance, chart growth — `--duration-slow`). If a motion can't say which layer it's in, it doesn't ship.
+- Every duration and easing comes from a token. The only exceptions are the page-turn View Transition choreography numbers (fixed ms, they are staging, not UI tempo).
+- `prefers-reduced-motion` is handled by **one global override** at the end of `global.css`, not a selector allowlist — an allowlist gets forgotten the next time someone adds an animated control.
 
 ## Type
 

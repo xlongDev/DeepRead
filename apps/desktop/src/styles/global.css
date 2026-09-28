@@ -1,8 +1,14 @@
 /*
  * Deepread — production UI layer.
  * Visual world per DESIGN.md: warm paper, one indigo accent, glass chrome,
- * Phosphor icons. Motion speaks state only, everything transforms/opacity,
- * everything collapses under prefers-reduced-motion (token durations go 0).
+ * Phosphor icons.
+ *
+ * 动效规则(W5 审计后固定下来):
+ * 1. 三层各司其职 —— 结构性(从哪来到哪去)、反馈性(操作生效了)、
+ *    状态性(内容变了)。说不出它在传达什么,就不要加。
+ * 2. 非翻页编排的时长一律走 token(`--duration-*` / `--ease-*`),不写字面量;
+ *    翻页 View Transition 的毫秒数是编排参数,单独留在原处。
+ * 3. `prefers-reduced-motion` 走全局兜底(见文件末尾),不维护选择器白名单。
  */
 
 :root {
@@ -95,6 +101,12 @@ button {
   from {
     opacity: 0;
     transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes bar-grow {
+  from {
+    height: 0;
   }
 }
 
@@ -393,7 +405,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  animation: fade-up 480ms var(--ease-emphasized) backwards;
+  animation: fade-up var(--duration-slow) var(--ease-emphasized) backwards;
 }
 
 .book-cover {
@@ -666,6 +678,14 @@ button:disabled {
 
 .card-action-icon.is-on {
   color: var(--color-accent);
+}
+
+/* 按下的反馈:图标按钮没有 hover 之外的手感,按下缩一点是最省也最通用的
+   一种"我收到了"。刻意不做收藏成功后的弹跳 —— 那要靠组件记住"刚刚收藏的
+   是哪一本",而列表每次重排都会重放一遍,比没有更吵。 */
+.card-action-icon:active svg {
+  transform: scale(0.88);
+  transition: transform var(--duration-fast) var(--ease-out);
 }
 
 .card-menu {
@@ -2286,7 +2306,7 @@ button:disabled {
 
 .book-row {
   position: relative;
-  animation: fade-up 480ms var(--ease-emphasized) backwards;
+  animation: fade-up var(--duration-slow) var(--ease-emphasized) backwards;
 }
 
 .book-row-open {
@@ -3983,23 +4003,24 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
 /* ---------- Reduced motion: collapse every choreography ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .book-card,
-  .book-row,
-  .drop-overlay,
-  .drop-overlay-card,
-  .shelf-title,
-  .ai-msg,
-  .card-back,
-  .library-header {
-    animation: none;
+  /* 全局兜底,不维护逐选择器白名单 —— 白名单一定会漏:每加一个带动画的
+     控件都得记得回来登记,而漏掉的那次没人会发现。
+     0.01ms 而不是 0:某些实现下 duration 为 0 时 animationend/transitionend
+     不再派发,靠这些事件收尾的逻辑会卡住。delay 一并归零,不让用户等。 */
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 
+  /* 装饰性的高光扫过直接不要:它没有信息量,瞬间闪一下反而更烦。 */
   .book-cover::after {
     display: none;
-  }
-
-  .reader-slider::-webkit-slider-thumb {
-    transition: none;
   }
 }
 
@@ -4166,6 +4187,9 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
     color-mix(in srgb, var(--color-accent) 55%, transparent)
   );
   transition: height var(--duration-base) var(--ease-emphasized);
+  /* 进场时长起来(React 侧给每根柱子错开 40ms):数据是"刚到"的,一排
+     瞬间弹满的柱子读不出先后。 */
+  animation: bar-grow var(--duration-slow) var(--ease-emphasized) backwards;
 }
 
 .stats-bar-label {
