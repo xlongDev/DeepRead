@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  ArrowUp,
   Check,
   CheckSquare,
   ChartLineUp,
@@ -31,6 +32,7 @@ import {
   shelfTitle,
   SORT_LABELS,
   type ShelfBook,
+  type SortDir,
   type SortKey,
   type ViewMode,
 } from './shelf-view'
@@ -45,6 +47,8 @@ export interface ShelfViewProps {
   readonly onView: (value: ViewMode) => void
   readonly sort: SortKey
   readonly onSort: (value: SortKey) => void
+  readonly sortDir: SortDir
+  readonly onToggleSortDir: () => void
   readonly tags: readonly string[]
   readonly tagFilter: string | null
   readonly onTagFilter: (value: string | null) => void
@@ -81,6 +85,8 @@ export function ShelfView({
   onView,
   sort,
   onSort,
+  sortDir,
+  onToggleSortDir,
   tags,
   tagFilter,
   onTagFilter,
@@ -262,6 +268,15 @@ export function ShelfView({
           onChange={onSort}
           className="dropdown-shelf-sort"
         />
+        <button
+          type="button"
+          className={`shelf-sort-dir${sortDir === 'desc' ? ' is-desc' : ''}`}
+          onClick={onToggleSortDir}
+          title={sortDir === 'asc' ? '升序,点击改为降序' : '降序,点击改为升序'}
+          aria-label={`切换排序方向(当前${sortDir === 'asc' ? '升序' : '降序'})`}
+        >
+          <ArrowUp size={15} weight="bold" aria-hidden />
+        </button>
         {tags.length > 0 && (
           <DropdownMenu
             ariaLabel="按标签筛选"

@@ -33,12 +33,16 @@ import {
   formatBytes,
   PROBLEM_MESSAGE,
   shelfTitle,
+  SORT_DEFAULT_DIR,
+  sortBooks,
+  sortDirFromStorage,
   sortFromStorage,
   toggleFavoriteTag,
   viewFromStorage,
   type AppTheme,
   type LibraryView,
   type ShelfBook,
+  type SortDir,
   type SortKey,
   type ViewMode,
 } from './shelf-view'
@@ -146,6 +150,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dev-only seed, mount only
   }, [])
   const [sort, setSort] = useState<SortKey>(sortFromStorage)
+  const [sortDir, setSortDir] = useState<SortDir>(() => sortDirFromStorage(SORT_DEFAULT_DIR[sort]))
   /** 书架自己的呈现方式(网格/列表);侧栏目的地是下面那个 `view`。 */
   const [shelfMode, setShelfMode] = useState<ViewMode>(viewFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -515,24 +520,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             book.fileName.toLowerCase().includes(q) || shelfTitle(book).toLowerCase().includes(q),
         )
       : books
-    const sorted = [...base]
-    switch (sort) {
-      case 'title':
-        sorted.sort((a, b) => shelfTitle(a).localeCompare(shelfTitle(b), 'zh'))
-        break
-      case 'size':
-        sorted.sort((a, b) => b.size - a.size)
-        break
-      case 'progress':
-        sorted.sort((a, b) => (b.progress ?? -1) - (a.progress ?? -1))
-        break
-      case 'added':
-      default:
-        sorted.sort((a, b) => b.addedAt.localeCompare(a.addedAt))
-        break
-    }
-    return sorted
-  }, [books, query, sort])
+    return sortBooks(base, sort, sortDir)
+  }, [books, query, sort, sortDir])
 
   // Two-step: one stray click used to drop a book plus its progress forever.
   // 待确认状态留在外壳(它和整批移出共用同一个哨兵),ShelfView 只管渲染按钮。
@@ -604,9 +593,20 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }
 
   const changeSort = (key: SortKey): void => {
+    // 换排序键时方向回到该键的自然方向,否则会出现「按书名」却从 Z 开始。
+    const nextDir = SORT_DEFAULT_DIR[key]
     setSort(key)
+    setSortDir(nextDir)
     localStorage.setItem('deepread.shelf.sort', key)
+    localStorage.setItem('deepread.shelf.sortDir', nextDir)
   }
+
+  const changeSortDir = (dir: SortDir): void => {
+    setSortDir(dir)
+    localStorage.setItem('deepread.shelf.sortDir', dir)
+  }
+
+  const toggleSortDir = (): void => changeSortDir(sortDir === 'asc' ? 'desc' : 'asc')
 
   const toggleSelectAll = (): void => {
     setSelected(
@@ -844,6 +844,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 onView={changeShelfMode}
                 sort={sort}
                 onSort={changeSort}
+                sortDir={sortDir}
+                onToggleSortDir={toggleSortDir}
                 tags={allTags}
                 tagFilter={tagFilter}
                 onTagFilter={setTagFilter}

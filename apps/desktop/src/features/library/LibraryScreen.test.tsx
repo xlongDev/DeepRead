@@ -201,6 +201,7 @@ describe('LibraryScreen 外壳契约', () => {
       '网格视图',
       '列表视图',
       '排序方式',
+      '切换排序方向(当前降序)',
       '按标签筛选',
       '阅读统计',
       '批量管理',
@@ -216,6 +217,7 @@ describe('LibraryScreen 外壳契约', () => {
       '网格视图',
       '列表视图',
       '排序方式',
+      '切换排序方向(当前降序)',
       '阅读统计',
       '批量管理',
       '导入书籍',
@@ -566,6 +568,50 @@ describe('LibraryScreen 编辑书籍信息', () => {
     await openInfo()
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByLabelText('书籍信息')).toBeNull())
+  })
+})
+
+describe('LibraryScreen 排序方向', () => {
+  /** 网格里书籍标题的当前顺序。 */
+  const order = (): readonly (string | null | undefined)[] =>
+    [...document.querySelectorAll('.book-meta-title')].map((node) => node.textContent)
+
+  it('默认按最近添加降序,点方向按钮翻成升序并记住', async () => {
+    await renderLibrary()
+    expect(order()).toEqual(['夜航书', '化雪的季节', '山中手记'])
+
+    fireEvent.click(screen.getByLabelText('切换排序方向(当前降序)'))
+    expect(order()).toEqual(['山中手记', '化雪的季节', '夜航书'])
+    expect(localStorage.getItem('deepread.shelf.sortDir')).toBe('asc')
+    expect(screen.getByLabelText('切换排序方向(当前升序)')).toBeInTheDocument()
+  })
+
+  it('换成书名时方向回到该键的自然方向,而不是沿用上一次', async () => {
+    await renderLibrary()
+    // 先手动翻成升序,再换成书名:若沿用 asc 就会是巧合,所以这里先确保
+    // 上一个键的方向与书名的自然方向不同。
+    fireEvent.click(screen.getByLabelText('切换排序方向(当前降序)'))
+    expect(localStorage.getItem('deepread.shelf.sortDir')).toBe('asc')
+
+    fireEvent.click(screen.getByLabelText('排序方式'))
+    fireEvent.click(within(screen.getByRole('menu', { name: '排序方式' })).getByText('书名'))
+
+    // 中文按拼音:化雪的季节(h)< 山中手记(s)< 夜航书(y)
+    expect(order()).toEqual(['化雪的季节', '山中手记', '夜航书'])
+    expect(screen.getByLabelText('切换排序方向(当前升序)')).toBeInTheDocument()
+  })
+
+  it('按进度排序时,未开始的书在两个方向下都沉底', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('排序方式'))
+    fireEvent.click(within(screen.getByRole('menu', { name: '排序方式' })).getByText('阅读进度'))
+
+    // 降序:读完(100%)在前,读到 42% 次之,未开始沉底
+    expect(order()).toEqual(['山中手记', '夜航书', '化雪的季节'])
+
+    fireEvent.click(screen.getByLabelText('切换排序方向(当前降序)'))
+    // 升序:42% 在前、100% 在后,但未开始的仍然沉底
+    expect(order()).toEqual(['夜航书', '山中手记', '化雪的季节'])
   })
 })
 

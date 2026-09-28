@@ -776,6 +776,37 @@ button:disabled {
   font-size: 12px;
 }
 
+.shelf-sort-dir {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.shelf-sort-dir:hover {
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-text-primary) 22%, var(--color-border));
+}
+
+/* 方向翻转本身就是反馈:一个箭头 + 旋转,比换图标少一次视觉跳动。 */
+.shelf-sort-dir svg {
+  transition: transform var(--duration-base) var(--ease-spring);
+}
+
+.shelf-sort-dir.is-desc svg {
+  transform: rotate(180deg);
+}
+
 .shelf-none {
   color: var(--color-text-tertiary);
   animation: fade-up var(--duration-base) var(--ease-out);
@@ -3930,8 +3961,13 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   .shelf-view-toggle button,
   .shelf-manage,
   .shelf-import,
+  .shelf-sort-dir,
   .dropdown-trigger {
     min-height: 40px;
+  }
+
+  .shelf-sort-dir {
+    width: 40px;
   }
 
   .selection-toolbar button,

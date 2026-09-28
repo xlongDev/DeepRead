@@ -11,7 +11,59 @@ import { cleanBookTitle, type ImportProblem } from '../../lib/book-import'
 export type ShelfBook = LibraryBook
 
 export type SortKey = 'added' | 'title' | 'size' | 'progress'
+export type SortDir = 'asc' | 'desc'
 export type ViewMode = 'grid' | 'list'
+
+/**
+ * 每种排序自己的「自然」方向:最近添加、大文件、高进度都是降序符合直觉,
+ * 书名则天然是 A→Z。换排序键时把方向重置回这个默认值,而不是沿用上一个
+ * 键的方向 —— 否则用户会看到「按书名」却从 Z 开始。
+ */
+export const SORT_DEFAULT_DIR: Readonly<Record<SortKey, SortDir>> = {
+  added: 'desc',
+  title: 'asc',
+  size: 'desc',
+  progress: 'desc',
+}
+
+/**
+ * 排序是纯计算,所以它住在这里而不是组件里 —— 组件只负责把结果渲染出来。
+ * 未开始读的书(进度为 null)在**两个方向**下都沉底:升序时把它们顶到最前
+ * 面,是把「没读过」当成了「进度最小」,那不是用户想看的。
+ */
+export function sortBooks(
+  books: readonly LibraryBook[],
+  key: SortKey,
+  dir: SortDir,
+): readonly LibraryBook[] {
+  const sign = dir === 'asc' ? 1 : -1
+  return [...books].sort((a, b) => {
+    if (key === 'progress') {
+      const left = a.progress ?? -1
+      const right = b.progress ?? -1
+      if (left < 0 || right < 0) {
+        if (left < 0 && right < 0) return 0
+        return left < 0 ? 1 : -1
+      }
+      return (left - right) * sign
+    }
+    switch (key) {
+      case 'title':
+        return shelfTitle(a).localeCompare(shelfTitle(b), 'zh') * sign
+      case 'size':
+        return (a.size - b.size) * sign
+      case 'added':
+      default:
+        return a.addedAt.localeCompare(b.addedAt) * sign
+    }
+  })
+}
+
+/** 没有存过方向时,回落到该排序键的自然方向(而不是一律降序)。 */
+export const sortDirFromStorage = (fallback: SortDir): SortDir => {
+  const stored = localStorage.getItem('deepread.shelf.sortDir')
+  return stored === 'asc' || stored === 'desc' ? stored : fallback
+}
 
 /** 侧栏/工具栏的视图分组:书架是「我的书」,笔记与统计是另外两个目的地。 */
 export type LibraryView = 'shelf' | 'notes' | 'stats'

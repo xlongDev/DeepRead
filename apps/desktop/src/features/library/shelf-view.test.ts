@@ -7,6 +7,8 @@ import {
   MAX_TAGS,
   parseTagInput,
   shelfTitle,
+  SORT_DEFAULT_DIR,
+  sortBooks,
   toggleFavoriteTag,
 } from './shelf-view'
 import type { ShelfBook } from './shelf-view'
@@ -40,6 +42,70 @@ describe('coverPalette', () => {
     expect(coverPalette('a'.repeat(64))).toEqual(first)
     expect(first).toHaveLength(2)
     expect(coverPalette('')).toHaveLength(2)
+  })
+})
+
+describe('sortBooks', () => {
+  const shelf: readonly ShelfBook[] = [
+    book({
+      hash: 'a'.repeat(64),
+      displayName: '乙书',
+      size: 300,
+      addedAt: '2026-09-02T00:00:00Z',
+      progress: 0.5,
+    }),
+    book({
+      hash: 'b'.repeat(64),
+      displayName: '甲书',
+      size: 100,
+      addedAt: '2026-09-01T00:00:00Z',
+      progress: null,
+    }),
+    book({
+      hash: 'c'.repeat(64),
+      displayName: '丙书',
+      size: 200,
+      addedAt: '2026-09-03T00:00:00Z',
+      progress: 1,
+    }),
+  ]
+  const titles = (list: readonly ShelfBook[]): readonly (string | undefined)[] =>
+    list.map((item) => shelfTitle(item))
+
+  it('按最近添加排序,两个方向互为反序', () => {
+    expect(titles(sortBooks(shelf, 'added', 'desc'))).toEqual(['丙书', '乙书', '甲书'])
+    expect(titles(sortBooks(shelf, 'added', 'asc'))).toEqual(['甲书', '乙书', '丙书'])
+  })
+
+  it('按书名用中文本地化比较(拼音,不是码位)', () => {
+    expect(titles(sortBooks(shelf, 'title', 'asc'))).toEqual(['丙书', '甲书', '乙书'])
+    expect(titles(sortBooks(shelf, 'title', 'desc'))).toEqual(['乙书', '甲书', '丙书'])
+  })
+
+  it('按大小排序', () => {
+    expect(titles(sortBooks(shelf, 'size', 'desc'))).toEqual(['乙书', '丙书', '甲书'])
+    expect(titles(sortBooks(shelf, 'size', 'asc'))).toEqual(['甲书', '丙书', '乙书'])
+  })
+
+  it('未开始读的书在两个方向下都沉底', () => {
+    // 升序把「未开始」当成进度最小顶到最前,不是用户想看的。
+    expect(titles(sortBooks(shelf, 'progress', 'asc'))).toEqual(['乙书', '丙书', '甲书'])
+    expect(titles(sortBooks(shelf, 'progress', 'desc'))).toEqual(['丙书', '乙书', '甲书'])
+  })
+
+  it('返回新数组,不改动入参顺序', () => {
+    const before = titles(shelf)
+    expect(titles(sortBooks(shelf, 'size', 'asc'))).not.toEqual(before)
+    expect(titles(shelf)).toEqual(before)
+  })
+
+  it('每个排序键都有自己的自然方向', () => {
+    expect(SORT_DEFAULT_DIR).toEqual({
+      added: 'desc',
+      title: 'asc',
+      size: 'desc',
+      progress: 'desc',
+    })
   })
 })
 
