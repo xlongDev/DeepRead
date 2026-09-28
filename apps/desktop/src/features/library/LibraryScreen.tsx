@@ -1,24 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  BookOpenText,
-  ChartLineUp,
-  Check,
-  CheckSquare,
-  Cloud,
-  Gear,
-  ListBullets,
-  MagnifyingGlass,
-  Plus,
-  Sparkle,
-  SquaresFour,
-  Trash,
-  X,
-} from '@phosphor-icons/react'
+import { BookOpenText, Cloud, Gear, Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { dailySeries, localDayKey, readingStreak, toAppError, type AppInfo } from '@deepread/shared'
+import { dailySeries, localDayKey, toAppError, type AppInfo } from '@deepread/shared'
 import { extractCover, extractTitle } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
@@ -36,22 +22,24 @@ import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
+import { LibrarySidebar } from './LibrarySidebar'
+import { NotesView } from './NotesView'
+import { ShelfView } from './ShelfView'
+import { StatsView } from './StatsView'
 import {
   APP_THEMES,
-  coverPalette,
+  BULK_CONFIRM,
   formatBytes,
-  formatStatDuration,
   PROBLEM_MESSAGE,
   shelfTitle,
-  SORT_LABELS,
   sortFromStorage,
   viewFromStorage,
   type AppTheme,
+  type LibraryView,
   type ShelfBook,
   type SortKey,
   type ViewMode,
 } from './shelf-view'
-import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiProviderForm, useAiProviders } from '../settings/AiProviderSettings'
 
 // Module-level: survives LibraryScreen remounts (reader roundtrips) within
@@ -70,10 +58,7 @@ const TITLE_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
  */
 let browserShelf: readonly ShelfBook[] = []
 
-/** `confirmRemove` sentinel for the bulk bar (per-book pending state uses a hash). */
-const BULK_CONFIRM = '__bulk__'
-/** `tagFilter` sentinel: the tag dropdown needs a value for "no filter". */
-const ALL_TAGS = '__all__'
+/** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
@@ -95,7 +80,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (!new URLSearchParams(window.location.search).has('demoShelf')) return
     if (isTauriRuntime()) return
     setLibraryLoaded(true)
-    setBooks([
+    const demo: readonly ShelfBook[] = [
       {
         hash: 'demo1',
         fileName: '化雪的季节.txt',
@@ -105,7 +90,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 382,
         addedAt: '2026-09-13T03:00:00Z',
         progress: 0.42,
-        tags: [],
+        tags: ['文学'],
       },
       {
         hash: 'demo2',
@@ -149,13 +134,18 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         size: 11_000_000,
         addedAt: '2026-09-11T08:00:00Z',
         progress: 0.77,
-        tags: [],
+        tags: ['科技'],
       },
-    ])
+    ]
+    // 必须同时写进浏览器书架的模块缓存:否则紧随其后的 loadBooks 会拿它(空数组)
+    // 覆盖掉示例书,?demoShelf 就一直是个空书架。
+    browserShelf = demo
+    setBooks(demo)
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dev-only seed, mount only
   }, [])
   const [sort, setSort] = useState<SortKey>(sortFromStorage)
-  const [view, setView] = useState<ViewMode>(viewFromStorage)
+  /** 书架自己的呈现方式(网格/列表);侧栏目的地是下面那个 `view`。 */
+  const [shelfMode, setShelfMode] = useState<ViewMode>(viewFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<'appearance' | 'ai' | 'data'>('appearance')
   const [syncOpen, setSyncOpen] = useState(false)
@@ -173,7 +163,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [tagDraft, setTagDraft] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
-  const [statsOpen, setStatsOpen] = useState(false)
+  /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
+  const [view, setView] = useState<LibraryView>('shelf')
   const [stats, setStats] = useState<ReadingStats | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
@@ -184,17 +175,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
 
-  // 设置/统计弹窗与云同步抽屉一致:Esc 关闭。
+  // 设置弹窗保持 Esc 关闭;统计已经是页面,不再需要「关掉」。
   useEffect(() => {
-    if (!settingsOpen && !statsOpen) return
+    if (!settingsOpen) return
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       setSettingsOpen(false)
-      setStatsOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen, statsOpen])
+  }, [settingsOpen])
 
   const loadBooks = useCallback(async (): Promise<void> => {
     if (!isTauriRuntime()) {
@@ -539,31 +529,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }, [books, query, sort])
 
   // Two-step: one stray click used to drop a book plus its progress forever.
-  const removeButton = (book: ShelfBook, extraClass?: string): React.JSX.Element => {
-    const pending = confirmRemove === book.hash
-    const label = shelfTitle(book)
-    return (
-      <button
-        type="button"
-        className={`book-remove${pending ? ' is-confirm' : ''}${extraClass ? ` ${extraClass}` : ''}`}
-        onClick={() => {
-          if (pending) {
-            setConfirmRemove(null)
-            void removeFromLibrary(book.hash)
-          } else {
-            setConfirmRemove(book.hash)
-          }
-        }}
-        title={pending ? '再次点击确认:进度与批注将一并移除' : '从书架移除(不删除原文件)'}
-        aria-label={pending ? `确认移除 ${label}` : `从书架移除 ${label}`}
-      >
-        {pending ? (
-          <Trash size={13} weight="fill" aria-hidden />
-        ) : (
-          <X size={13} weight="regular" aria-hidden />
-        )}
-      </button>
-    )
+  // 待确认状态留在外壳(它和整批移出共用同一个哨兵),ShelfView 只管渲染按钮。
+  const handleRemoveClick = (hash: string): void => {
+    if (confirmRemove === hash) {
+      setConfirmRemove(null)
+      void removeFromLibrary(hash)
+    } else {
+      setConfirmRemove(hash)
+    }
   }
 
   // 浏览器模式下书架列表由 books 状态镜像回模块缓存(重挂载后还在)。
@@ -571,9 +544,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (!isTauriRuntime()) browserShelf = books
   }, [books])
 
-  // 统计面板每次打开现取:数字必须是最新的,不值得缓存。
+  // 统计页每次进入现取:数字必须是最新的,不值得缓存。
   useEffect(() => {
-    if (!statsOpen) return
+    if (view !== 'stats') return
     let cancelled = false
     void loadReadingStats()
       .then((loaded) => {
@@ -585,7 +558,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     return () => {
       cancelled = true
     }
-  }, [statsOpen])
+  }, [view])
 
   const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
   const statsSeries = dailySeries(stats?.days ?? [], 7)
@@ -616,6 +589,23 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setSelecting(false)
     setSelected(new Set())
     setConfirmRemove(null)
+  }
+
+  /** 书架偏好写 localStorage:这两个选择属于用户习惯,不该每次启动都重置。 */
+  const changeShelfMode = (mode: ViewMode): void => {
+    setShelfMode(mode)
+    localStorage.setItem('deepread.shelf.view', mode)
+  }
+
+  const changeSort = (key: SortKey): void => {
+    setSort(key)
+    localStorage.setItem('deepread.shelf.sort', key)
+  }
+
+  const toggleSelectAll = (): void => {
+    setSelected(
+      selected.size === visible.length ? new Set() : new Set(visible.map((book) => book.hash)),
+    )
   }
 
   /** 标签是整组替换:桌面端落库,浏览器模式只改内存。 */
@@ -733,350 +723,100 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         </div>
       </header>
 
+      <LibrarySidebar
+        view={view}
+        onView={setView}
+        shelfCount={books.length}
+        tags={allTags}
+        activeTag={tagFilter}
+        onTag={(tag) => setTagFilter(tag)}
+        filtered={tagFilter !== null}
+      />
+
       <main className="library-main">
-        {isTauriRuntime() && !libraryLoaded ? (
-          <div className="shelf-skeleton" aria-label="书架加载中">
-            {Array.from({ length: 6 }, (_, i) => (
-              <div
-                key={i}
-                className="shelf-skeleton-card"
-                style={{ animationDelay: `${i * 60}ms` }}
+        {view === 'shelf' && (
+          <>
+            {isTauriRuntime() && !libraryLoaded ? (
+              <div className="shelf-skeleton" aria-label="书架加载中">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <div
+                    key={i}
+                    className="shelf-skeleton-card"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  />
+                ))}
+              </div>
+            ) : (
+              libraryLoaded &&
+              books.length === 0 && (
+                <section className="library-empty" aria-label="导入书籍">
+                  <button
+                    type="button"
+                    className="library-drop-button"
+                    onClick={triggerImport}
+                    aria-label="导入书籍"
+                  >
+                    <BookOpenText size={44} weight="light" aria-hidden />
+                    <span className="library-empty-title">
+                      {isTauriRuntime() ? '把书拖进窗口,或点击导入' : '导入一本书'}
+                    </span>
+                    <span className="library-empty-hint">
+                      EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
+                    </span>
+                  </button>
+                  {!isTauriRuntime() && (
+                    <p className="library-note">
+                      浏览器模式:导入的书籍只在当前会话有效;下载桌面版获得书架与进度记忆。
+                    </p>
+                  )}
+                </section>
+              )
+            )}
+
+            {libraryLoaded && books.length > 0 && (
+              <ShelfView
+                books={visible}
+                total={books.length}
+                covers={covers}
+                query={query}
+                onQuery={setQuery}
+                view={shelfMode}
+                onView={changeShelfMode}
+                sort={sort}
+                onSort={changeSort}
+                tags={allTags}
+                tagFilter={tagFilter}
+                onTagFilter={setTagFilter}
+                selecting={selecting}
+                selected={selected}
+                onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
+                onToggleSelected={toggleSelected}
+                onOpenBook={openBook}
+                onImport={triggerImport}
+                onOpenStats={() => setView('stats')}
+                confirmRemove={confirmRemove}
+                onRemoveClick={handleRemoveClick}
+                tagDraft={tagDraft}
+                onTagDraft={setTagDraft}
+                onTagSelected={() => void tagSelected()}
+                onSelectAll={toggleSelectAll}
+                onRemoveSelected={() => void removeSelected()}
+                bulkBusy={bulkBusy}
+                emptyHint={tagFilter ?? query}
               />
-            ))}
-          </div>
-        ) : (
-          libraryLoaded &&
-          books.length === 0 && (
-            <section className="library-empty" aria-label="导入书籍">
-              <button
-                type="button"
-                className="library-drop-button"
-                onClick={triggerImport}
-                aria-label="导入书籍"
-              >
-                <BookOpenText size={44} weight="light" aria-hidden />
-                <span className="library-empty-title">
-                  {isTauriRuntime() ? '把书拖进窗口,或点击导入' : '导入一本书'}
-                </span>
-                <span className="library-empty-hint">
-                  EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
-                </span>
-              </button>
-              {!isTauriRuntime() && (
-                <p className="library-note">
-                  浏览器模式:导入的书籍只在当前会话有效;下载桌面版获得书架与进度记忆。
-                </p>
-              )}
-            </section>
-          )
+            )}
+          </>
         )}
 
-        {libraryLoaded && books.length > 0 && (
-          <>
-            <div className="shelf-toolbar">
-              <h1 className="shelf-title">
-                书架 <span className="shelf-count">{books.length}</span>
-              </h1>
-              <div className="shelf-search">
-                <MagnifyingGlass size={15} weight="regular" aria-hidden />
-                <input
-                  type="search"
-                  placeholder="搜索书名…"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') setQuery('')
-                  }}
-                  aria-label="搜索书名"
-                />
-              </div>
-              <div className="shelf-view-toggle" role="toolbar" aria-label="视图切换">
-                <button
-                  type="button"
-                  className={view === 'grid' ? 'is-active' : ''}
-                  onClick={() => {
-                    setView('grid')
-                    localStorage.setItem('deepread.shelf.view', 'grid')
-                  }}
-                  title="网格视图"
-                >
-                  <SquaresFour size={15} weight="regular" aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  className={view === 'list' ? 'is-active' : ''}
-                  onClick={() => {
-                    setView('list')
-                    localStorage.setItem('deepread.shelf.view', 'list')
-                  }}
-                  title="列表视图"
-                >
-                  <ListBullets size={15} weight="regular" aria-hidden />
-                </button>
-              </div>
-              <DropdownMenu
-                ariaLabel="排序方式"
-                value={sort}
-                options={Object.entries(SORT_LABELS).map(([key, label]) => ({
-                  value: key as SortKey,
-                  label,
-                }))}
-                onChange={(next) => {
-                  setSort(next)
-                  localStorage.setItem('deepread.shelf.sort', next)
-                }}
-                className="dropdown-shelf-sort"
-              />
-              {allTags.length > 0 && (
-                <DropdownMenu
-                  ariaLabel="按标签筛选"
-                  value={tagFilter ?? ALL_TAGS}
-                  options={[
-                    { value: ALL_TAGS, label: '全部标签' },
-                    ...allTags.map((tag) => ({ value: tag, label: tag })),
-                  ]}
-                  onChange={(next) => setTagFilter(next === ALL_TAGS ? null : next)}
-                  className="dropdown-shelf-tags"
-                />
-              )}
-              <button
-                type="button"
-                className="shelf-manage"
-                onClick={() => setStatsOpen(true)}
-                title="阅读统计"
-              >
-                <ChartLineUp size={15} weight="regular" aria-hidden />
-                统计
-              </button>
-              <button
-                type="button"
-                className={`shelf-manage${selecting ? ' is-active' : ''}`}
-                onClick={() => (selecting ? exitSelection() : setSelecting(true))}
-                title={selecting ? '退出批量管理' : '批量管理'}
-                aria-pressed={selecting}
-              >
-                <CheckSquare size={15} weight={selecting ? 'fill' : 'regular'} aria-hidden />
-                {selecting ? '完成' : '管理'}
-              </button>
-              <button
-                type="button"
-                className="shelf-import"
-                onClick={triggerImport}
-                aria-label="导入书籍"
-              >
-                <Plus size={15} weight="bold" aria-hidden /> 导入
-              </button>
-            </div>
+        {view === 'notes' && <NotesView />}
 
-            {visible.length === 0 ? (
-              <p className="shelf-none">没有匹配“{tagFilter ?? query}”的书。</p>
-            ) : view === 'grid' ? (
-              <ul className="shelf-grid" aria-label="书架">
-                {visible.map((book, index) => {
-                  const palette = coverPalette(book.hash)
-                  const title = shelfTitle(book)
-                  const progress = book.progress
-                  const coverUrl = covers.get(book.hash) ?? null
-                  const isSelected = selected.has(book.hash)
-                  return (
-                    <li
-                      key={book.hash}
-                      className={`book-card${isSelected ? ' is-selected' : ''}`}
-                      style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
-                    >
-                      <button
-                        type="button"
-                        className="book-cover"
-                        style={
-                          coverUrl
-                            ? undefined
-                            : {
-                                background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
-                              }
-                        }
-                        onClick={
-                          selecting
-                            ? () => toggleSelected(book.hash)
-                            : book.format === 'unknown'
-                              ? undefined
-                              : () => openBook(book)
-                        }
-                        aria-pressed={selecting ? isSelected : undefined}
-                        title={
-                          selecting
-                            ? isSelected
-                              ? '取消选择'
-                              : '选择这本书'
-                            : book.format === 'unknown'
-                              ? '重新导入同一文件即可恢复此书的进度与批注'
-                              : `打开《${title}》`
-                        }
-                      >
-                        {book.format === 'unknown' ? (
-                          <span className="book-cover-missing">待重新导入</span>
-                        ) : coverUrl ? (
-                          <img src={coverUrl} alt="" className="book-cover-img" loading="lazy" />
-                        ) : (
-                          <>
-                            <span className="book-cover-char">{title.charAt(0)}</span>
-                            <span className="book-cover-title">{title}</span>
-                          </>
-                        )}
-                        {book.format !== 'unknown' && (
-                          <span className="book-format">{book.format.toUpperCase()}</span>
-                        )}
-                        {progress !== null && progress > 0 && (
-                          <span className="book-progress" aria-hidden>
-                            <span
-                              className="book-progress-fill"
-                              style={{ width: `${progress * 100}%` }}
-                            />
-                          </span>
-                        )}
-                        {selecting && (
-                          <span className="book-select" aria-hidden>
-                            {isSelected && <Check size={13} weight="bold" />}
-                          </span>
-                        )}
-                      </button>
-                      <div className="book-meta">
-                        <span className="book-meta-title" title={title}>
-                          {title}
-                        </span>
-                        <span className="book-meta-sub">
-                          {book.tags.length > 0 ? `${book.tags.join(' / ')} · ` : ''}
-                          {book.format === 'unknown'
-                            ? '重新导入同一文件即可恢复'
-                            : progress !== null && progress > 0
-                              ? `读到 ${Math.round(progress * 100)}% · ${formatBytes(book.size)}`
-                              : formatBytes(book.size)}
-                        </span>
-                      </div>
-                      {!selecting && removeButton(book)}
-                    </li>
-                  )
-                })}
-              </ul>
-            ) : (
-              <ul className="shelf-list" aria-label="书架">
-                {visible.map((book, index) => {
-                  const title = shelfTitle(book)
-                  const progress = book.progress
-                  const coverUrl = covers.get(book.hash) ?? null
-                  const palette = coverPalette(book.hash)
-                  const isSelected = selected.has(book.hash)
-                  return (
-                    <li
-                      key={book.hash}
-                      className={`book-row${isSelected ? ' is-selected' : ''}`}
-                      style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
-                    >
-                      <button
-                        type="button"
-                        className="book-row-open"
-                        onClick={() => (selecting ? toggleSelected(book.hash) : openBook(book))}
-                        aria-pressed={selecting ? isSelected : undefined}
-                      >
-                        {selecting && (
-                          <span
-                            className={`book-select is-inline${isSelected ? ' is-checked' : ''}`}
-                            aria-hidden
-                          >
-                            {isSelected && <Check size={12} weight="bold" />}
-                          </span>
-                        )}
-                        <span
-                          className="book-row-cover"
-                          style={
-                            coverUrl
-                              ? { backgroundImage: `url(${coverUrl})`, backgroundSize: 'cover' }
-                              : {
-                                  background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
-                                }
-                          }
-                        >
-                          {!coverUrl && <span className="book-cover-char">{title.charAt(0)}</span>}
-                        </span>
-                        <span className="book-row-main">
-                          <span className="book-row-title">{title}</span>
-                          <span className="book-row-sub">
-                            {book.format.toUpperCase()} · {formatBytes(book.size)}
-                            {progress !== null && progress > 0
-                              ? ` · 读到 ${Math.round(progress * 100)}%`
-                              : ''}
-                            {book.tags.length > 0 ? ` · ${book.tags.join(' / ')}` : ''}
-                          </span>
-                        </span>
-                        {progress !== null && progress > 0 && (
-                          <span className="book-row-progress">
-                            <span
-                              className="book-progress-fill"
-                              style={{ width: `${progress * 100}%` }}
-                            />
-                          </span>
-                        )}
-                      </button>
-                      {!selecting && removeButton(book, 'book-row-remove')}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-
-            {selecting && (
-              <div className="shelf-bulk" role="toolbar" aria-label="批量操作">
-                <span className="shelf-bulk-count">已选 {selected.size} 本</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() =>
-                    setSelected(
-                      selected.size === visible.length
-                        ? new Set()
-                        : new Set(visible.map((book) => book.hash)),
-                    )
-                  }
-                >
-                  {selected.size === visible.length ? '取消全选' : '全选'}
-                </button>
-                <input
-                  className="shelf-bulk-tag"
-                  list="deepread-tag-options"
-                  placeholder="加标签…"
-                  value={tagDraft}
-                  onChange={(event) => setTagDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') void tagSelected()
-                  }}
-                  aria-label="给选中的书加标签"
-                />
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
-                  onClick={() => void tagSelected()}
-                >
-                  打标签
-                </button>
-                <button
-                  type="button"
-                  className={`btn${confirmRemove === BULK_CONFIRM ? ' is-danger' : ''}`}
-                  disabled={bulkBusy || selected.size === 0}
-                  onClick={() => void removeSelected()}
-                >
-                  {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
-                </button>
-              </div>
-            )}
-
-            <datalist id="deepread-tag-options">
-              {allTags.map((tag) => (
-                <option key={tag} value={tag}>
-                  {tag}
-                </option>
-              ))}
-            </datalist>
-          </>
+        {view === 'stats' && (
+          <StatsView
+            stats={stats}
+            todaySeconds={todaySeconds}
+            series={statsSeries}
+            peak={statsPeak}
+          />
         )}
 
         {problem !== null && (
@@ -1297,79 +1037,6 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 完成
               </button>
             </footer>
-          </dialog>
-        </div>
-      )}
-
-      {statsOpen && (
-        <div className="modal-overlay">
-          <button
-            type="button"
-            className="modal-dismiss"
-            aria-label="关闭统计"
-            onClick={() => setStatsOpen(false)}
-          />
-          <dialog className="modal-panel" open aria-label="阅读统计">
-            <header className="modal-head">
-              <strong className="modal-title">阅读统计</strong>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => setStatsOpen(false)}
-                title="关闭"
-              >
-                <X size={14} weight="regular" aria-hidden />
-              </button>
-            </header>
-
-            {stats === null ? (
-              <p className="library-note">统计加载中…</p>
-            ) : (
-              <>
-                <div className="stats-summary">
-                  <div className="stats-tile">
-                    <span className="stats-tile-value">{formatStatDuration(todaySeconds)}</span>
-                    <span className="stats-tile-label">今日</span>
-                  </div>
-                  <div className="stats-tile">
-                    <span className="stats-tile-value">{readingStreak(stats.days)}</span>
-                    <span className="stats-tile-label">连续天数</span>
-                  </div>
-                  <div className="stats-tile">
-                    <span className="stats-tile-value">
-                      {formatStatDuration(stats.totalSeconds)}
-                    </span>
-                    <span className="stats-tile-label">累计</span>
-                  </div>
-                </div>
-
-                <section className="modal-section">
-                  <p className="modal-section-label">最近 7 天</p>
-                  <div className="stats-chart">
-                    {statsSeries.map((entry) => (
-                      <div
-                        key={entry.day}
-                        className="stats-bar"
-                        title={`${entry.day} · ${formatStatDuration(entry.seconds)}`}
-                      >
-                        <span className="stats-bar-track">
-                          <span
-                            className="stats-bar-fill"
-                            style={{
-                              height: `${Math.round((entry.seconds / statsPeak) * 100)}%`,
-                            }}
-                          />
-                        </span>
-                        <span className="stats-bar-label">{entry.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="library-note">
-                    只统计前台真正在读书的时间;累计 {formatStatDuration(stats.totalSeconds)}。
-                  </p>
-                </section>
-              </>
-            )}
           </dialog>
         </div>
       )}

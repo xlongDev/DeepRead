@@ -12,6 +12,14 @@ export type ShelfBook = LibraryBook
 
 export type SortKey = 'added' | 'title' | 'size' | 'progress'
 export type ViewMode = 'grid' | 'list'
+
+/** 侧栏/工具栏的视图分组:书架是「我的书」,笔记与统计是另外两个目的地。 */
+export type LibraryView = 'shelf' | 'notes' | 'stats'
+
+/** 标签下拉的「不筛选」哨兵值(自绘下拉需要一个真实值)。 */
+export const ALL_TAGS = '__all__'
+/** 整批移出的待确认哨兵(单本待确认用的是真实 hash)。 */
+export const BULK_CONFIRM = '__bulk__'
 export type AppTheme =
   'pure-white' | 'warm-paper' | 'ivory' | 'soft-gray' | 'dark' | 'oled' | 'liquid-glass'
 

@@ -189,8 +189,11 @@ button:disabled {
 .library {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  /* 侧栏 + 内容两列;内容列承载 header(跨列)、main(滚动)与 footer。
+     minmax(0, 1fr) 是必需的:少了它,长书名会把网格撑破。 */
+  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   background:
     radial-gradient(
       1100px 460px at 18% -8%,
@@ -199,16 +202,19 @@ button:disabled {
     ),
     radial-gradient(900px 420px at 88% -12%, rgba(255, 166, 87, 0.05), transparent 66%),
     var(--color-bg);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .library-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
   position: sticky;
   top: 0;
   z-index: 20;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  /* 左侧 88px 给 macOS 交通灯让位。 */
   padding: var(--space-md) var(--space-xl) var(--space-md) 88px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-glass);
@@ -265,7 +271,10 @@ button:disabled {
 }
 
 .library-main {
-  flex: 1;
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  overflow-y: auto;
   width: min(1240px, 100%);
   margin: 0 auto;
   padding: var(--space-xl) var(--space-xl) var(--space-xxl);
@@ -814,6 +823,8 @@ button:disabled {
 }
 
 .library-footer {
+  grid-column: 2;
+  grid-row: 3;
   display: flex;
   justify-content: center;
   gap: var(--space-xs);
@@ -821,6 +832,190 @@ button:disabled {
   color: var(--color-text-tertiary);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Library sidebar ---------- */
+
+.lib-sidebar {
+  grid-column: 1;
+  grid-row: 2 / 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-md) var(--space-sm) var(--space-md) var(--space-md);
+  border-right: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 44%, transparent);
+  animation: fade-in var(--duration-base) var(--ease-out);
+}
+
+.lib-sidebar-nav,
+.lib-sidebar-tags {
+  display: grid;
+  gap: 2px;
+}
+
+.lib-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.lib-sidebar-item:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  color: var(--color-text-primary);
+}
+
+.lib-sidebar-item[aria-current='page'] {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  box-shadow: var(--shadow-soft);
+}
+
+.lib-sidebar-item[aria-current='page'] svg {
+  color: var(--color-accent);
+}
+
+.lib-sidebar-item.is-tag[aria-pressed='true'] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.lib-sidebar-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lib-sidebar-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--space-lg) 0 var(--space-xs);
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.lib-sidebar-clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.lib-sidebar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+/* ---------- Notes & stats pages ---------- */
+
+.notes-page,
+.stats-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  /* 统计图表铺满 1240px 会变成一排宽方块;给页面一个阅读友好的上限。 */
+  max-width: 880px;
+  animation: fade-up var(--duration-base) var(--ease-out);
+}
+
+.notes-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xxl) var(--space-xl);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.notes-empty-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.notes-empty-hint {
+  max-width: 52ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+}
+
+@media (max-width: 860px) {
+  .library {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .library-header {
+    padding-left: var(--space-lg);
+  }
+
+  .lib-sidebar {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-sm);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: var(--space-sm) var(--space-md);
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .lib-sidebar-nav,
+  .lib-sidebar-tags {
+    grid-auto-flow: column;
+  }
+
+  .lib-sidebar-label {
+    display: none;
+  }
+
+  .lib-sidebar-item {
+    height: 30px;
+    white-space: nowrap;
+  }
+
+  .lib-sidebar-count {
+    margin-left: var(--space-xs);
+  }
+
+  .library-main {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .library-footer {
+    grid-column: 1;
+    grid-row: 4;
+  }
 }
 
 /* ---------- Reader ---------- */
