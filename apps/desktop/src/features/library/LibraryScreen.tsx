@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { BookOpenText, Sparkle, X } from '@phosphor-icons/react'
+import { Plus, Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
@@ -1182,27 +1182,65 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             ) : (
               libraryLoaded &&
               books.length === 0 && (
-                <section className="library-empty" aria-label="导入书籍">
-                  <button
-                    type="button"
-                    className="library-drop-button"
-                    onClick={triggerImport}
-                    aria-label="导入书籍"
-                  >
-                    <BookOpenText size={44} weight="light" aria-hidden />
-                    <span className="library-empty-title">
-                      {isTauriRuntime() ? '把书拖进窗口,或点击导入' : '导入一本书'}
-                    </span>
-                    <span className="library-empty-hint">
-                      EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown
-                    </span>
-                  </button>
-                  {!isTauriRuntime() && (
-                    <p className="library-note">
-                      浏览器模式:导入的书籍只在当前会话有效;下载桌面版获得书架与进度记忆。
+                <>
+                  {/*
+                   * 空书架也保留顶部栏 —— 页面骨架不该因为"没有书"就消失,
+                   * 那正是整页读起来像临时占位的原因。
+                   *
+                   * 但只留「标题 + 导入」:搜索、视图切换、排序、批量管理在没有
+                   * 书的时侯都没有操作对象,摆一排点不动的控件比没有更糟。
+                   */}
+                  <div className="shelf-toolbar is-empty">
+                    <h1 className="shelf-title">
+                      书架 <span className="shelf-count">0</span>
+                    </h1>
+                    <button
+                      type="button"
+                      className="shelf-import"
+                      onClick={triggerImport}
+                      aria-label="导入书籍"
+                    >
+                      <Plus size={15} weight="bold" aria-hidden />
+                      导入
+                    </button>
+                  </div>
+
+                  <section className="library-empty" aria-labelledby="library-empty-title">
+                    {/*
+                     * 空书架的视觉:一排高低厚薄不齐的空书位 + 一块书架板。
+                     * 刻意不用"巨大的虚线框"—— 那是上传区的语言,读起来像临时
+                     * 占位页;这里的隐喻是"书架在等书",和主区其余部分的语汇一致。
+                     */}
+                    <div className="empty-shelf" aria-hidden>
+                      <div className="empty-shelf-row">
+                        <span className="empty-shelf-slot" />
+                        <span className="empty-shelf-slot" />
+                        <span className="empty-shelf-slot" />
+                        <span className="empty-shelf-slot" />
+                        <span className="empty-shelf-slot" />
+                      </div>
+                      <span className="empty-shelf-board" />
+                    </div>
+
+                    <h2 className="library-empty-title" id="library-empty-title">
+                      还没有书
+                    </h2>
+                    <p className="library-empty-lead">
+                      {isTauriRuntime()
+                        ? '把书拖进窗口,或者从磁盘里挑一本开始。'
+                        : '从磁盘里挑一本开始读。'}
                     </p>
-                  )}
-                </section>
+
+                    <p className="library-empty-formats">
+                      EPUB · MOBI · AZW3 · FB2 · CBZ · PDF · TXT · Markdown
+                    </p>
+                    {!isTauriRuntime() && (
+                      <p className="library-empty-note">
+                        浏览器模式的书只在当前会话有效;桌面版才有书架与进度记忆。
+                      </p>
+                    )}
+                  </section>
+                </>
               )
             )}
 

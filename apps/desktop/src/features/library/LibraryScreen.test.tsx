@@ -349,13 +349,22 @@ describe('LibraryScreen 外壳契约', () => {
     expect(toolbarButtons()).not.toContain('按标签筛选')
   })
 
-  it('空书架显示导入引导而不是空网格', async () => {
+  it('空书架也保留顶部栏(标题 + 导入),主区是引导而不是空网格', async () => {
     await renderLibrary([])
     const empty = document.querySelector('.library-empty')
     expect(empty).not.toBeNull()
-    expect(within(empty as HTMLElement).getByRole('button')).toBeInTheDocument()
-    expect(document.querySelector('.shelf-toolbar')).toBeNull()
     expect(screen.getByText(/把书拖进窗口/)).toBeInTheDocument()
+    expect(document.querySelector('.shelf-grid')).toBeNull()
+    expect(document.querySelector('.shelf-list')).toBeNull()
+
+    // 页面骨架不该因为"没有书"就消失 —— 顶部栏还在,标题照旧。
+    const toolbar = document.querySelector('.shelf-toolbar')
+    expect(toolbar).not.toBeNull()
+    expect(toolbar!.textContent).toContain('书架')
+
+    // 但只留标题 + 导入:搜索/视图切换/排序/批量管理在空书架时没有操作对象,
+    // 摆一排点不动的控件比没有更糟。
+    expect(toolbarButtons()).toEqual(['导入书籍'])
   })
 
   it('底部状态栏如实报告本数与后端信息', async () => {

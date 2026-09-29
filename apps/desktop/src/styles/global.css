@@ -1432,53 +1432,144 @@ button:disabled {
   animation: skeleton-shimmer 1.4s var(--ease-in-out) infinite;
 }
 
-/* Empty state */
+/* ---------- Empty shelf ---------- */
+
+/*
+ * 空书架不是一个"上传页":没有虚线大框,也没有居中的大图标 —— 那两样都是
+ * 上传区的语言,读起来像还没做完的占位页。
+ *
+ * 这里用书架自己的语汇:一排高低厚薄不齐的空书位,坐落在一条书架板上;下面是
+ * 标题、一句人话、支持格式。
+ *
+ * **居中,不是左对齐。** 试过左对齐(想让它读作"页面内容"而不是"占位卡"),
+ * 但块宽 460px 而内容只占左侧三百来像素,几何中心在正中、视觉重心却明显偏左
+ * —— 看起来就是"没居中"。空状态本来就该是居中的,占位感来自虚线框,不来自居中。
+ */
 .library-empty {
   margin: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-md);
-  width: min(560px, 100%);
+  text-align: center;
+  /* 整块只做淡入 —— 具体动作交给书位(见下),两层都做位移会互相打架。 */
+  animation: fade-in var(--duration-base) var(--ease-out) backwards;
 }
 
-.library-drop-button {
+/* 五个书位站在同一条板子上:高矮厚薄都错开,像真的放过书。
+   宽度不一很重要 —— 等高等宽的方块会读成柱状图。 */
+.empty-shelf {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
-  border: 1.5px dashed color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  padding: var(--space-xxl) var(--space-xl);
-  width: 100%;
-  transition:
-    border-color var(--duration-base) var(--ease-out),
-    background var(--duration-base) var(--ease-out),
-    transform var(--duration-base) var(--ease-spring),
-    box-shadow var(--duration-base) var(--ease-out);
+  margin-bottom: var(--space-lg);
 }
 
-.library-drop-button:hover,
-.library-drop-button:focus-visible {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-  color: var(--color-text-primary);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-soft);
+.empty-shelf-row {
+  display: flex;
+  align-items: flex-end;
+  /* 书是挨着放的,不是图表里的柱子 —— 间距要小于最薄那本的厚度。 */
+  gap: 4px;
+}
+
+.empty-shelf-slot {
+  position: relative;
+  border-radius: 4px 4px 0 0;
+  /* 上深下浅:一点点体积感,像书脊受光,而不是一块死色。 */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-text-tertiary) 22%, transparent),
+    color-mix(in srgb, var(--color-text-tertiary) 9%, transparent)
+  );
+  /* 左侧一道更深的细线 = 装订/书脊的暗示。用 inset 阴影而不是 border,
+     免得把书位撑宽、破坏了刚量好的宽度差。 */
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-text-tertiary) 10%, transparent);
+  /* 依次落位:每一本从下方升起、错开 35ms。这一下是整块空状态里唯一的
+     具体动作 —— 它把"这里将要有书"说清楚,比任何文案都直接。 */
+  animation: empty-slot-rise var(--duration-base) var(--ease-emphasized) backwards;
+}
+
+/*
+ * 宽高比是关键:真实的书大约 1 : 1.5。之前用 26×76(1 : 3)那种瘦长条,
+ * 无论怎么调颜色都会被读成柱状图 —— 图表里的柱子才是那个比例。
+ * 尺寸整体比初版放大一档:视觉锚太轻,在 1000px 宽的主区里撑不住。
+ */
+.empty-shelf-slot:nth-child(1) {
+  width: 42px;
+  height: 72px;
+  animation-delay: 40ms;
+}
+
+.empty-shelf-slot:nth-child(2) {
+  width: 30px;
+  height: 62px;
+  animation-delay: 75ms;
+}
+
+.empty-shelf-slot:nth-child(3) {
+  width: 50px;
+  height: 80px;
+  animation-delay: 110ms;
+}
+
+.empty-shelf-slot:nth-child(4) {
+  width: 35px;
+  height: 68px;
+  animation-delay: 145ms;
+}
+
+.empty-shelf-slot:nth-child(5) {
+  width: 45px;
+  height: 75px;
+  animation-delay: 180ms;
+}
+
+@keyframes empty-slot-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+/* 板子比书宽出去一截:真实的书架格总比摆在上面的书长,这条"余量"是
+   它读起来像书架而不是图表的关键。它最后出现,像书先落下、板子再托住。 */
+.empty-shelf-board {
+  height: 5px;
+  margin: 0 -20px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-text-tertiary) 30%, transparent);
+  animation: fade-in var(--duration-base) var(--ease-out) 200ms backwards;
 }
 
 .library-empty-title {
-  margin-top: var(--space-sm);
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-medium);
+  margin: 0 0 var(--space-sm);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: var(--line-height-tight);
   color: var(--color-text-primary);
 }
 
-.library-empty-hint {
-  font-size: var(--font-size-sm);
+/* 一句人话 —— 空状态是说清"怎么开始",不是写说明书。 */
+.library-empty-lead {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.library-empty-formats {
+  margin: var(--space-lg) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.library-empty-note {
+  margin: var(--space-xs) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+/* 空书架的顶部栏只剩标题和导入 —— 导入顶到最右,和它有书时的位置一致
+   (那边是搜索框的 margin-left: auto 在推,这里没有搜索框,得自己来)。 */
+.shelf-toolbar.is-empty .shelf-import {
+  margin-left: auto;
 }
 
 .library-note {
