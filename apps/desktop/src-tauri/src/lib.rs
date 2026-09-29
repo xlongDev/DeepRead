@@ -107,6 +107,7 @@ pub fn run() {
             library::library_tag_set,
             library::library_cover_get,
             library::library_cover_put,
+            library::notes_export,
             dictionary::dictionary_list,
             dictionary::dictionary_register,
             dictionary::dictionary_remove,

@@ -526,7 +526,11 @@ describe('LibraryScreen 批量管理', () => {
     fireEvent.click(screen.getByTitle('批量管理'))
     fireEvent.click(within(screen.getByRole('toolbar', { name: '批量操作' })).getByText('全选'))
 
-    fireEvent.click(within(screen.getByRole('toolbar', { name: '批量操作' })).getByText('加标签'))
+    fireEvent.click(
+      within(screen.getByRole('toolbar', { name: '批量操作' })).getByRole('button', {
+        name: '加标签',
+      }),
+    )
     const popover = screen.getByRole('dialog', { name: '批量加标签' })
 
     // 常用标签:点一下即应用到所有选中的书。

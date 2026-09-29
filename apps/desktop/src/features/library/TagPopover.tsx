@@ -5,6 +5,9 @@
  * 元数据表单 —— 用户点「打标签」却看到一个书名、作者、出版社的表格,那是错的入口。
  *
  * 每次点击立即提交(不设保存按钮):标签是增量的、可撤销的,值得为它省掉一次确认。
+ *
+ * 预设标签铺满整套 `SUGGESTED_TAGS`,与批量加标签对齐 —— 一次能看到所有常用
+ * 选项,而不是只挑 6 个让人误以为"还有别的"。
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -51,7 +54,8 @@ export function TagPopover({ label, tags, onChange, onClose }: TagPopoverProps) 
     setDraft('')
   }
 
-  const suggestions = SUGGESTED_TAGS.filter((tag) => !tags.includes(tag)).slice(0, 6)
+  // 与批量对齐:全部展示,已加的隐藏(避免和"已加上"那一排视觉重复)。
+  const suggestions = SUGGESTED_TAGS.filter((tag) => !tags.includes(tag))
 
   return (
     /* 用真的 <dialog>(open,非模态)而不是 div[role=dialog]:语义自带,少一条 lint。

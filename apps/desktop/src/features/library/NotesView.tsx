@@ -13,15 +13,16 @@ import { useEffect, useRef, useState } from 'react'
 import { BookOpen, Copy, DownloadSimple, NoteBlank, PencilSimple, X } from '@phosphor-icons/react'
 import type { NoteEntry } from '@deepread/shared'
 import {
-  downloadNoteMarkdown,
   excerptPreview,
   formatNoteTime,
   groupNotesByBook,
   notesToMarkdown,
   onlyWithNotes,
+  saveNoteMarkdown,
   type NoteGroup,
 } from './notes-view'
 import { coverPalette } from './shelf-view'
+import { toAppError } from '@deepread/shared'
 
 export interface NotesViewProps {
   readonly notes: readonly NoteEntry[]
@@ -90,7 +91,14 @@ export function NotesView({
   }
 
   const exportGroup = (group: NoteGroup): void => {
-    downloadNoteMarkdown(group.title, notesToMarkdown([group]))
+    void saveNoteMarkdown(group.title, notesToMarkdown([group])).catch((cause: unknown) => {
+      // 桌面端的保存对话框被关掉 = 用户取消 = 不弹错;
+      // 只有 IPC 真的抛错才说。
+      const message = toAppError(cause).message
+      if (message !== '' && message !== 'cancelled') {
+        console.warn('导出批注失败', cause)
+      }
+    })
   }
 
   const beginEdit = (entry: NoteEntry): void =>

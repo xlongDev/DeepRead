@@ -25,6 +25,7 @@ import {
 } from '@phosphor-icons/react'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { ScrollingText } from '../../components/ScrollingText'
+import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { TagPopover } from './TagPopover'
 import {
   BULK_CONFIRM,
@@ -68,7 +69,7 @@ export interface ShelfViewProps {
   /** 批量加常用标签:点一下就把这个标签应用到所有选中的书。 */
   readonly onTagPreset: (tag: string) => void
   /** 导出这本书的批注(.md)。 */
-  readonly onExportNotes: (book: ShelfBook) => void
+  readonly onExportNotes: (book: ShelfBook) => void | Promise<void>
   readonly onImport: () => void
   /** 已进入待确认态的书籍 hash(单本移除与整批移出共用)。 */
   readonly confirmRemove: string | null
@@ -279,12 +280,19 @@ export function ShelfView({
             aria-label="搜索书名"
           />
         </div>
-        <div className="shelf-view-toggle" role="toolbar" aria-label="视图切换">
+        <SlidingIndicator
+          activeKey={view}
+          className="shelf-view-toggle"
+          role="toolbar"
+          ariaLabel="视图切换"
+          activeSelector="button.is-active"
+        >
           <button
             type="button"
             className={view === 'grid' ? 'is-active' : ''}
             onClick={() => onView('grid')}
             title="网格视图"
+            aria-pressed={view === 'grid'}
           >
             <SquaresFour size={15} weight="regular" aria-hidden />
           </button>
@@ -293,10 +301,11 @@ export function ShelfView({
             className={view === 'list' ? 'is-active' : ''}
             onClick={() => onView('list')}
             title="列表视图"
+            aria-pressed={view === 'list'}
           >
             <ListBullets size={15} weight="regular" aria-hidden />
           </button>
-        </div>
+        </SlidingIndicator>
         <DropdownMenu
           ariaLabel="排序方式"
           value={sort}
@@ -334,7 +343,11 @@ export function ShelfView({
       {books.length === 0 ? (
         <p className="shelf-none">没有匹配“{emptyHint}”的书。</p>
       ) : view === 'grid' ? (
-        <ul className="shelf-grid" aria-label="书架">
+        /* `key={view}` 不是装饰:网格和列表都是 <ul>,React 会按"同类型元素"复用
+           同一个 DOM 节点,只改 className —— li 的 key 也一样,于是整棵子树原地
+           复用、从不重新挂载,CSS 入场动画自然一次都不播(用户看到的"布局切换
+           没有动画")。换 key 强制重建,li 重新挂载,动画才会播。 */
+        <ul key={view} className="shelf-grid" aria-label="书架">
           {books.map((book, index) => {
             const palette = coverPalette(book.hash)
             const title = shelfTitle(book)
@@ -504,7 +517,7 @@ export function ShelfView({
           })}
         </ul>
       ) : (
-        <ul className="shelf-list" aria-label="书架">
+        <ul key={view} className="shelf-list" aria-label="书架">
           {books.map((book, index) => {
             const title = shelfTitle(book)
             const progress = book.progress
@@ -671,12 +684,16 @@ export function ShelfView({
                 }
               }}
             />
+            {/* 提交按钮用图标:文字在窄容器里会被压成「标」一个字(用户实际
+                看到的样子)。图标 + aria-label 既省宽度又说得清。 */}
             <button
               type="button"
+              aria-label="把标签加到所选的书"
+              title="把标签加到所选的书"
               disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
               onClick={onTagSelected}
             >
-              打标签
+              <Plus size={14} weight="bold" aria-hidden />
             </button>
           </div>
           <div className="tag-popover-suggest">

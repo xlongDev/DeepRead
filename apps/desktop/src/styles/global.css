@@ -475,6 +475,11 @@ button:disabled {
   gap: var(--space-xl) var(--space-lg);
 }
 
+/* 逐条入场。网格↔列表切换时 ul 因 `key={view}` 而重建,li 跟着重新挂载,
+   这个动画就会重播 —— 布局切换的"过程感"来自这里。
+   不用 View Transition:那条路上,拍快照的时机和 CSS 动画互相打架
+   (快照拍到 opacity: 0 的初始帧 → 过渡期间一片空白),而且同一个 root
+   快照还被阅读器翻页占着。 */
 .book-card {
   position: relative;
   display: flex;
@@ -1108,6 +1113,34 @@ button:disabled {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   color: #ffffff;
+  /* 进入批量态时圆圈从中心弹出来;checked 时背景/边框平滑过渡到 accent。
+     错开 30ms 让封面封边的蓝色 ring 先出现,圆圈再弹。 */
+  transform-origin: center;
+  animation: select-pop var(--duration-base) var(--ease-spring) backwards;
+  animation-delay: 30ms;
+  transition:
+    background var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
+}
+
+/* 勾里的 ✓ 自身弹一下:选中切换那一瞬,不要硬切。 */
+.book-select svg {
+  animation: check-pop var(--duration-base) var(--ease-spring);
+}
+
+@keyframes select-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+}
+
+@keyframes check-pop {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
 }
 
 .book-card.is-selected .book-select {
@@ -1191,19 +1224,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-/* 加标签的触发按钮(打开常用标签浮层):与相邻按钮同高,arrow 指示有弹层。 */
-.shelf-bulk [data-bulk-tag-trigger] {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.shelf-bulk-tag:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-
 /* 出版信息四栏:两列排布,窄屏一列。 */
 .book-info-grid {
   display: grid;
@@ -1254,11 +1274,17 @@ button:disabled {
 /* 卡片上的「打标签」浮层:锚在卡右下、悬浮图标栏的正下方。 */
 .tag-popover {
   position: absolute;
-  /* <dialog> 默认被 UA 居中了,inset: auto 先清干净再定位。 */
-  inset: auto 8px 52px auto;
+  /* <dialog> 默认被 UA 居中了,inset: auto 先清干净再定位。
+     水平**居中于卡片**(left: 50% + translate -50%),而不是右对齐 ——
+     13 个预设标签要 240px,右对齐会让第一列卡片的浮层伸到侧栏底下被裁掉。
+     translate 属性与 scale-pop 的 transform 是两套独立属性,不会互相覆盖。 */
+  inset: auto auto 52px 50%;
+  translate: -50% 0;
   z-index: 16;
-  /* 190px:与卡片操作菜单同宽。再宽就会越过第一列卡片、伸到侧栏底下被裁掉。 */
-  width: 190px;
+  /* 240px:13 个预设标签三行排得下。max-width 兜住窄窗口 —— 最多比卡片宽
+     48px(两侧各 24px),不会越过 .library-main 的 32px 内边距。 */
+  width: 240px;
+  max-width: calc(100% + 48px);
   margin: 0;
   padding: 10px;
   border: 1px solid var(--color-border);
@@ -1358,9 +1384,11 @@ button:disabled {
   gap: 6px;
 }
 
-/* 批量条上加标签的常用标签浮层:悬在批量条上方、水平居中。
+/* 批量条上加标签的浮层:悬在批量条上方、水平居中。
    不能放进 .shelf-bulk(它的 overflow: hidden 会裁掉),用 fixed 贴视口底。
-   <dialog> 的 UA 居中样式用 inset 清掉。 */
+   <dialog> 的 UA 居中样式用 inset 清掉。
+   与卡片上的 .tag-popover 同一套内部排版(head / input / suggest),
+   所以两处「加标签」看起来是同一个东西的两个入口。 */
 .bulk-tag-popover {
   position: fixed;
   inset: auto;
@@ -1370,16 +1398,19 @@ button:disabled {
   left: 0;
   right: 0;
   margin: 0 auto;
-  width: fit-content;
-  max-width: min(92vw, 480px);
+  /* 固定宽度而不是 fit-content:输入框是 flex:1,宽度定下来才不会被
+     标签数量牵着忽宽忽窄。420px 让 13 个预设标签排成整齐的三行。 */
+  width: min(92vw, 420px);
   z-index: 20;
-  padding: 12px 14px;
+  padding: 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   color: var(--color-text-primary);
   box-shadow: var(--shadow-floating);
-  animation: fade-up var(--duration-fast) var(--ease-out);
+  /* 从批量条的方向弹上来:位移 + spring 的小幅回弹,读作「长出来的」而不是
+     「凭空出现的」。 */
+  animation: scale-pop var(--duration-base) var(--ease-spring);
 }
 
 .shelf-skeleton {
@@ -1536,8 +1567,15 @@ button:disabled {
 
 .lib-sidebar-nav,
 .lib-sidebar-tags {
+  /* indicator 的父容器,必须 relative;grid 保持原排版。 */
+  position: relative;
   display: grid;
   gap: 2px;
+}
+
+/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。 */
+.lib-sidebar-nav .sliding-indicator {
+  border-radius: var(--radius-md);
 }
 
 .lib-sidebar-item {
@@ -1554,12 +1592,13 @@ button:disabled {
   font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
-  /* 切换选中项时让底色和文字一起"滑"过去,而不是硬切:多 2px 的左内边距
-     变化是很小的位移,但足以让人看到焦点落在哪儿。 */
+  /* 在 nav 里:背景由滑动 indicator 接管,这里只切字色 / 字重。
+     切 background 反而会和 indicator 打架。 */
+  position: relative;
+  z-index: 1;
   transition:
-    background var(--duration-base) var(--ease-emphasized),
     color var(--duration-fast) var(--ease-out),
-    padding-left var(--duration-base) var(--ease-emphasized);
+    font-weight var(--duration-fast) var(--ease-out);
 }
 
 .lib-sidebar-item:hover {
@@ -1567,24 +1606,44 @@ button:disabled {
   color: var(--color-text-primary);
 }
 
-/* 选中态用 accent 胶囊,不是白底 + 阴影 —— 白底在浅色侧栏上等于没有选中态。
-   当前页与当前筛选(aria-pressed)是同一种「你在这里」,视觉上就该同一套。 */
-.lib-sidebar-item[aria-current='page'],
-.lib-sidebar-item.is-tag[aria-pressed='true'],
-.lib-sidebar-nav > .lib-sidebar-item[aria-pressed='true'] {
+/* 激活项的背景由指示条提供,hover 时不要再叠一层灰 —— 那会让胶囊忽明忽暗。 */
+.lib-sidebar-nav .lib-sidebar-item.is-active:hover,
+.lib-sidebar-nav .lib-sidebar-item[aria-current='page']:hover,
+.lib-sidebar-nav .lib-sidebar-item[aria-pressed='true']:hover {
+  background: transparent;
+}
+
+/* nav 内(视图 + 我的分组)的高亮:背景交给 indicator,这里只换字色与字重。
+   aria-current 跟着指示条走,屏幕阅读器不会丢「当前页」。 */
+.lib-sidebar-nav .lib-sidebar-item.is-active,
+.lib-sidebar-nav .lib-sidebar-item[aria-current='page'],
+.lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] {
+  color: var(--color-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+/* nav 内的高亮项里,图标与计数也跟着走 accent 色 —— 整个胶囊看起来统一。 */
+.lib-sidebar-nav .lib-sidebar-item.is-active svg,
+.lib-sidebar-nav .lib-sidebar-item[aria-current='page'] svg,
+.lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] svg,
+.lib-sidebar-nav .lib-sidebar-item.is-active .lib-sidebar-count,
+.lib-sidebar-nav .lib-sidebar-item[aria-current='page'] .lib-sidebar-count,
+.lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] .lib-sidebar-count {
+  color: var(--color-accent);
+}
+
+/* 标签组的 chip 不在 nav 里,且项数随用户而变 —— 不画 indicator,
+   高亮继续走按钮自己的背景。这样动效与「分组」一致:分组里滑过去,标签
+   里就是直接亮。 */
+.lib-sidebar-item.is-tag[aria-pressed='true'] {
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
-  padding-left: 12px;
 }
 
-.lib-sidebar-item[aria-current='page'] svg,
-.lib-sidebar-item[aria-pressed='true'] svg {
+.lib-sidebar-item.is-tag[aria-pressed='true'] svg,
+.lib-sidebar-item.is-tag[aria-pressed='true'] .lib-sidebar-count {
   color: var(--color-accent);
-}
-
-.lib-sidebar-item[aria-current='page'] .lib-sidebar-count {
-  color: color-mix(in srgb, var(--color-accent) 78%, transparent);
 }
 
 .lib-sidebar-count {
@@ -2849,7 +2908,43 @@ button:disabled {
 
 /* ---------- Shelf view toggle / sort / list view ---------- */
 
+/*
+ * 滑动指示条:SegmentedControl 同款。父级容器需 position: relative;父级
+ * 子项需要 position: relative + z-index 让指示条躲在按钮下面。
+ *
+ * 几何(left/top/width/height)全部由组件从 DOM 量出来后写在 inline style 上,
+ * 这里只负责"怎么动" —— 横向分段控件只横移,侧栏纵向列表纵移 + 高度跟着变,
+ * 同一套过渡两种都能覆盖。spring easing 让它过冲再回位,读作"滑到位"。
+ */
+.sliding-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-soft);
+  pointer-events: none;
+  z-index: 0;
+  /* 测量前不写几何样式(组件留空),所以不会出现"先在角落闪一下再滑到位"。 */
+  width: 0;
+  height: 0;
+  transition:
+    transform var(--duration-base) var(--ease-spring),
+    width var(--duration-base) var(--ease-spring),
+    height var(--duration-base) var(--ease-spring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 全局 token 兜底会把时长压到 0,这里显式换掉 spring 让它仍然移动但不弹。 */
+  .sliding-indicator {
+    transition:
+      transform var(--duration-fast) linear,
+      width var(--duration-fast) linear,
+      height var(--duration-fast) linear;
+  }
+}
+
 .shelf-view-toggle {
+  position: relative;
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -2870,6 +2965,10 @@ button:disabled {
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
+  /* 指示条在按钮之下、压住背景,所以按钮自己永远透明 —— 颜色由父级的
+     .is-active 状态控制,避免两层颜色叠加。 */
+  position: relative;
+  z-index: 1;
 }
 
 .shelf-view-toggle button:hover:not(:disabled) {
@@ -2877,7 +2976,6 @@ button:disabled {
 }
 
 .shelf-view-toggle button.is-active {
-  background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
@@ -2905,6 +3003,7 @@ button:disabled {
   gap: 6px;
 }
 
+/* 与 .book-card 同一套逐条入场 —— 列表行也因 `key={view}` 而重新挂载。 */
 .book-row {
   position: relative;
   animation: fade-up var(--duration-slow) var(--ease-emphasized) backwards;
@@ -4501,6 +4600,8 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
 /* ---------- Settings modal: 分区 tabs ---------- */
 
 .settings-tabs {
+  /* indicator 容器 */
+  position: relative;
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -4523,6 +4624,12 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   padding: 7px 10px;
   cursor: pointer;
   white-space: nowrap;
+  /* 跟指示条叠层:按钮在上,不被 indicator 挡。 */
+  position: relative;
+  z-index: 1;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    font-weight var(--duration-fast) var(--ease-out);
 }
 
 .settings-tabs button:hover:not(.is-active) {
@@ -4530,10 +4637,48 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
 }
 
 .settings-tabs button.is-active {
-  background: var(--color-surface);
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
-  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
+}
+
+/*
+ * 设置分区的内容页。
+ *
+ * 换页时新的一页从行进方向滑进来 + 淡入,读作"翻了一页";方向由 tab 的左右
+ * 相对位置决定(data-dir),不是每次都由同一个方向进来。
+ *
+ * **只动新页**、旧页直接卸载:三个分区的高度差很大(外观短、AI 服务长),把
+ * 它们叠在一起做交叉淡入的话,容器会被撑到最高那一页,切到短页时下面一大片
+ * 空白。.modal-panel 的 max-height 就是为单页高度设计的。
+ *
+ * 这层包裹也接手了原来 section 之间的间距 —— 它们不再是 .modal-panel 的
+ * 直接子元素,拿不到那边的 gap。
+ */
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 0;
+  animation: settings-page-in var(--duration-base) var(--ease-emphasized) both;
+}
+
+.settings-body[data-dir='back'] {
+  animation-name: settings-page-in-back;
+}
+
+/* 26px 的横向位移 + 淡入:再大就会读成"内容飞出容器",而不是翻页。 */
+@keyframes settings-page-in {
+  from {
+    opacity: 0;
+    transform: translateX(26px);
+  }
+}
+
+@keyframes settings-page-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-26px);
+  }
 }
 
 .modal-foot {

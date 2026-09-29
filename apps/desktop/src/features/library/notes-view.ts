@@ -99,8 +99,10 @@ export function safeFileName(title: string): string {
 }
 
 /**
- * 把 Markdown 落成 .md 下载。Blob + a[download] —— 与阅读器导出 SVG 同一条路,
- * 桌面端/web 端行为一致;真正「存到任意路径」要装 fs 插件,那是一档单独的事。
+ * 把 Markdown 落成 .md 下载。Blob + a[download] —— 浏览器预览用。
+ *
+ * ⚠️ 桌面端不要走这条:WebView 默认拦截 `<a download>`,用户点了什么都不会
+ * 发生(这正是「导出图标没反应」的根因)。桌面端走 `saveNoteMarkdown`。
  */
 export function downloadNoteMarkdown(title: string, markdown: string): void {
   const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
@@ -110,4 +112,24 @@ export function downloadNoteMarkdown(title: string, markdown: string): void {
   anchor.download = `${safeFileName(title)}-批注.md`
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+/**
+ * 导出批注:桌面端弹系统保存对话框、由 Rust 写文件;浏览器预览回退到 Blob 下载。
+ *
+ * 返回 `true` 表示已落盘(或已触发下载),`false` 表示用户在保存对话框里取消了。
+ *
+ * 环境判断内联而不是调 `isTauriRuntime()`:那要从 `lib/ipc` 静态引入
+ * `@tauri-apps/api/core`,而这个模块的纯函数是单独测的,不该被拖上 Tauri 依赖。
+ * 判断本身也只读一个全局标记。
+ */
+export async function saveNoteMarkdown(title: string, markdown: string): Promise<boolean> {
+  const defaultName = `${safeFileName(title)}-批注`
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+    downloadNoteMarkdown(title, markdown)
+    return true
+  }
+  const { invokeCommand } = await import('../../lib/ipc')
+  const response = await invokeCommand('notes.export', { markdown, defaultName })
+  return response.path !== null
 }

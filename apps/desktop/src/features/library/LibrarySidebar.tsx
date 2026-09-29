@@ -11,6 +11,7 @@
 
 import { BookOpenText, ChartLineUp, Cloud, Gear, NoteBlank } from '@phosphor-icons/react'
 import { isTauriRuntime } from '../../lib/ipc'
+import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { coverPalette, SMART_FILTERS, type LibraryView, type SmartFilter } from './shelf-view'
 
 /**
@@ -112,10 +113,16 @@ export function LibrarySidebar({
           </button>
         )}
       </div>
-      <nav className="lib-sidebar-nav" aria-label="视图">
+      <SlidingIndicator
+        as="nav"
+        activeKey={view}
+        className="lib-sidebar-nav"
+        ariaLabel="视图"
+        activeSelector="button.is-active"
+      >
         <button
           type="button"
-          className="lib-sidebar-item"
+          className={`lib-sidebar-item${view === 'shelf' ? ' is-active' : ''}`}
           aria-current={view === 'shelf' ? 'page' : undefined}
           onClick={() => onView('shelf')}
         >
@@ -125,7 +132,7 @@ export function LibrarySidebar({
         </button>
         <button
           type="button"
-          className="lib-sidebar-item"
+          className={`lib-sidebar-item${view === 'notes' ? ' is-active' : ''}`}
           aria-current={view === 'notes' ? 'page' : undefined}
           onClick={() => onView('notes')}
         >
@@ -135,33 +142,34 @@ export function LibrarySidebar({
         </button>
         <button
           type="button"
-          className="lib-sidebar-item"
+          className={`lib-sidebar-item${view === 'stats' ? ' is-active' : ''}`}
           aria-current={view === 'stats' ? 'page' : undefined}
           onClick={() => onView('stats')}
         >
           <ChartLineUp size={16} weight="regular" aria-hidden />
           统计
         </button>
-      </nav>
+      </SlidingIndicator>
 
       <p className="lib-sidebar-label">我的分组</p>
-      <div className="lib-sidebar-nav">
-        {SMART_FILTERS.map((filter) => {
-          const active = filter.id === smartFilter
-          return (
-            <button
-              key={filter.id}
-              type="button"
-              className="lib-sidebar-item"
-              aria-pressed={active}
-              onClick={() => onSmartFilter(filter.id)}
-            >
-              {filter.label}
-              <span className="lib-sidebar-count">{smartCounts[filter.id]}</span>
-            </button>
-          )
-        })}
-      </div>
+      <SlidingIndicator
+        activeKey={smartFilter}
+        className="lib-sidebar-nav"
+        activeSelector="button.is-active"
+      >
+        {SMART_FILTERS.map((filter) => (
+          <button
+            key={filter.id}
+            type="button"
+            className={`lib-sidebar-item${filter.id === smartFilter ? ' is-active' : ''}`}
+            aria-pressed={filter.id === smartFilter}
+            onClick={() => onSmartFilter(filter.id)}
+          >
+            {filter.label}
+            <span className="lib-sidebar-count">{smartCounts[filter.id]}</span>
+          </button>
+        ))}
+      </SlidingIndicator>
 
       {tags.length > 0 && (
         <>

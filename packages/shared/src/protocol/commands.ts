@@ -28,6 +28,7 @@ export const COMMAND = {
   readerNoteUpdate: 'reader.note.update',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
+  notesExport: 'notes.export',
   dictionaryList: 'dictionary.list',
   dictionaryRegister: 'dictionary.register',
   dictionaryRemove: 'dictionary.remove',
@@ -280,6 +281,21 @@ export interface LibraryCoverPutRequest {
 
 export interface LibraryCoverPutResponse {
   readonly path: string
+}
+
+/**
+ * 导出批注到本地 Markdown。桌面端 WebView 会拦截 `<a download>`,所以落盘
+ * 必须走系统保存对话框 + Rust 写文件 —— 这条命令就是那个入口。
+ */
+export interface NotesExportRequest {
+  readonly markdown: string
+  /** 保存对话框的默认文件名(不含 `.md`)。 */
+  readonly defaultName: string
+}
+
+export interface NotesExportResponse {
+  /** 用户最终选定的绝对路径;null = 用户取消了对话框。 */
+  readonly path: string | null
 }
 
 /** A registered StarDict dictionary (files stay at their original location). */
@@ -753,6 +769,10 @@ export interface CommandMap {
     readonly request: LibraryCoverPutRequest
     readonly response: LibraryCoverPutResponse
   }
+  [COMMAND.notesExport]: {
+    readonly request: NotesExportRequest
+    readonly response: NotesExportResponse
+  }
   [COMMAND.dictionaryList]: {
     readonly request: undefined
     readonly response: DictionaryListResponse
@@ -1045,6 +1065,12 @@ export const libraryCoverPutRequestSchema = z.object({
   data: z.string().min(1).max(12_000_000),
 })
 export const libraryCoverPutResponseSchema = z.object({ path: z.string().min(1).max(4096) })
+export const notesExportRequestSchema = z.object({
+  // 20 MB 上限:一整套批注的 Markdown 远小于它,留出余量防超大输入。
+  markdown: z.string().max(20_000_000),
+  defaultName: z.string().max(200),
+})
+export const notesExportResponseSchema = z.object({ path: z.string().max(4096).nullable() })
 
 const dictionaryMetaSchema = z.object({
   id: z.string().min(8).max(64),
@@ -1330,6 +1356,7 @@ export const responseValidators: {
   [COMMAND.readerNoteUpdate]: readerNoteUpdateResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
+  [COMMAND.notesExport]: notesExportResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
   [COMMAND.dictionaryRegister]: dictionaryRegisterResponseSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveResponseSchema,
@@ -1385,6 +1412,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.readerNoteUpdate]: readerNoteUpdateRequestSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
+  [COMMAND.notesExport]: notesExportRequestSchema,
   [COMMAND.dictionaryList]: undefined,
   [COMMAND.dictionaryRegister]: dictionaryRegisterRequestSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveRequestSchema,

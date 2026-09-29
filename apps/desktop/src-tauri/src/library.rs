@@ -667,6 +667,58 @@ pub fn library_info_set(
     })
 }
 
+/// 把批注写到本地 Markdown:桌面端走系统保存对话框,而不是浏览器 Blob
+/// 下载 —— WebView 默认会拦截 `<a download>`,用户点了什么都不会发生。
+/// 内容在 Rust 里 UTF-8 落盘,前端拿到 `path`/`cancelled` 之一。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotesExportRequest {
+    /// 完整 Markdown 文本,UTF-8。
+    pub markdown: String,
+    /// 系统保存对话框的默认文件名(不含扩展名也接受,我们会拼上 `.md`)。
+    pub default_name: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesExportResponse {
+    /// 用户最终选定的绝对路径;`null` = 用户取消了对话框。
+    pub path: Option<String>,
+}
+
+#[tauri::command(rename = "notes.export")]
+pub async fn notes_export<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: NotesExportRequest,
+) -> Result<NotesExportResponse, AppError> {
+    use tauri_plugin_dialog::DialogExt;
+    // 默认名兜底:用户也可能传空串过来。
+    let name = if request.default_name.trim().is_empty() {
+        "批注".to_string()
+    } else {
+        request.default_name.trim().to_string()
+    };
+    let path = app
+        .dialog()
+        .file()
+        .set_title("导出批注")
+        .set_file_name(&format!("{name}.md"))
+        .add_filter("Markdown", &["md"])
+        .blocking_save_file();
+    let Some(file_path) = path else {
+        return Ok(NotesExportResponse { path: None });
+    };
+    let target = file_path
+        .into_path()
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "invalid save path").with_cause(err))?;
+    std::fs::write(&target, request.markdown.as_bytes()).map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to write markdown").with_cause(err)
+    })?;
+    Ok(NotesExportResponse {
+        path: Some(target.to_string_lossy().to_string()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

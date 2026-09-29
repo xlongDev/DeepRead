@@ -28,13 +28,14 @@ import {
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadNotes } from '../../lib/notes'
-import { downloadNoteMarkdown, notesToMarkdown } from './notes-view'
+import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
 import { NotesView } from './NotesView'
 import { ShelfView } from './ShelfView'
+import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
@@ -98,6 +99,10 @@ function withViewTransition(apply: () => void): void {
     flushSync(apply)
   })
 }
+
+/** 设置弹窗的三个分区。顺序即左右位置,切换动画的方向由它推出来。 */
+const SETTINGS_TABS = ['appearance', 'ai', 'data'] as const
+type SettingsTab = (typeof SETTINGS_TABS)[number]
 
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
@@ -207,7 +212,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   /** 书架自己的呈现方式(网格/列表);侧栏目的地是下面那个 `view`。 */
   const [shelfMode, setShelfMode] = useState<ViewMode>(viewFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'ai' | 'data'>('appearance')
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance')
+  /**
+   * 切分区时的行进方向。往右切(外观→AI→备份)= 新的一页从右边进来,
+   * 往左切则相反 —— 方向感来自 tab 在 SETTINGS_TABS 里的相对位置。
+   */
+  const [settingsDir, setSettingsDir] = useState<'forward' | 'back'>('forward')
   const [syncOpen, setSyncOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
   const [appTheme, setAppTheme] = useState<AppTheme>(
@@ -247,6 +257,19 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const changeView = (next: LibraryView): void => {
     withViewTransition(() => setView(next))
   }
+
+  /**
+   * 切设置分区:先定方向,再换页。动画落在 `.settings-body` 上 ——
+   * `key={settingsTab}` 让它随分区重建,动画因此每次都重播。
+   */
+  const changeSettingsTab = (next: SettingsTab): void => {
+    if (next === settingsTab) return
+    setSettingsDir(
+      SETTINGS_TABS.indexOf(next) > SETTINGS_TABS.indexOf(settingsTab) ? 'forward' : 'back',
+    )
+    setSettingsTab(next)
+  }
+
   const [stats, setStats] = useState<ReadingStats | null>(null)
   /** 每本书累计读了多少(排行榜)。 */
   const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
@@ -661,14 +684,21 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (!isTauriRuntime()) browserShelf = books
   }, [books])
 
-  /** 有批注的书:卡片上的「导出批注」图标据此禁用。 */
-  /** 卡片悬浮的「导出批注」:只导这一本,落成 .md 下载。 */
-  const exportBookNotes = (book: ShelfBook): void => {
+  /**
+   * 卡片悬浮的「导出批注」:只导这一本。
+   * 桌面端弹系统保存对话框(Rust 写盘),浏览器预览落成 .md 下载 ——
+   * WebView 会拦截 `<a download>`,所以不能只靠 Blob。
+   */
+  const exportBookNotes = async (book: ShelfBook): Promise<void> => {
     const bookNotes = notes.filter((entry) => entry.bookHash === book.hash)
-    downloadNoteMarkdown(
-      shelfTitle(book),
-      notesToMarkdown([{ bookHash: book.hash, title: shelfTitle(book), notes: bookNotes }]),
-    )
+    try {
+      await saveNoteMarkdown(
+        shelfTitle(book),
+        notesToMarkdown([{ bookHash: book.hash, title: shelfTitle(book), notes: bookNotes }]),
+      )
+    } catch (cause) {
+      setProblem(toAppError(cause).message || '导出批注失败')
+    }
   }
 
   /**
@@ -817,14 +847,16 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
    * 点空白处退出批量管理。
    *
    * 监听挂在 document 上,而不是给 <main> 挂 onClick —— 那是非交互元素,既过不了
-   * a11y 规则,也会把"点卡片切换选中"一起吃掉。卡片、工具条、批量条、弹窗都排除。
+   * a11y 规则,也会把"点卡片切换选中"一起吃掉。卡片、工具条、批量条、弹窗、标签
+   * 浮层都排除(标签浮层里的输入框/按钮必须留着焦点)。
    */
   useEffect(() => {
     if (!selecting) return
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target
       if (!(target instanceof HTMLElement)) return
-      const inside = '.book-card, .book-row, .shelf-bulk, .shelf-toolbar, .modal-panel'
+      const inside =
+        '.book-card, .book-row, .shelf-bulk, .shelf-toolbar, .modal-panel, .bulk-tag-popover, .tag-popover'
       if (target.closest(inside) !== null) return
       exitSelection()
     }
@@ -832,12 +864,17 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [selecting])
 
-  /** 书架偏好写 localStorage:这两个选择属于用户习惯,不该每次启动都重置。 */
+  /**
+   * 书架偏好写 localStorage:这两个选择属于用户习惯,不该每次启动都重置。
+   *
+   * 网格↔列表**不走 View Transition**:VT 拍的是整棵 root 的静态快照,滑动指示条
+   * 也被拍进去 —— 新旧快照各带一个指示条、交叉淡入时两个位置同时出现,就是
+   * 用户看到的"多闪一下"。布局切换的过渡改由 CSS 入场动画承担(见 .book-card
+   * 的 fade-up,ul 上的 `key={view}` 保证它每次都会重播)。
+   */
   const changeShelfMode = (mode: ViewMode): void => {
-    withViewTransition(() => {
-      setShelfMode(mode)
-      localStorage.setItem('deepread.shelf.view', mode)
-    })
+    setShelfMode(mode)
+    localStorage.setItem('deepread.shelf.view', mode)
   }
 
   const changeSort = (key: SortKey): void => {
@@ -1296,163 +1333,184 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 <X size={14} weight="regular" aria-hidden />
               </button>
             </header>
-            <nav className="settings-tabs" aria-label="设置分区">
+            <SlidingIndicator
+              activeKey={settingsTab}
+              className="settings-tabs"
+              role="tablist"
+              ariaLabel="设置分区"
+              activeSelector="button.is-active"
+            >
               <button
                 type="button"
                 className={settingsTab === 'appearance' ? 'is-active' : ''}
-                onClick={() => setSettingsTab('appearance')}
+                onClick={() => changeSettingsTab('appearance')}
+                role="tab"
+                aria-selected={settingsTab === 'appearance'}
               >
                 外观
               </button>
               <button
                 type="button"
                 className={settingsTab === 'ai' ? 'is-active' : ''}
-                onClick={() => setSettingsTab('ai')}
+                onClick={() => changeSettingsTab('ai')}
+                role="tab"
+                aria-selected={settingsTab === 'ai'}
               >
                 <Sparkle size={13} weight="fill" aria-hidden /> AI 服务
               </button>
               <button
                 type="button"
                 className={settingsTab === 'data' ? 'is-active' : ''}
-                onClick={() => setSettingsTab('data')}
+                onClick={() => changeSettingsTab('data')}
+                role="tab"
+                aria-selected={settingsTab === 'data'}
               >
                 备份与更新
               </button>
-            </nav>
+            </SlidingIndicator>
 
-            {settingsTab === 'appearance' && (
-              <>
-                <section className="modal-section">
-                  <p className="modal-section-label">界面主题</p>
-                  <div className="theme-grid">
-                    {APP_THEMES.map((theme) => (
-                      <button
-                        key={theme.id}
-                        type="button"
-                        className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
-                        onClick={() => setAppTheme(theme.id)}
-                        aria-pressed={appTheme === theme.id}
-                      >
-                        <span
-                          className="theme-swatch-color"
-                          style={{ background: theme.swatch, color: theme.ink }}
+            {/* 分区内容。`key` 让它在换页时重建,滑入动画才会重播;方向跟着
+                tab 的相对位置走(往右切 = 从右边进来)。 */}
+            <div key={settingsTab} className="settings-body" data-dir={settingsDir}>
+              {settingsTab === 'appearance' && (
+                <>
+                  <section className="modal-section">
+                    <p className="modal-section-label">界面主题</p>
+                    <div className="theme-grid">
+                      {APP_THEMES.map((theme) => (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
+                          onClick={() => setAppTheme(theme.id)}
+                          aria-pressed={appTheme === theme.id}
                         >
                           <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.85 }}
-                          />
-                          <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.55 }}
-                          />
-                          <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.35 }}
-                          />
-                          <span className="theme-swatch-dot" style={{ background: theme.accent }} />
-                        </span>
-                        {theme.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-                <section className="modal-section">
-                  <p className="modal-section-label">书架偏好(自动保存)</p>
-                  <p className="ai-privacy">
-                    排序与视图选择自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa 面板设置。
-                  </p>
-                </section>
-              </>
-            )}
+                            className="theme-swatch-color"
+                            style={{ background: theme.swatch, color: theme.ink }}
+                          >
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.85 }}
+                            />
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.55 }}
+                            />
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.35 }}
+                            />
+                            <span
+                              className="theme-swatch-dot"
+                              style={{ background: theme.accent }}
+                            />
+                          </span>
+                          {theme.label}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                  <section className="modal-section">
+                    <p className="modal-section-label">书架偏好(自动保存)</p>
+                    <p className="ai-privacy">
+                      排序与视图选择自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa
+                      面板设置。
+                    </p>
+                  </section>
+                </>
+              )}
 
-            {settingsTab === 'ai' && (
-              <section className="modal-section">
-                <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
-                <AiProviderForm
-                  providers={aiProviders}
-                  configForm={aiConfigForm}
-                  onFormChange={setAiConfigForm}
-                  onSave={() => saveAiProvider()}
-                  onRemove={removeAiProvider}
-                  onApplyPreset={(preset) => {
-                    setAiConfigForm((form) => ({
-                      ...form,
-                      name: preset.label,
-                      baseUrl: preset.baseUrl,
-                      model: preset.model,
-                    }))
-                  }}
-                  error={aiProviderError}
-                />
-                {aiLoaded && aiProviders.length > 0 && (
-                  <p className="ai-privacy">
-                    配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
-                    {aiProviders.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}。
-                  </p>
-                )}
-              </section>
-            )}
-
-            {settingsTab === 'data' && (
-              <>
+              {settingsTab === 'ai' && (
                 <section className="modal-section">
-                  <p className="modal-section-label">备份与恢复</p>
-                  <div className="modal-actions">
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => void runBackup()}
-                      disabled={backupBusy}
-                    >
-                      {backupBusy ? '备份中…' : '备份到…'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => void runRestore(loadBooks)}
-                      disabled={backupBusy}
-                    >
-                      {backupBusy ? '恢复中…' : '从备份恢复…'}
-                    </button>
-                  </div>
-                  {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+                  <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
+                  <AiProviderForm
+                    providers={aiProviders}
+                    configForm={aiConfigForm}
+                    onFormChange={setAiConfigForm}
+                    onSave={() => saveAiProvider()}
+                    onRemove={removeAiProvider}
+                    onApplyPreset={(preset) => {
+                      setAiConfigForm((form) => ({
+                        ...form,
+                        name: preset.label,
+                        baseUrl: preset.baseUrl,
+                        model: preset.model,
+                      }))
+                    }}
+                    error={aiProviderError}
+                  />
+                  {aiLoaded && aiProviders.length > 0 && (
+                    <p className="ai-privacy">
+                      配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
+                      {aiProviders.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}
+                      。
+                    </p>
+                  )}
                 </section>
-                <section className="modal-section">
-                  <p className="modal-section-label">更新</p>
-                  <div className="modal-actions">
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => void checkForUpdates()}
-                      disabled={updateBusy}
-                    >
-                      {updateBusy ? '检查中…' : '检查更新'}
-                    </button>
-                    {update !== null && (
+              )}
+
+              {settingsTab === 'data' && (
+                <>
+                  <section className="modal-section">
+                    <p className="modal-section-label">备份与恢复</p>
+                    <div className="modal-actions">
                       <button
                         type="button"
-                        className="btn-primary"
-                        onClick={() => void installUpdate()}
-                        disabled={updateBusy}
+                        className="btn"
+                        onClick={() => void runBackup()}
+                        disabled={backupBusy}
                       >
-                        下载并安装
+                        {backupBusy ? '备份中…' : '备份到…'}
                       </button>
-                    )}
-                    {update !== null && (
                       <button
                         type="button"
-                        className="btn btn-ghost"
-                        onClick={ignoreUpdate}
+                        className="btn"
+                        onClick={() => void runRestore(loadBooks)}
+                        disabled={backupBusy}
+                      >
+                        {backupBusy ? '恢复中…' : '从备份恢复…'}
+                      </button>
+                    </div>
+                    {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+                  </section>
+                  <section className="modal-section">
+                    <p className="modal-section-label">更新</p>
+                    <div className="modal-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => void checkForUpdates()}
                         disabled={updateBusy}
                       >
-                        忽略此版本
+                        {updateBusy ? '检查中…' : '检查更新'}
                       </button>
-                    )}
-                  </div>
-                  {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
-                </section>
-              </>
-            )}
+                      {update !== null && (
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => void installUpdate()}
+                          disabled={updateBusy}
+                        >
+                          下载并安装
+                        </button>
+                      )}
+                      {update !== null && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={ignoreUpdate}
+                          disabled={updateBusy}
+                        >
+                          忽略此版本
+                        </button>
+                      )}
+                    </div>
+                    {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
+                  </section>
+                </>
+              )}
+            </div>
 
             <footer className="modal-foot">
               <button type="button" className="btn-primary" onClick={() => setSettingsOpen(false)}>
