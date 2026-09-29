@@ -1,67 +1,30 @@
 /**
- * Cover cache — one API, two backends.
+ * 封面缓存 —— 一套 API,两个后端。
  *
- * Desktop: the extracted cover is written next to the database by Rust, so a
- * second shelf paint is a file read instead of another zip parse / PDF render.
- * Browser (dev mode, no IPC): the same bytes go to IndexedDB.
+ * 桌面端:Rust 把提取出的封面写在数据库旁边,第二次绘制书架是读文件,而不是
+ * 再解一次 zip / 渲染一次 PDF。
+ * 浏览器端:`library.cover.get/put` 在 `ipc.ts` 被分流到 IndexedDB(见
+ * `web-handlers.ts`)。
+ *
+ * 这里过去自己开过一个 `deepread-covers` 库 —— 那个分支已经删掉了:现在两套
+ * 存储会并存,「封面到底存在哪、该清哪一个」就变成没法回答的问题。
  */
 
-import { invokeCommand, isTauriRuntime } from './ipc'
+import { invokeCommand } from './ipc'
 import { convertFileSrc } from './book-import'
-
-const DB_NAME = 'deepread-covers'
-const STORE_NAME = 'covers'
-const DB_VERSION = 1
-
-function openStore(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME)
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-function idbTransaction<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> {
-  return openStore().then(
-    (db) =>
-      new Promise<T>((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, mode)
-        const request = run(tx.objectStore(STORE_NAME))
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-        tx.oncomplete = () => db.close()
-      }),
-  )
-}
 
 /** Cached cover as a usable image URL, or null when it still has to be extracted. */
 export async function readCachedCover(hash: string): Promise<string | null> {
-  if (isTauriRuntime()) {
-    const response = await invokeCommand('library.cover.get', { bookHash: hash })
-    return response.path === null || response.path === undefined
-      ? null
-      : convertFileSrc(response.path)
-  }
-  const blob = await idbTransaction<Blob | undefined>('readonly', (store) => store.get(hash))
-  return blob ? URL.createObjectURL(blob) : null
+  const response = await invokeCommand('library.cover.get', { bookHash: hash })
+  return response.path === null || response.path === undefined
+    ? null
+    : convertFileSrc(response.path)
 }
 
 /** Persist a freshly extracted cover (input is the object URL from extractCover). */
 export async function writeCachedCover(hash: string, objectUrl: string): Promise<void> {
   const blob = await fetch(objectUrl).then((response) => response.blob())
-  if (isTauriRuntime()) {
-    await invokeCommand('library.cover.put', { bookHash: hash, data: await toBase64(blob) })
-    return
-  }
-  await idbTransaction('readwrite', (store) => store.put(blob, hash))
+  await invokeCommand('library.cover.put', { bookHash: hash, data: await toBase64(blob) })
 }
 
 function toBase64(blob: Blob): Promise<string> {

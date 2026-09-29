@@ -19,13 +19,12 @@ import {
   classifyFile,
   browserBookUrl,
   convertFileSrc,
-  deleteBrowserFile,
-  getBrowserFile,
+  forgetBrowserBook,
   openedBookFromLibrary,
-  registerBrowserFile,
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
+import { importStoredBook, requestPersistentStorage, StorageQuotaError } from '../../lib/web-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadNotes } from '../../lib/notes'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
@@ -72,14 +71,6 @@ const coverAttempted = new Set<string>()
 const metaAttempted = new Set<string>()
 const META_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
 
-/**
- * Browser mode (dev): the shelf state must survive LibraryScreen remounts
- * (reader roundtrips), so it lives next to the file registry at module level.
- * A reload still clears both — File handles cannot be persisted; that is what
- * the desktop build is for.
- */
-let browserShelf: readonly ShelfBook[] = []
-
 /** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
 /**
@@ -111,8 +102,14 @@ interface LibraryScreenProps {
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  /** `?demoShelf` 种下的示例书架;挡住 loadBooks,免得它被真实书架覆盖。 */
+  const demoSeeded = useRef(false)
   const [books, setBooks] = useState<readonly ShelfBook[]>([])
-  const [libraryLoaded, setLibraryLoaded] = useState(!isTauriRuntime())
+  /**
+   * 书架是否已从存储读完。web 端过去是「内存里就有,立即就绪」;现在字节和
+   * 元数据都落在 IndexedDB,两个平台都要等一次异步读,骨架屏也因此统一了。
+   */
+  const [libraryLoaded, setLibraryLoaded] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -201,10 +198,11 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         tags: ['科技'],
       },
     ]
-    // 必须同时写进浏览器书架的模块缓存:否则紧随其后的 loadBooks 会拿它(空数组)
-    // 覆盖掉示例书,?demoShelf 就一直是个空书架。
-    browserShelf = demo
+    // 示例书架是一次性的 dev 种子,不该被紧随其后的真实书架覆盖 —— 用一个
+    // ref 挡住 loadBooks,而不是往 IndexedDB 里写脏数据。
+    demoSeeded.current = true
     setBooks(demo)
+    setLibraryLoaded(true)
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dev-only seed, mount only
   }, [])
   const [sort, setSort] = useState<SortKey>(sortFromStorage)
@@ -296,12 +294,24 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [settingsOpen])
 
+  /**
+   * 申请「持久化」存储。
+   *
+   * 不申请的话,磁盘紧张时浏览器**可以直接清掉**用户导入的书 —— 那是这个
+   * 功能最不能接受的一种失败(用户以为书在这儿,回头全没了)。不获批也能正常
+   * 用,只是没有「不被自动清理」的保证。
+   */
+  useEffect(() => {
+    if (isTauriRuntime()) return
+    void requestPersistentStorage()
+  }, [])
+
+  /**
+   * 读书架。**两个平台走的是同一条命令** —— 桌面端落到 Rust 的 SQLite,
+   * 浏览器端在 `lib/ipc.ts` 被分流到 IndexedDB。调用方不需要知道自己在哪。
+   */
   const loadBooks = useCallback(async (): Promise<void> => {
-    if (!isTauriRuntime()) {
-      setLibraryLoaded(true)
-      setBooks(browserShelf)
-      return
-    }
+    if (demoSeeded.current) return
     try {
       const response = await invokeCommand('library.list', undefined)
       setBooks(response.books)
@@ -341,8 +351,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     void (async () => {
       for (const book of books) {
         if (book.format === 'unknown') continue
-        // 浏览器模式从注册的 File 生成稳定 object URL('' 表示文件已不在会话里)。
-        const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : browserBookUrl(book.hash)
+        // 浏览器模式从 IndexedDB 里的字节生成 object URL('' = 字节已不在库里)。
+        const bookUrl = isTauriRuntime()
+          ? convertFileSrc(book.path)
+          : await browserBookUrl(book.hash)
         if (!isTauriRuntime() && bookUrl === '') continue
 
         // 元数据每本只解析一次,解析完就回写 —— 书架才不会永远顶着下载站的
@@ -473,6 +485,13 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }, [importPaths])
 
+  /**
+   * 浏览器端的导入。
+   *
+   * **这是唯一不走 `invokeCommand` 的路径**,原因很实在:`library.import` 的
+   * 参数是文件路径,而浏览器里根本没有路径 —— `File` 对象只在这次会话里活着。
+   * 所以这里必须自己把字节写进 IndexedDB,否则刷新之后书架还在、点开却读不了。
+   */
   const importFromBrowserFiles = useCallback(async (files: readonly File[]): Promise<void> => {
     const { sha256Hex } = await import('../../lib/book-import')
     const imported: ShelfBook[] = []
@@ -484,8 +503,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       }
       setProblem(null)
       const hash = await sha256Hex(file)
-      registerBrowserFile(hash, file)
-      imported.push({
+      const book: ShelfBook = {
         hash,
         fileName: file.name,
         displayName: null,
@@ -499,14 +517,23 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         addedAt: new Date().toISOString(),
         progress: null,
         tags: [],
-      })
+      }
+      try {
+        await importStoredBook(book, file.name, file)
+      } catch (error) {
+        // 配额不足时说清楚怎么办 —— 这是 web 端唯一会「存不下」的地方,
+        // 静默跳过会让用户以为导入成功了。
+        setProblem(
+          error instanceof StorageQuotaError
+            ? '浏览器存储空间不足,这本书没能导入。先删掉几本不再读的书,或者用桌面版。'
+            : toAppError(error).message,
+        )
+        continue
+      }
+      imported.push(book)
     }
     if (imported.length > 0) {
       // 重导同一文件(同 hash)时替换而不是重复上榜。
-      browserShelf = [
-        ...imported,
-        ...browserShelf.filter((book) => !imported.some((item) => item.hash === book.hash)),
-      ]
       setBooks((current) => [
         ...imported,
         ...current.filter((book) => !imported.some((item) => item.hash === book.hash)),
@@ -529,6 +556,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     coverCache.delete(hash)
     coverAttempted.delete(hash)
     metaAttempted.delete(hash)
+    // 浏览器端还有一份书籍字节的 object URL(同样是自己 create 的)。
+    forgetBrowserBook(hash)
     setCovers((current) => {
       if (!current.has(hash)) return current
       const next = new Map(current)
@@ -540,17 +569,13 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const removeFromLibrary = useCallback(
     async (hash: string): Promise<void> => {
       forgetBook(hash)
-      if (!isTauriRuntime()) {
-        browserShelf = browserShelf.filter((book) => book.hash !== hash)
-        deleteBrowserFile(hash)
-        setBooks((current) => current.filter((book) => book.hash !== hash))
-        return
-      }
       try {
+        // 两个平台同一条命令:桌面端删 SQLite 行,浏览器端删 IndexedDB 里的
+        // 字节 / 封面 / 进度 / 批注(见 web-handlers 的 library.remove)。
         await invokeCommand('library.remove', { bookHash: hash })
-        setBooks((current) => current.filter((b) => b.hash !== hash))
+        setBooks((current) => current.filter((book) => book.hash !== hash))
       } catch (error) {
-        setProblem(toAppError(error).message ?? null)
+        setProblem(toAppError(error).message || null)
       }
     },
     [forgetBook],
@@ -678,11 +703,6 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       setConfirmRemove(hash)
     }
   }
-
-  // 浏览器模式下书架列表由 books 状态镜像回模块缓存(重挂载后还在)。
-  useEffect(() => {
-    if (!isTauriRuntime()) browserShelf = books
-  }, [books])
 
   /**
    * 卡片悬浮的「导出批注」:只导这一本。
@@ -899,7 +919,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     )
   }
 
-  /** 标签是整组替换:桌面端落库,浏览器模式只改内存。 */
+  /** 标签是整组替换:两个平台都落库(桌面 SQLite / 浏览器 IndexedDB)。 */
   const saveTags = async (book: ShelfBook, tags: readonly string[]): Promise<ShelfBook> => {
     if (!isTauriRuntime()) return { ...book, tags: [...tags] }
     const response = await invokeCommand('library.tag.set', {
@@ -1080,11 +1100,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   // 「在读」与侧栏分组同一个定义:翻开过但没读完;读完的归「已读完」。
   const reading = books.filter(isReading).length
 
-  /** 浏览器模式从注册表里的 File 解析 URL;桌面端走 asset 协议。 */
+  /**
+   * 打开书架上的书。桌面端走 asset 协议直接读原文件;浏览器端先从 IndexedDB
+   * 取出字节、生成 object URL —— 那边没有路径可读,这是唯一的路。
+   */
   const openBook = (book: ShelfBook): void => {
-    onOpenBook(
-      openedBookFromLibrary(book, isTauriRuntime() ? undefined : getBrowserFile(book.hash)),
-    )
+    void (async () => {
+      const url = isTauriRuntime() ? undefined : await browserBookUrl(book.hash)
+      onOpenBook(openedBookFromLibrary(book, url))
+    })()
   }
 
   /**
@@ -1099,9 +1123,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       return
     }
     setProblem(null)
-    onOpenBook(
-      openedBookFromLibrary(book, isTauriRuntime() ? undefined : getBrowserFile(book.hash), cfi),
-    )
+    void (async () => {
+      const url = isTauriRuntime() ? undefined : await browserBookUrl(book.hash)
+      onOpenBook(openedBookFromLibrary(book, url, cfi))
+    })()
   }
 
   const {
@@ -1169,7 +1194,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       <main className="library-main">
         {view === 'shelf' && (
           <>
-            {isTauriRuntime() && !libraryLoaded ? (
+            {/* 两个平台都要等一次异步读(桌面是 SQLite、浏览器是 IndexedDB),
+                所以骨架屏不再只给桌面端。 */}
+            {!libraryLoaded ? (
               <div className="shelf-skeleton" aria-label="书架加载中">
                 {Array.from({ length: 6 }, (_, i) => (
                   <div
@@ -1236,7 +1263,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                     </p>
                     {!isTauriRuntime() && (
                       <p className="library-empty-note">
-                        浏览器模式的书只在当前会话有效;桌面版才有书架与进度记忆。
+                        书与阅读进度都保存在这台设备的浏览器里,下次打开还在。清除浏览器数据会一并清除。
                       </p>
                     )}
                   </section>

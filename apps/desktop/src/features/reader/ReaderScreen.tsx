@@ -280,7 +280,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   ])
 
   const saveNow = useCallback((): void => {
-    if (!isTauriRuntime()) return
     void invokeCommand('reader.state.set', {
       bookHash: book.hash,
       state: {
@@ -493,11 +492,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           paragraphMargin: settingsRef.current.paragraphMargin,
         })
 
-        let restored = null
-        if (isTauriRuntime()) {
-          const response = await invokeCommand('reader.state.get', { bookHash: book.hash })
-          restored = response.state
-        }
+        // 两个平台都回读:桌面端读 SQLite,浏览器端在 ipc 层被分流到
+        // IndexedDB —— 这正是「web 端也能记住读到哪」的关键一步。读不到
+        // (全新导入 / 存储异常)就当没有,不挡打开这本书。
+        const restored = await invokeCommand('reader.state.get', { bookHash: book.hash })
+          .then((response) => response.state)
+          .catch(() => null)
         if (restored) {
           setAnnotations(restored.annotations)
           for (const record of restored.annotations.filter((a) => !a.deleted)) {

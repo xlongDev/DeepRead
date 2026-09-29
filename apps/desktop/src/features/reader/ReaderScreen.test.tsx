@@ -188,10 +188,10 @@ describe('开书流程', () => {
     expect(invokeMock).toHaveBeenCalledWith('reader.state.get', { bookHash: BOOK.hash })
   })
 
-  it('浏览器模式(无 IPC)不读取后端状态', async () => {
+  it('浏览器模式同样回读阅读状态 —— ipc 分流到 IndexedDB,不再刷新即丢', async () => {
     isTauriMock.mockReturnValue(false)
     await renderReader()
-    expect(invokeMock).not.toHaveBeenCalledWith('reader.state.get', expect.anything())
+    expect(invokeMock).toHaveBeenCalledWith('reader.state.get', { bookHash: BOOK.hash })
   })
 
   it('卸载时销毁内核,不留第二个实例', async () => {

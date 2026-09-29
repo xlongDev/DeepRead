@@ -5,6 +5,11 @@
  * - commands and payloads are typed via `CommandMap` / `EventMap` from `@deepread/shared`
  * - responses and event payloads are treated as untrusted input and schema-validated
  * - every failure is normalized to `AppError` — raw rejections never reach the UI
+ *
+ * 浏览器(非 Tauri)环境在这里分流:核心的读书能力(书架、书籍文件、封面、
+ * 进度、批注、阅读统计)有一份 IndexedDB 实现,见 `web-handlers.ts`。
+ * **这是唯一的分流点** —— 上层调用点一行都不用改,也不需要知道自己在哪个
+ * 平台上跑。没在 web 端实现的命令照旧抛「运行时不可用」。
  */
 
 import { invoke as tauriInvoke, Channel } from '@tauri-apps/api/core'
@@ -24,6 +29,7 @@ import {
   type EventName,
 } from '@deepread/shared'
 import { appErrorPayloadSchema, responseValidators } from '@deepread/shared'
+import { webHandlers } from './web-handlers'
 
 const logger = createLogger('ipc')
 
@@ -63,6 +69,12 @@ export async function invokeCommand<K extends CommandName>(
   request: CommandMap[K]['request'],
 ): Promise<CommandMap[K]['response']> {
   if (!isTauriRuntime()) {
+    // 浏览器里没有 Rust 侧,但核心读书能力有 IndexedDB 实现。命中就走本地;
+    // 没实现的命令照旧抛「运行时不可用」—— 一个点了没反应的功能比一个明确
+    // 说「只有桌面版才有」的功能更糟。
+    const handler = webHandlers[command] as
+      ((input: CommandMap[K]['request']) => Promise<CommandMap[K]['response']>) | undefined
+    if (handler !== undefined) return handler(request)
     throw runtimeUnavailableError()
   }
   const args = request === undefined ? {} : { request }
