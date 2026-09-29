@@ -70,6 +70,16 @@
 | 约定      | 标题两个来源都给:Rust 不做文件名清洗,前端复用与书架同一个 `shelfTitle`(displayName → 清洗后的 fileName)                                          |
 | 约定      | 书被移出书架时批注随 `library.remove` 一并删除,前端只需处理「查不到这本书」这一种情况                                                            |
 
+### `reader.note.update`(改批注文字)
+
+|          |                                                                               |
+| -------- | ----------------------------------------------------------------------------- |
+| Request  | `{ noteId, note }`,`note` 上限 4000 字(与 NoteEntry.note 一致)                |
+| Response | `{ entry: NoteEntry }` —— 按 notes.list 同一条 JOIN 读回的整行                |
+| Errors   | `SYSTEM_VALIDATION`(noteId 未知/被软删除、超长)、`STORAGE_IO`                 |
+| 约定     | 只动 `note` 与 `updated_at`(刷新时间戳,同步靠它);摘录/位置/颜色不归这条命令管 |
+| 约定     | `note` 去首尾空白后为空 → 存 `NULL`,回到纯高亮                                |
+
 ### `library.cover.get` / `library.cover.put`(封面缓存)
 
 |      |                                                                                                                |

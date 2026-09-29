@@ -25,6 +25,7 @@ export const COMMAND = {
   readerStatsGet: 'reader.stats.get',
   readerStatsBooks: 'reader.stats.books',
   readerNotesList: 'reader.notes.list',
+  readerNoteUpdate: 'reader.note.update',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
   dictionaryList: 'dictionary.list',
@@ -239,6 +240,17 @@ export interface NoteEntry {
 export interface ReaderNotesListResponse {
   /** 未删除的批注,新→旧;没有时间戳的排在最后,整体上限 2000 条。 */
   readonly notes: readonly NoteEntry[]
+}
+
+export interface ReaderNoteUpdateRequest {
+  readonly noteId: string
+  /** 自己写的那句话;空串 = 清空,回到纯高亮。 */
+  readonly note: string
+}
+
+export interface ReaderNoteUpdateResponse {
+  /** 更新后的完整条目(与 notes.list 的行形状一致)。 */
+  readonly entry: NoteEntry
 }
 
 export interface LibraryTagSetRequest {
@@ -729,6 +741,10 @@ export interface CommandMap {
     readonly request: undefined
     readonly response: ReaderNotesListResponse
   }
+  [COMMAND.readerNoteUpdate]: {
+    readonly request: ReaderNoteUpdateRequest
+    readonly response: ReaderNoteUpdateResponse
+  }
   [COMMAND.libraryCoverGet]: {
     readonly request: LibraryCoverGetRequest
     readonly response: LibraryCoverGetResponse
@@ -1012,6 +1028,11 @@ const noteEntrySchema = z.object({
 export const readerNotesListResponseSchema = z.object({
   notes: z.array(noteEntrySchema).max(2000),
 })
+export const readerNoteUpdateRequestSchema = z.object({
+  noteId: z.string().min(1).max(128),
+  note: z.string().max(4000),
+})
+export const readerNoteUpdateResponseSchema = z.object({ entry: noteEntrySchema })
 export const libraryTagSetRequestSchema = z.object({
   bookHash: bookHash,
   tags: z.array(z.string().min(1).max(32)).max(20),
@@ -1306,6 +1327,7 @@ export const responseValidators: {
   [COMMAND.readerStatsGet]: readerStatsGetResponseSchema,
   [COMMAND.readerStatsBooks]: readerStatsBooksResponseSchema,
   [COMMAND.readerNotesList]: readerNotesListResponseSchema,
+  [COMMAND.readerNoteUpdate]: readerNoteUpdateResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
@@ -1360,6 +1382,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.readerStatsGet]: undefined,
   [COMMAND.readerStatsBooks]: undefined,
   [COMMAND.readerNotesList]: undefined,
+  [COMMAND.readerNoteUpdate]: readerNoteUpdateRequestSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.dictionaryList]: undefined,

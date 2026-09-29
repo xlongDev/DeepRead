@@ -11,6 +11,7 @@ import {
   ArrowUp,
   Check,
   CheckSquare,
+  Export,
   DotsThree,
   ListBullets,
   MagnifyingGlass,
@@ -31,6 +32,7 @@ import {
   FAVORITE_TAG,
   formatBytes,
   isFavorite,
+  SUGGESTED_TAGS,
   shelfTitle,
   SORT_LABELS,
   type ShelfBook,
@@ -63,6 +65,10 @@ export interface ShelfViewProps {
   readonly onSetTags: (book: ShelfBook, tags: readonly string[]) => void
   /** 批量收藏:选中的一起变成收藏,或一起取消。 */
   readonly onFavoriteSelected: () => void
+  /** 批量加常用标签:点一下就把这个标签应用到所有选中的书。 */
+  readonly onTagPreset: (tag: string) => void
+  /** 导出这本书的批注(.md)。 */
+  readonly onExportNotes: (book: ShelfBook) => void
   readonly onImport: () => void
   /** 已进入待确认态的书籍 hash(单本移除与整批移出共用)。 */
   readonly confirmRemove: string | null
@@ -99,6 +105,8 @@ export function ShelfView({
   onEditInfo,
   onSetTags,
   onFavoriteSelected,
+  onTagPreset,
+  onExportNotes,
   onImport,
   confirmRemove,
   onRemoveClick,
@@ -119,6 +127,29 @@ export function ShelfView({
   const menuRef = useRef<HTMLDivElement>(null)
   /** 「打标签」浮层锚在哪张卡片上。与操作菜单分开:入口不同,别互相顶开。 */
   const [tagHash, setTagHash] = useState<string | null>(null)
+  /** 批量条里的常用标签浮层:点输入框弹出来,点空白/Esc 收起。 */
+  const [bulkTagOpen, setBulkTagOpen] = useState(false)
+  const bulkTagRef = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    if (!bulkTagOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Element
+      // 点输入框本身不关 —— 关了焦点还在输入框上,看起来像坏了。
+      if (bulkTagRef.current?.contains(target) ?? false) return
+      if (target.closest?.('[data-bulk-tag-trigger]') !== null) return
+      setBulkTagOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setBulkTagOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [bulkTagOpen])
 
   const selectedBooksInView = books.filter((book) => selected.has(book.hash))
   const allFavorite =
@@ -417,6 +448,15 @@ export function ShelfView({
                       </button>
                       <button
                         type="button"
+                        className="card-action-icon"
+                        aria-label={`导出《${title}》的批注`}
+                        title="导出这本书的批注(.md)"
+                        onClick={() => onExportNotes(book)}
+                      >
+                        <Export size={15} weight="regular" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
                         className={`card-action-icon is-danger${
                           confirmRemove === book.hash ? ' is-confirming' : ''
                         }`}
@@ -585,24 +625,17 @@ export function ShelfView({
           <Star size={14} weight={allFavorite ? 'fill' : 'regular'} aria-hidden />
           {allFavorite ? '取消收藏' : '收藏'}
         </button>
-        <input
-          className="shelf-bulk-tag"
-          list="deepread-tag-options"
-          placeholder="加标签…"
-          value={tagDraft}
-          onChange={(event) => onTagDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') onTagSelected()
-          }}
-          aria-label="给选中的书加标签"
-        />
         <button
           type="button"
-          className="btn"
-          disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
-          onClick={onTagSelected}
+          className="btn btn-ghost"
+          data-bulk-tag-trigger
+          aria-haspopup="dialog"
+          aria-expanded={bulkTagOpen}
+          disabled={bulkBusy}
+          onClick={() => setBulkTagOpen((isOpen) => !isOpen)}
         >
-          打标签
+          <Tag size={14} weight="regular" aria-hidden />
+          加标签
         </button>
         <button
           type="button"
@@ -613,6 +646,54 @@ export function ShelfView({
           {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
         </button>
       </div>
+
+      {/* 批量加标签的浮层:常用标签 + 自定义输入,与卡片悬浮的打标签浮层同一套
+          视觉。不能塞进 .shelf-bulk 里 —— 那里有 overflow: hidden(收起动画用),
+          会把浮层裁掉。 */}
+      {selecting && bulkTagOpen && (
+        <dialog ref={bulkTagRef} open className="bulk-tag-popover" aria-label="批量加标签">
+          <div className="tag-popover-head">
+            <span>给所选 {selected.size} 本加标签</span>
+          </div>
+          <div className="tag-popover-input">
+            <input
+              type="text"
+              list="deepread-tag-options"
+              value={tagDraft}
+              maxLength={32}
+              placeholder="新标签…"
+              aria-label="自定义标签"
+              onChange={(event) => onTagDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  onTagSelected()
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
+              onClick={onTagSelected}
+            >
+              打标签
+            </button>
+          </div>
+          <div className="tag-popover-suggest">
+            {SUGGESTED_TAGS.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="tag-chip"
+                disabled={selected.size === 0 || bulkBusy}
+                onClick={() => onTagPreset(tag)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        </dialog>
+      )}
 
       <datalist id="deepread-tag-options">
         {tags.map((tag) => (

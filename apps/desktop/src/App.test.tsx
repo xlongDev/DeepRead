@@ -22,7 +22,7 @@ vi.mock('@tauri-apps/api/webview', () => ({
 const invokeCommandMock = vi.mocked(invokeCommand)
 
 const appInfo: AppInfo = {
-  appName: 'Deepread',
+  appName: 'DeepRead',
   appVersion: '0.2.0',
   os: 'macos',
   arch: 'aarch64',
@@ -50,6 +50,10 @@ beforeEach(() => {
     if (command === 'library.list') {
       return Promise.resolve({ books: [shelfBook] })
     }
+    // 挂载时会取一次批注(书架卡片的导出图标与侧栏计数靠它)。
+    if (command === 'reader.notes.list') {
+      return Promise.resolve({ notes: [] })
+    }
     return Promise.resolve(appInfo)
   })
 })
@@ -59,7 +63,7 @@ describe('App library screen', () => {
     render(<App />)
     expect(await screen.findByRole('button', { name: '导入书籍' })).toBeInTheDocument()
     expect((await screen.findAllByText('夜航书')).length).toBeGreaterThan(0)
-    expect(await screen.findByText(/Deepread 0\.2\.0/)).toBeInTheDocument()
+    expect(await screen.findByText(/DeepRead 0\.2\.0/)).toBeInTheDocument()
     expect(invokeCommandMock).toHaveBeenCalledWith('library.list', undefined)
   })
 

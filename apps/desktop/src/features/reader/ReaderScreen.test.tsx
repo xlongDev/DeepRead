@@ -71,7 +71,7 @@ const invokeMock = vi.mocked(invokeCommand)
 const isTauriMock = vi.mocked(isTauriRuntime)
 
 const APP_INFO: AppInfo = {
-  appName: 'Deepread',
+  appName: 'DeepRead',
   appVersion: '0.2.0',
   os: 'macos',
   arch: 'aarch64',

@@ -4,19 +4,22 @@
  * 数据只来自桌面端的 SQLite(`reader.notes.list`);每条都能点回原文 —— 靠的是
  * 批注里记着的 CFI 与那本书的 hash,所以「回到这本书」不需要用户自己找位置。
  *
- * 导出落成「复制为 Markdown」而不是下载文件:桌面端写文件要先装 fs 插件或加
- * 一条 IPC,那属于批注导出自己的一档事,做半个下载按钮比没有更糟。
+ * 导出两条路:整页「复制为 Markdown」进剪贴板;单本书的「导出」图标落成 .md
+ * 文件(Blob + a[download],与阅读器里导出 SVG 同一条路)。桌面端没有 fs 插件,
+ * 真正落盘要装插件或加 IPC,那属于批注导出自己的一档事。
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, Copy, NoteBlank } from '@phosphor-icons/react'
+import { BookOpen, Copy, DownloadSimple, NoteBlank, PencilSimple, X } from '@phosphor-icons/react'
 import type { NoteEntry } from '@deepread/shared'
 import {
+  downloadNoteMarkdown,
   excerptPreview,
   formatNoteTime,
   groupNotesByBook,
   notesToMarkdown,
   onlyWithNotes,
+  type NoteGroup,
 } from './notes-view'
 import { coverPalette } from './shelf-view'
 
@@ -28,13 +31,30 @@ export interface NotesViewProps {
   readonly onOpenNote: (entry: NoteEntry) => void
   /** 打开这本书,从上次读到的位置继续。 */
   readonly onOpenBook: (bookHash: string) => void
+  /** 改自己写的那句话;空串 = 清空,回到纯高亮。 */
+  readonly onEditNote: (entry: NoteEntry, note: string) => void
 }
 
-export function NotesView({ notes, loading, error, onOpenNote, onOpenBook }: NotesViewProps) {
+export function NotesView({
+  notes,
+  loading,
+  error,
+  onOpenNote,
+  onOpenBook,
+  onEditNote,
+}: NotesViewProps) {
   const [onlyNotes, setOnlyNotes] = useState(false)
   /** 刚复制的是哪一项(条目 id 或整页用 '__all__'),1.6 秒后自动复位。 */
   const [copied, setCopied] = useState<string | null>(null)
+  /** 正在编辑哪一条 + 草稿;同一时间只有一条在编辑。 */
+  const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null)
+  const editRef = useRef<HTMLTextAreaElement>(null)
   const timerRef = useRef<number | null>(null)
+
+  // 进入编辑态即聚焦:jsx-a11y 不许 autoFocus,这里手动补上同样的体验。
+  useEffect(() => {
+    if (editing !== null) editRef.current?.focus()
+  }, [editing])
 
   useEffect(
     () => () => {
@@ -67,6 +87,22 @@ export function NotesView({ notes, loading, error, onOpenNote, onOpenBook }: Not
       (part): part is string => part !== undefined && part !== '',
     )
     void copy(entry.id, parts.join('\n\n'))
+  }
+
+  const exportGroup = (group: NoteGroup): void => {
+    downloadNoteMarkdown(group.title, notesToMarkdown([group]))
+  }
+
+  const beginEdit = (entry: NoteEntry): void =>
+    setEditing({ id: entry.id, draft: entry.note ?? '' })
+
+  const commitEdit = (entry: NoteEntry): void => {
+    if (editing === null || editing.id !== entry.id) return
+    const next = editing.draft
+    setEditing(null)
+    // 没改动就不发 IPC —— 空按一次保存不该产生一条同步变更。
+    if (next.trim() === (entry.note ?? '').trim()) return
+    onEditNote(entry, next)
   }
 
   return (
@@ -122,6 +158,17 @@ export function NotesView({ notes, loading, error, onOpenNote, onOpenBook }: Not
                   <span className="note-group-count">{group.notes.length} 条</span>
                   <button
                     type="button"
+                    className="note-action"
+                    aria-label={`导出《${group.title}》的批注`}
+                    title="导出这本书的批注(.md)"
+                    disabled={group.notes.length === 0}
+                    onClick={() => exportGroup(group)}
+                  >
+                    <DownloadSimple size={14} weight="regular" aria-hidden />
+                    导出
+                  </button>
+                  <button
+                    type="button"
                     className="note-open-book"
                     onClick={() => onOpenBook(group.bookHash)}
                   >
@@ -133,33 +180,85 @@ export function NotesView({ notes, loading, error, onOpenNote, onOpenBook }: Not
                   {group.notes.map((entry) => {
                     const excerpt = excerptPreview(entry.excerpt)
                     const when = formatNoteTime(entry.updatedAt)
+                    const isEditing = editing?.id === entry.id
                     return (
                       <li key={entry.id} className="note-card">
                         <span className="note-swatch" style={{ background: swatch }} aria-hidden />
                         <div className="note-body">
                           {excerpt !== null && <p className="note-excerpt">{excerpt}</p>}
-                          {entry.note !== null && entry.note.trim() !== '' && (
-                            <p className="note-own">{entry.note}</p>
+                          {isEditing ? (
+                            <div className="note-edit">
+                              <textarea
+                                ref={editRef}
+                                value={editing.draft}
+                                rows={3}
+                                maxLength={4000}
+                                aria-label="编辑批注"
+                                onChange={(event) =>
+                                  setEditing({ id: entry.id, draft: event.target.value })
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Escape') setEditing(null)
+                                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                                    event.preventDefault()
+                                    commitEdit(entry)
+                                  }
+                                }}
+                              />
+                              <div className="note-edit-actions">
+                                <span className="note-edit-hint">⌘↩ 保存 · Esc 取消</span>
+                                <button
+                                  type="button"
+                                  className="note-action"
+                                  onClick={() => setEditing(null)}
+                                >
+                                  <X size={12} weight="bold" aria-hidden />
+                                  取消
+                                </button>
+                                <button
+                                  type="button"
+                                  className="note-action is-primary"
+                                  onClick={() => commitEdit(entry)}
+                                >
+                                  保存
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              {entry.note !== null && entry.note.trim() !== '' && (
+                                <p className="note-own">{entry.note}</p>
+                              )}
+                              <div className="note-foot">
+                                {when !== null && <span>{when}</span>}
+                                <span className="note-actions">
+                                  <button
+                                    type="button"
+                                    className="note-action"
+                                    aria-label={`编辑这条批注${entry.note === null ? '(还没有写批注)' : ''}`}
+                                    onClick={() => beginEdit(entry)}
+                                  >
+                                    <PencilSimple size={12} weight="regular" aria-hidden />
+                                    编辑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="note-action"
+                                    onClick={() => copyOne(entry)}
+                                  >
+                                    {copied === entry.id ? '已复制' : '复制'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="note-action"
+                                    onClick={() => onOpenNote(entry)}
+                                  >
+                                    跳到原文
+                                  </button>
+                                </span>
+                              </div>
+                            </>
                           )}
-                          <div className="note-foot">
-                            {when !== null && <span>{when}</span>}
-                            <span className="note-actions">
-                              <button
-                                type="button"
-                                className="note-action"
-                                onClick={() => onOpenNote(entry)}
-                              >
-                                跳到原文
-                              </button>
-                              <button
-                                type="button"
-                                className="note-action"
-                                onClick={() => copyOne(entry)}
-                              >
-                                {copied === entry.id ? '已复制' : '复制'}
-                              </button>
-                            </span>
-                          </div>
                         </div>
                       </li>
                     )

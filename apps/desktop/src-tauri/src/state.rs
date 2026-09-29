@@ -570,6 +570,96 @@ pub fn reader_notes_list(
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NoteUpdateRequest {
+    pub note_id: String,
+    /// 与 noteEntrySchema 的 note 上限一致(4000 字);空串 = 清空回纯高亮。
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteUpdateResponse {
+    pub entry: NoteEntry,
+}
+
+/// 改一条批注「自己写的那句话」,其余字段(摘录/位置/颜色)都不归它管。
+///
+/// 写完把这一行按 notes.list 的同一条 JOIN 读回来 —— 前端拿到的就是列表里
+/// 该出现的样子,不用自己拼。
+pub fn update_note(conn: &Connection, note_id: &str, note: &str) -> Result<NoteEntry, AppError> {
+    const MAX_NOTE_LENGTH: usize = 4000;
+    if note.chars().count() > MAX_NOTE_LENGTH {
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "note text too long",
+        ));
+    }
+    if note_id.is_empty() || note_id.len() > 128 {
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "invalid note id",
+        ));
+    }
+    let trimmed = note.trim();
+    let stored: Option<String> = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    let updated = conn
+        .execute(
+            "UPDATE annotations SET note = ?1, updated_at = ?2 WHERE id = ?3 AND deleted = 0",
+            rusqlite::params![stored, crate::timestamps::rfc3339_now(), note_id],
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to update note").with_cause(err)
+        })?;
+    if updated == 0 {
+        return Err(AppError::new(ErrorCode::SystemValidation, "note not found"));
+    }
+    let mut statement = conn
+        .prepare(
+            "SELECT a.id, a.book_hash, b.display_name, b.file_name, a.cfi, a.color,
+                    a.note, a.excerpt, a.updated_at
+             FROM annotations a
+             JOIN books b ON b.hash = a.book_hash
+             WHERE a.id = ?1",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query note").with_cause(err)
+        })?;
+    statement
+        .query_row([note_id], |row| {
+            Ok(NoteEntry {
+                id: row.get(0)?,
+                book_hash: row.get(1)?,
+                display_name: row.get(2)?,
+                file_name: row.get(3)?,
+                cfi: row.get(4)?,
+                color: row.get(5)?,
+                note: row.get(6)?,
+                excerpt: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read note").with_cause(err))
+}
+
+#[tauri::command(rename = "reader.note.update")]
+pub fn reader_note_update(
+    db: tauri::State<'_, crate::storage::Db>,
+    request: NoteUpdateRequest,
+) -> Result<NoteUpdateResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(NoteUpdateResponse {
+        entry: update_note(&conn, &request.note_id, &request.note)?,
+    })
+}
+
 #[tauri::command(rename = "reader.stats.get")]
 pub fn reader_stats_get(
     db: tauri::State<'_, crate::storage::Db>,
@@ -742,6 +832,72 @@ mod tests {
         assert_eq!(notes[2].file_name, "t");
         assert_eq!(notes[0].note, None);
         assert_eq!(notes[1].note.as_deref(), Some("我自己写的"));
+    }
+
+    /// 编辑用例共用的三条批注(与聚合测试同一套种子,省一份 fixture)。
+    fn seed_notes() -> Connection {
+        let conn = memory_db();
+        let hash = "a".repeat(64);
+        seed_book(&conn, &hash);
+        let mut state = sample();
+        state.annotations = vec![
+            StoredAnnotation {
+                id: "a1".into(),
+                cfi: "cfi-1".into(),
+                color: "#f5d76e".into(),
+                note: Some("我自己写的".into()),
+                excerpt: Some("原文一".into()),
+                updated_at: Some("2026-09-09T00:00:00Z".into()),
+                deleted: false,
+            },
+            StoredAnnotation {
+                id: "a3".into(),
+                cfi: "cfi-3".into(),
+                color: "#f5d76e".into(),
+                note: None,
+                excerpt: Some("删掉的".into()),
+                updated_at: Some("2026-09-11T00:00:00Z".into()),
+                deleted: true,
+            },
+        ];
+        store_state(&conn, &hash, &state).unwrap();
+        conn
+    }
+
+    #[test]
+    fn note_update_rewrites_text_and_reads_the_row_back() {
+        let conn = seed_notes();
+        let entry = update_note(&conn, "a1", "  改过的话  ").unwrap();
+        assert_eq!(entry.note.as_deref(), Some("改过的话"), "写入前去首尾空白");
+        assert!(
+            entry.updated_at.as_deref() > Some("2026-09-09T00:00:00Z"),
+            "时间戳要刷新,同步靠它"
+        );
+        // 摘录/位置不归这条命令管。
+        assert_eq!(entry.excerpt.as_deref(), Some("原文一"));
+        assert_eq!(entry.cfi, "cfi-1");
+        assert_eq!(entry.display_name.as_deref(), None);
+    }
+
+    #[test]
+    fn note_update_clearing_text_falls_back_to_pure_highlight() {
+        let conn = seed_notes();
+        let entry = update_note(&conn, "a1", "   ").unwrap();
+        assert_eq!(entry.note, None);
+        // 软删除的批注改不到,未知 id 也一样。
+        assert!(update_note(&conn, "a3", "x").is_err());
+        assert!(update_note(&conn, "missing", "x").is_err());
+    }
+
+    #[test]
+    fn note_update_rejects_overlong_text_and_bad_ids() {
+        let conn = seed_notes();
+        let too_long = "长".repeat(4001);
+        assert!(update_note(&conn, "a1", &too_long).is_err());
+        assert!(update_note(&conn, "", "x").is_err());
+        assert!(update_note(&conn, &"i".repeat(129), "x").is_err());
+        // 恰好在限内的能过。
+        update_note(&conn, "a1", &"好".repeat(4000)).unwrap();
     }
 
     #[test]

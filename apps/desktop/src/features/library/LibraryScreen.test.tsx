@@ -151,7 +151,7 @@ const BOOKS: readonly LibraryBook[] = [
 ]
 
 const APP_INFO: AppInfo = {
-  appName: 'Deepread',
+  appName: 'DeepRead',
   appVersion: '0.2.0',
   os: 'macos',
   arch: 'aarch64',
@@ -222,6 +222,18 @@ function mockBackend(books: readonly LibraryBook[], notes: readonly NoteEntry[] 
       const book = books.find((item) => item.hash === bookHash) ?? books[0]!
       return Promise.resolve({ book: { ...book, displayName } })
     }
+    if (command === 'reader.note.update') {
+      const { noteId, note } = request as { noteId: string; note: string }
+      const original = notes.find((item) => item.id === noteId) ?? NOTES[0]!
+      const trimmed = note.trim()
+      return Promise.resolve({
+        entry: {
+          ...original,
+          note: trimmed === '' ? null : trimmed,
+          updatedAt: '2026-09-29T00:00:00Z',
+        },
+      })
+    }
     return Promise.resolve(APP_INFO)
   })
 }
@@ -275,7 +287,7 @@ describe('LibraryScreen 外壳契约', () => {
 
     const brand = document.querySelector('.lib-brand')
     expect(brand).not.toBeNull()
-    expect(brand!.textContent).toContain('Deepread')
+    expect(brand!.textContent).toContain('DeepRead')
     // 副标题砍掉了:品牌行只留名字,把高度让给下面的分组。
     expect(brand!.textContent).not.toContain('个人阅读操作系统')
     // 整条品牌区同时是窗口拖拽区(macOS 交通灯就在它上面那条窗口条里)。
@@ -352,7 +364,7 @@ describe('LibraryScreen 外壳契约', () => {
     expect(footer?.textContent).toContain('3 本')
     // 一本 42% 在读、一本读完(归「已读完」)、一本没开过。
     expect(footer?.textContent).toContain('在读 1')
-    expect(footer?.textContent).toContain('Deepread 0.2.0 · macos/aarch64')
+    expect(footer?.textContent).toContain('DeepRead 0.2.0 · macos/aarch64')
   })
 })
 
@@ -509,6 +521,44 @@ describe('LibraryScreen 批量管理', () => {
     )
   })
 
+  it('批量加标签:浮层里常用标签与自定义输入都能落库', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByTitle('批量管理'))
+    fireEvent.click(within(screen.getByRole('toolbar', { name: '批量操作' })).getByText('全选'))
+
+    fireEvent.click(within(screen.getByRole('toolbar', { name: '批量操作' })).getByText('加标签'))
+    const popover = screen.getByRole('dialog', { name: '批量加标签' })
+
+    // 常用标签:点一下即应用到所有选中的书。
+    fireEvent.click(within(popover).getByText('历史'))
+    await waitFor(() => {
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_A,
+        tags: ['历史'],
+      })
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_B,
+        tags: ['文学', '历史'],
+      })
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_C,
+        tags: ['文学', '随笔', '历史'],
+      })
+    })
+
+    // 自定义输入:回车即打;连续应用时后一次要看到前一次的结果(乐观更新)。
+    invokeCommandMock.mockClear()
+    const input = within(popover).getByLabelText('自定义标签')
+    fireEvent.change(input, { target: { value: '睡前' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.tag.set', {
+        bookHash: HASH_A,
+        tags: ['历史', '睡前'],
+      }),
+    )
+  })
+
   it('整批移出需要二次确认,确认文案带数量', async () => {
     await renderLibrary()
     fireEvent.click(screen.getByTitle('批量管理'))
@@ -545,7 +595,7 @@ describe('LibraryScreen 侧栏导航', () => {
     await renderLibrary()
     const sidebar = screen.getByRole('complementary', { name: '主导航' })
 
-    fireEvent.click(within(sidebar).getByRole('button', { name: '笔记' }))
+    fireEvent.click(within(sidebar).getByRole('button', { name: /^笔记/ }))
     expect(screen.getByLabelText('笔记')).toBeInTheDocument()
     expect(document.querySelector('.shelf-toolbar')).toBeNull()
 
@@ -672,6 +722,17 @@ describe('LibraryScreen 卡片操作', () => {
     expect(screen.getByLabelText('移出《夜航书》')).toBeInTheDocument()
     // 点封面就是继续读,再放一个文案按钮只是白占位置。
     expect(screen.queryByText(/继续阅读|开始阅读/)).toBeNull()
+  })
+
+  it('悬浮图标栏的导出:落成 .md 只含这一本', async () => {
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock')
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() })
+
+    await renderLibrary()
+    fireEvent.click(screen.getByLabelText('导出《夜航书》的批注'))
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text()
+    expect(markdown).toContain('## 夜航书')
   })
 
   it('更多菜单能由右键与键盘两种方式唤起', async () => {
@@ -1022,7 +1083,7 @@ describe('LibraryScreen 笔记页', () => {
     await renderLibrary()
     fireEvent.click(
       within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
-        name: '笔记',
+        name: /^笔记/,
       }),
     )
 
@@ -1041,7 +1102,7 @@ describe('LibraryScreen 笔记页', () => {
     const { onOpenBook } = await renderLibrary()
     fireEvent.click(
       within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
-        name: '笔记',
+        name: /^笔记/,
       }),
     )
     await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
@@ -1058,7 +1119,7 @@ describe('LibraryScreen 笔记页', () => {
 
   it('「回到这本书」不带 CFI:那是继续读,不是跳回某一句', async () => {
     const { onOpenBook } = await renderLibrary()
-    fireEvent.click(sidebarButton('笔记'))
+    fireEvent.click(sidebarButton(/^笔记/))
     await waitFor(() => expect(document.querySelectorAll('.note-group').length).toBe(2))
 
     fireEvent.click(screen.getAllByText('回到这本书')[0]!)
@@ -1072,7 +1133,7 @@ describe('LibraryScreen 笔记页', () => {
     Object.assign(navigator, { clipboard: { writeText } })
 
     await renderLibrary()
-    fireEvent.click(sidebarButton('笔记'))
+    fireEvent.click(sidebarButton(/^笔记/))
     await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
 
     fireEvent.click(screen.getAllByText('复制')[0]!)
@@ -1084,7 +1145,7 @@ describe('LibraryScreen 笔记页', () => {
 
   it('「仅有笔记」只留下写了自己话的那几条', async () => {
     await renderLibrary()
-    fireEvent.click(sidebarButton('笔记'))
+    fireEvent.click(sidebarButton(/^笔记/))
     await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
 
     fireEvent.click(screen.getByText('仅有笔记'))
@@ -1097,7 +1158,7 @@ describe('LibraryScreen 笔记页', () => {
     Object.assign(navigator, { clipboard: { writeText } })
 
     await renderLibrary()
-    fireEvent.click(sidebarButton('笔记'))
+    fireEvent.click(sidebarButton(/^笔记/))
     await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
 
     fireEvent.click(screen.getByText('复制为 Markdown'))
@@ -1109,9 +1170,67 @@ describe('LibraryScreen 笔记页', () => {
     expect(markdown).toContain('我自己写的')
   })
 
+  it('单本书的导出图标落成 .md 下载,只含这一本', async () => {
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    Object.assign(URL, { createObjectURL, revokeObjectURL })
+
+    await renderLibrary()
+    fireEvent.click(sidebarButton(/^笔记/))
+    await waitFor(() => expect(document.querySelectorAll('.note-group').length).toBe(2))
+
+    fireEvent.click(screen.getByLabelText('导出《夜航书》的批注'))
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    const blob = createObjectURL.mock.calls[0]?.[0] as Blob
+    const markdown = await blob.text()
+    // 只导这一本:第二本的标题不该出现。
+    expect(markdown).toContain('## 夜航书')
+    expect(markdown).not.toContain('## 化雪的季节')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+  })
+
+  it('编辑批注:保存走 reader.note.update,卡片原地换新文字', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton(/^笔记/))
+    await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
+
+    // 第一张卡(夜航书)进入编辑态。
+    fireEvent.click(within(document.querySelector('.note-card') as HTMLElement).getByText('编辑'))
+    const box = screen.getByLabelText('编辑批注') as HTMLTextAreaElement
+    expect(box.value).toBe('我自己写的')
+    fireEvent.change(box, { target: { value: '改过的话' } })
+    fireEvent.click(screen.getByText('保存'))
+
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('reader.note.update', {
+        noteId: 'n1',
+        note: '改过的话',
+      }),
+    )
+    // 后端回传的整行替换进列表,卡片文字原地更新。
+    await waitFor(() => expect(screen.getByText('改过的话')).toBeInTheDocument())
+    expect(screen.queryByText('我自己写的')).toBeNull()
+  })
+
+  it('编辑批注:取消与未改动都不发 IPC', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton(/^笔记/))
+    await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
+
+    const card = document.querySelector('.note-card') as HTMLElement
+    fireEvent.click(within(card).getByText('编辑'))
+    fireEvent.click(screen.getByText('取消'))
+    expect(invokeCommandMock).not.toHaveBeenCalledWith('reader.note.update', expect.anything())
+
+    // 再进编辑态,原样保存 = 无谓写库,也不发。
+    fireEvent.click(within(card).getByText('编辑'))
+    fireEvent.click(screen.getByText('保存'))
+    expect(invokeCommandMock).not.toHaveBeenCalledWith('reader.note.update', expect.anything())
+  })
+
   it('色条按「书」分色,不是照搬批注自己的高亮色', async () => {
     await renderLibrary()
-    fireEvent.click(sidebarButton('笔记'))
+    fireEvent.click(sidebarButton(/^笔记/))
     await waitFor(() => expect(document.querySelectorAll('.note-card').length).toBe(3))
 
     const swatches = [...document.querySelectorAll<HTMLElement>('.note-swatch')].map(
@@ -1131,7 +1250,7 @@ describe('LibraryScreen 笔记页', () => {
     })
     fireEvent.click(
       within(screen.getByRole('complementary', { name: '主导航' })).getByRole('button', {
-        name: '笔记',
+        name: /^笔记/,
       }),
     )
     expect(await screen.findByText('还没有批注')).toBeInTheDocument()

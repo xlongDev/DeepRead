@@ -149,14 +149,14 @@ mod tests {
 
     #[test]
     fn app_info_builds_the_expected_shape() {
-        let info = build_app_info("Deepread", "0.1.0", "macos", "aarch64");
-        assert_eq!(info.app_name, "Deepread");
+        let info = build_app_info("DeepRead", "0.1.0", "macos", "aarch64");
+        assert_eq!(info.app_name, "DeepRead");
         assert_eq!(info.app_version, "0.1.0");
         assert_eq!(info.os, "macos");
         assert_eq!(info.arch, "aarch64");
 
         let json = serde_json::to_value(&info).unwrap();
-        assert_eq!(json["appName"], "Deepread");
+        assert_eq!(json["appName"], "DeepRead");
         assert_eq!(json["appVersion"], "0.1.0");
         assert_eq!(json["os"], "macos");
         assert_eq!(json["arch"], "aarch64");

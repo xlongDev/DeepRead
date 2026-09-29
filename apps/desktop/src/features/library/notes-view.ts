@@ -91,3 +91,23 @@ export function notesToMarkdown(
   }
   return `${lines.join('\n').trimEnd()}\n`
 }
+
+/** 书名当文件名:Windows 不认的字符统一换成下划线。 */
+export function safeFileName(title: string): string {
+  const cleaned = title.replace(/[/\\:*?"<>|]/g, '_').trim()
+  return cleaned === '' ? '批注' : cleaned
+}
+
+/**
+ * 把 Markdown 落成 .md 下载。Blob + a[download] —— 与阅读器导出 SVG 同一条路,
+ * 桌面端/web 端行为一致;真正「存到任意路径」要装 fs 插件,那是一档单独的事。
+ */
+export function downloadNoteMarkdown(title: string, markdown: string): void {
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${safeFileName(title)}-批注.md`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}

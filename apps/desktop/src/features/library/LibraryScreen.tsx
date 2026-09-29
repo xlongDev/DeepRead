@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { BookOpenText, Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
@@ -27,10 +28,11 @@ import {
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadNotes } from '../../lib/notes'
+import { downloadNoteMarkdown, notesToMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
-import { LibrarySidebar } from './LibrarySidebar'
+import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
 import { NotesView } from './NotesView'
 import { ShelfView } from './ShelfView'
 import { StatsView } from './StatsView'
@@ -79,45 +81,27 @@ let browserShelf: readonly ShelfBook[] = []
 
 /** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
+/**
+ * 视图切换包一层 View Transition:旧态与新态自动交叉淡入(网格↔列表的整排
+ * 重排、书架↔笔记的整页换装都吃这个)。不支持的引擎瞬间切换,功能不变。
+ */
+function withViewTransition(apply: () => void): void {
+  const doc = document as Document & {
+    startViewTransition?: (update: () => void) => void
+  }
+  if (doc.startViewTransition === undefined) {
+    apply()
+    return
+  }
+  doc.startViewTransition(() => {
+    // 不 flushSync 的话,快照拍到的还是旧 DOM,过渡就是空转。
+    flushSync(apply)
+  })
+}
+
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
   readonly backend: AppInfo | null
-}
-
-/**
- * 侧栏开关的图标:圆角面板 + 一条分隔线。
- *
- * 展开 = 分隔线在 1/3 处(左栏在);收起 = 线滑到贴着左缘(面板收拢)。
- * 动画就是这一条线的 transform —— 比两张图标交叉淡入干净,也省一张图。
- */
-function SidebarToggleIcon({ expanded }: { readonly expanded: boolean }) {
-  return (
-    <svg width={18} height={18} viewBox="0 0 20 20" fill="none" aria-hidden>
-      <rect
-        x="2.4"
-        y="3.4"
-        width="15.2"
-        height="13.2"
-        rx="4"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <line
-        x1="7.6"
-        y1="4.9"
-        x2="7.6"
-        y2="15.1"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        className="sidebar-toggle-divider"
-        style={{
-          transform: expanded ? 'translateX(0)' : 'translateX(-2.3px)',
-          opacity: expanded ? 1 : 0.45,
-        }}
-      />
-    </svg>
-  )
 }
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
@@ -255,6 +239,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [bulkBusy, setBulkBusy] = useState(false)
   /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
   const [view, setView] = useState<LibraryView>('shelf')
+
+  /**
+   * 视图切换走 View Transition:旧态与新态自动交叉淡入,网格↔列表的整排
+   * 重排也有了个过渡。不支持的引擎(旧 WKWebView)瞬间切换,功能不变。
+   */
+  const changeView = (next: LibraryView): void => {
+    withViewTransition(() => setView(next))
+  }
   const [stats, setStats] = useState<ReadingStats | null>(null)
   /** 每本书累计读了多少(排行榜)。 */
   const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
@@ -669,6 +661,45 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (!isTauriRuntime()) browserShelf = books
   }, [books])
 
+  /** 有批注的书:卡片上的「导出批注」图标据此禁用。 */
+  /** 卡片悬浮的「导出批注」:只导这一本,落成 .md 下载。 */
+  const exportBookNotes = (book: ShelfBook): void => {
+    const bookNotes = notes.filter((entry) => entry.bookHash === book.hash)
+    downloadNoteMarkdown(
+      shelfTitle(book),
+      notesToMarkdown([{ bookHash: book.hash, title: shelfTitle(book), notes: bookNotes }]),
+    )
+  }
+
+  /**
+   * 笔记页改批注文字。原地替换、不重排 —— 列表按「新→旧」排,编辑过的条目
+   * 严格说该浮到最上,但那样卡片会在用户眼皮底下跳走;下次进笔记页自然归位。
+   */
+  const saveNoteEdit = async (entry: NoteEntry, text: string): Promise<void> => {
+    const normalize = (value: string): string | null => {
+      const trimmed = value.trim()
+      return trimmed === '' ? null : trimmed
+    }
+    if (!isTauriRuntime()) {
+      const updated: NoteEntry = {
+        ...entry,
+        note: normalize(text),
+        updatedAt: new Date().toISOString(),
+      }
+      setNotes((current) => current.map((item) => (item.id === entry.id ? updated : item)))
+      return
+    }
+    try {
+      const response = await invokeCommand('reader.note.update', {
+        noteId: entry.id,
+        note: text,
+      })
+      setNotes((current) => current.map((item) => (item.id === entry.id ? response.entry : item)))
+    } catch (error) {
+      setProblem(toAppError(error).message)
+    }
+  }
+
   // 统计页每次进入现取:数字必须是最新的,不值得缓存。
   useEffect(() => {
     if (view !== 'stats') return
@@ -687,6 +718,25 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       cancelled = true
     }
   }, [view])
+
+  // 挂载时也取一次批注:书架卡片的「导出批注」图标与侧栏的笔记计数都靠它,
+  // 不能等到进笔记页才有数(笔记页进入时下面的 effect 会再刷新一遍)。
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    void loadNotes()
+      .then((loaded) => {
+        if (cancelled) return
+        setNotes(loaded)
+        setNotesLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setNotesLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // 笔记页每次进入现取:刚划完一条高亮就切过来也该看得见,不值得缓存。
   useEffect(() => {
@@ -784,8 +834,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   /** 书架偏好写 localStorage:这两个选择属于用户习惯,不该每次启动都重置。 */
   const changeShelfMode = (mode: ViewMode): void => {
-    setShelfMode(mode)
-    localStorage.setItem('deepread.shelf.view', mode)
+    withViewTransition(() => {
+      setShelfMode(mode)
+      localStorage.setItem('deepread.shelf.view', mode)
+    })
   }
 
   const changeSort = (key: SortKey): void => {
@@ -820,28 +872,47 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     return response.book
   }
 
-  const tagSelected = async (): Promise<void> => {
-    const tag = tagDraft.trim()
+  /**
+   * 把一个标签应用到所有选中的书(已有该标签的书跳过)。
+   *
+   * **先乐观落地再逐本落库**:连续点两个预设标签时,第二次点击必须看到第一
+   * 次的结果 —— 否则后一次落库会拿着旧 tags 把前一次盖掉(测试里真实复现过)。
+   * 落库失败就把那一本回滚,弹问题条。
+   */
+  const applyTagToSelection = async (tag: string): Promise<void> => {
     if (tag === '' || selectedBooks.length === 0) return
+    const targets = selectedBooks
+      .filter((book) => !book.tags.includes(tag))
+      .map((book) => ({ ...book, tags: [...book.tags, tag] }))
+    if (targets.length === 0) return
+    setBooks((current) => current.map((book) => targets.find((t) => t.hash === book.hash) ?? book))
     setBulkBusy(true)
     try {
-      const updated = new Map<string, ShelfBook>()
-      for (const book of selectedBooks) {
-        if (book.tags.includes(tag)) continue
+      for (const target of targets) {
         try {
-          const saved = await saveTags(book, [...book.tags, tag])
-          updated.set(saved.hash, saved)
+          const saved = await saveTags(target, target.tags)
+          setBooks((current) => current.map((book) => (book.hash === saved.hash ? saved : book)))
         } catch (error) {
           setProblem(toAppError(error).message)
+          // 回滚这本的乐观更新,界面上不能留着一条没存进去的标签。
+          setBooks((current) =>
+            current.map((book) =>
+              book.hash === target.hash
+                ? { ...book, tags: target.tags.filter((item) => item !== tag) }
+                : book,
+            ),
+          )
         }
       }
-      if (updated.size > 0) {
-        setBooks((current) => current.map((book) => updated.get(book.hash) ?? book))
-      }
-      setTagDraft('')
     } finally {
       setBulkBusy(false)
     }
+  }
+
+  const tagSelected = async (): Promise<void> => {
+    const tag = tagDraft.trim()
+    await applyTagToSelection(tag)
+    setTagDraft('')
   }
 
   /**
@@ -1009,7 +1080,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   return (
     <div
-      className={`library${dragging ? ' is-dragging' : ''}${sidebarOpen ? '' : ' is-sidebar-hidden'}`}
+      className={`library${dragging ? ' is-dragging' : ''}${sidebarOpen ? '' : ' is-sidebar-hidden'}${isTauriRuntime() ? '' : ' is-web'}`}
       onDragOver={(event) => {
         event.preventDefault()
         setDragging(true)
@@ -1026,22 +1097,24 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
       {/* 没有系统标题栏:这一条盖住窗口顶部,是唯一的拖拽把手 —— 侧栏收起时它还在。 */}
       <div className="window-drag" data-tauri-drag-region />
 
-      {/* 开关必须常驻**且不挪窝**:Codex 的做法是图标钉在交通灯右边那个位置,
-          侧栏从它底下抽走 —— 位置跟着侧栏状态跑的话,收起后它会贴到交通灯上。 */}
-      <button
-        type="button"
-        className="sidebar-toggle"
-        onClick={() => setSidebarOpen((isOpen) => !isOpen)}
-        aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
-        aria-expanded={sidebarOpen}
-        title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
-      >
-        <SidebarToggleIcon expanded={sidebarOpen} />
-      </button>
+      {/* 开关钉在交通灯右侧(Codex 式),桌面专用;web 端没有交通灯,
+          开关住进品牌行右侧(LibrarySidebar),收起后这里浮一个在左上角。 */}
+      {(isTauriRuntime() || !sidebarOpen) && (
+        <button
+          type="button"
+          className={`sidebar-toggle${isTauriRuntime() ? '' : ' is-web-float'}`}
+          onClick={() => setSidebarOpen((isOpen) => !isOpen)}
+          aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+          aria-expanded={sidebarOpen}
+          title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+        >
+          <SidebarToggleIcon expanded={sidebarOpen} />
+        </button>
+      )}
 
       <LibrarySidebar
         view={view}
-        onView={setView}
+        onView={changeView}
         shelfCount={books.length}
         notesCount={notesLoaded ? notes.length : null}
         smartFilter={smartFilter}
@@ -1052,6 +1125,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         onTag={(tag) => setTagFilter(tag)}
         onOpenSync={() => setSyncOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onToggleSidebar={() => setSidebarOpen((isOpen) => !isOpen)}
+        sidebarOpen={sidebarOpen}
       />
 
       <main className="library-main">
@@ -1123,6 +1198,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 tagDraft={tagDraft}
                 onTagDraft={setTagDraft}
                 onTagSelected={() => void tagSelected()}
+                onTagPreset={(tag) => void applyTagToSelection(tag)}
+                onExportNotes={exportBookNotes}
                 onSelectAll={toggleSelectAll}
                 onRemoveSelected={() => void removeSelected()}
                 bulkBusy={bulkBusy}
@@ -1139,6 +1216,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             error={notesError}
             onOpenNote={(entry) => openShelfBook(entry.bookHash, entry.cfi)}
             onOpenBook={(bookHash) => openShelfBook(bookHash)}
+            onEditNote={(entry, note) => void saveNoteEdit(entry, note)}
           />
         )}
 

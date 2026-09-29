@@ -286,6 +286,25 @@ button:disabled {
   color: var(--color-text-primary);
 }
 
+/* web(Pages)没有交通灯:开关住进品牌行右侧(deepseek 同款);侧栏收起后
+   这里不渲染,改由左上角浮一个 —— 浮钮的 top 与品牌行里那颗的中心对齐,
+   切换时按钮不跳。顶部的交通灯让位条在 web 上也一并去掉。 */
+.sidebar-toggle.is-web-inline {
+  position: static;
+  margin-left: auto;
+}
+
+.sidebar-toggle.is-web-float {
+  /* 收起后浮钮的中心(y 38)与品牌行里那颗的中心完全一致 —— 实测校准,
+     切换展开/收起时按钮不上下跳。 */
+  top: 24px;
+  left: 14px;
+}
+
+.library.is-web .lib-sidebar-top {
+  display: none;
+}
+
 /* 图标里那条分隔线:展开在 1/3 处,收起滑到贴左缘 —— 位置由组件的内联
    transform 给,这里只管"怎么动"。 */
 .sidebar-toggle-divider {
@@ -301,7 +320,8 @@ button:disabled {
   min-width: 0;
 }
 
-/* 品牌在交通灯下方、侧栏内;拖动窗口由它和上面的顶部条一起承担。 */
+/* 品牌在交通灯下方、侧栏内;拖动窗口由它和上面的顶部条一起承担。
+   刻意不画底部分隔线:品牌和导航项是一体的,线会把它切成两块。 */
 .lib-brand {
   display: flex;
   align-items: center;
@@ -311,7 +331,6 @@ button:disabled {
      这里再抵消一次就会压到顶部条下面。 */
   margin: 0 calc(var(--space-sm) * -1) 0 calc(var(--space-md) * -1);
   padding: var(--space-sm) var(--space-sm) var(--space-md) var(--space-md);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
 }
 
 /* App mark: the one piece of brand color in the chrome. */
@@ -747,13 +766,13 @@ button:disabled {
   color: var(--color-text-secondary);
   cursor: pointer;
   /* 逐个从下方升起来:整排同时出现会像贴纸,错开一点才像"弹出来"。
-     退场一起走、方向朝下(往封面里缩),用 ease-out 不用 spring ——
-     弹簧的过冲在"消失"这个方向上看起来像抖了一下。 */
+     退场一起走、方向朝下(往封面里缩),比出场慢一拍 —— 消失也需要被看见,
+     否则鼠标一离开就像图标被掐掉了。 */
   opacity: 0;
-  transform: translateY(6px) scale(0.92);
+  transform: translateY(10px) scale(0.92);
   transition:
-    opacity 140ms var(--ease-out),
-    transform 180ms var(--ease-out),
+    opacity 220ms var(--ease-out),
+    transform 260ms var(--ease-out),
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
 }
@@ -1172,17 +1191,11 @@ button:disabled {
   white-space: nowrap;
 }
 
-.shelf-bulk-tag {
-  /* 固定宽:让它自己撑满剩余空间的话,条会一路长到屏幕边上。 */
-  flex: 0 0 150px;
-  width: 150px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: 7px 14px;
+/* 加标签的触发按钮(打开常用标签浮层):与相邻按钮同高,arrow 指示有弹层。 */
+.shelf-bulk [data-bulk-tag-trigger] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .shelf-bulk-tag:focus-visible {
@@ -1343,6 +1356,30 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 批量条上加标签的常用标签浮层:悬在批量条上方、水平居中。
+   不能放进 .shelf-bulk(它的 overflow: hidden 会裁掉),用 fixed 贴视口底。
+   <dialog> 的 UA 居中样式用 inset 清掉。 */
+.bulk-tag-popover {
+  position: fixed;
+  inset: auto;
+  /* 状态栏(28) + sticky 偏移(16) + 批量条(44) + 呼吸 12:正好悬在批量条上方,
+     不压住它。 */
+  bottom: 100px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: fit-content;
+  max-width: min(92vw, 480px);
+  z-index: 20;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-floating);
+  animation: fade-up var(--duration-fast) var(--ease-out);
 }
 
 .shelf-skeleton {
@@ -1580,12 +1617,16 @@ button:disabled {
   cursor: pointer;
 }
 
-/* 设置与云同步沉到底部:它们是全局入口,不属于「我的分组」或某个标签。 */
+/* 设置与云同步沉到底部:它们是全局入口,不属于「我的分组」或某个标签。
+   发丝线通栏:抵消侧栏左右内边距,再把内边距补回来对齐文字 —— 否则线的
+   两端悬在半空,和侧栏边框接不上。 */
 .lib-sidebar-foot {
   display: grid;
   gap: 2px;
   margin-top: auto;
-  padding-top: var(--space-md);
+  margin-right: calc(var(--space-sm) * -1);
+  margin-left: calc(var(--space-md) * -1);
+  padding: var(--space-md) var(--space-sm) 0 var(--space-md);
   border-top: 1px solid var(--color-border);
 }
 
@@ -1797,10 +1838,62 @@ button:disabled {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .note-action:hover {
   text-decoration: underline;
+}
+
+/* 组头上的「导出」:与「回到这本书」同排,但这是下载,不穿 accent 色。 */
+.note-group-head .note-action {
+  color: var(--color-text-secondary);
+}
+
+.note-group-head .note-action:hover {
+  color: var(--color-text-primary);
+}
+
+.note-action.is-primary {
+  font-weight: var(--font-weight-medium);
+}
+
+/* 行内编辑:替换「自己写的那句话」那一行,摘录留在原处当上下文。 */
+.note-edit {
+  display: grid;
+  gap: 6px;
+}
+
+.note-edit textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  resize: vertical;
+}
+
+.note-edit textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.note-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.note-edit-hint {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
 }
 
 @media (max-width: 860px) {
@@ -1863,9 +1956,10 @@ button:disabled {
     margin-left: var(--space-xs);
   }
 
-  /* 横向排布时「沉底」失效,改成靠右并去掉那根竖分隔线。 */
+  /* 横向排布时「沉底」失效,改成靠右并去掉那根竖分隔线(负 margin 一并归零)。 */
   .lib-sidebar-foot {
     margin-top: 0;
+    margin-right: 0;
     margin-left: auto;
     padding-top: 0;
     border-top: 0;

@@ -10,7 +10,45 @@
  */
 
 import { BookOpenText, ChartLineUp, Cloud, Gear, NoteBlank } from '@phosphor-icons/react'
+import { isTauriRuntime } from '../../lib/ipc'
 import { coverPalette, SMART_FILTERS, type LibraryView, type SmartFilter } from './shelf-view'
+
+/**
+ * 侧栏开关的图标:圆角面板 + 一条分隔线。
+ *
+ * 展开 = 分隔线在 1/3 处(左栏在);收起 = 线滑到贴着左缘(面板收拢)。
+ * 动画就是这一条线的 transform —— 比两张图标交叉淡入干净,也省一张图。
+ * 放在这里是因为 web 模式下品牌行要用它,桌面模式的固定按钮也用它。
+ */
+export function SidebarToggleIcon({ expanded }: { readonly expanded: boolean }) {
+  return (
+    <svg width={18} height={18} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect
+        x="2.4"
+        y="3.4"
+        width="15.2"
+        height="13.2"
+        rx="4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <line
+        x1="7.6"
+        y1="4.9"
+        x2="7.6"
+        y2="15.1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        className="sidebar-toggle-divider"
+        style={{
+          transform: expanded ? 'translateX(0)' : 'translateX(-2.3px)',
+          opacity: expanded ? 1 : 0.45,
+        }}
+      />
+    </svg>
+  )
+}
 
 export interface LibrarySidebarProps {
   readonly view: LibraryView
@@ -27,6 +65,9 @@ export interface LibrarySidebarProps {
   readonly onTag: (tag: string | null) => void
   readonly onOpenSync: () => void
   readonly onOpenSettings: () => void
+  /** web 模式下开关住在品牌行右侧;桌面模式的开关钉在交通灯旁,不走这里。 */
+  readonly onToggleSidebar: () => void
+  readonly sidebarOpen: boolean
 }
 
 export function LibrarySidebar({
@@ -42,7 +83,10 @@ export function LibrarySidebar({
   onTag,
   onOpenSync,
   onOpenSettings,
+  onToggleSidebar,
+  sidebarOpen,
 }: LibrarySidebarProps) {
+  const web = !isTauriRuntime()
   return (
     <aside className="lib-sidebar" aria-label="主导航">
       {/* 顶部留一条与交通灯等高的空档:交通灯是原生控件,浮在这一块上,
@@ -52,7 +96,21 @@ export function LibrarySidebar({
         <span className="library-mark" aria-hidden>
           <BookOpenText size={17} weight="fill" />
         </span>
-        <span className="library-brand">Deepread</span>
+        <span className="library-brand">DeepRead</span>
+        {/* web 端没有交通灯,开关按 deepseek 的方式住进品牌行右侧;
+            桌面端它钉在交通灯旁,由 LibraryScreen 渲染,这里不出现。 */}
+        {web && (
+          <button
+            type="button"
+            className="sidebar-toggle is-web-inline"
+            onClick={onToggleSidebar}
+            aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+            aria-expanded={sidebarOpen}
+            title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+          >
+            <SidebarToggleIcon expanded={sidebarOpen} />
+          </button>
+        )}
       </div>
       <nav className="lib-sidebar-nav" aria-label="视图">
         <button
