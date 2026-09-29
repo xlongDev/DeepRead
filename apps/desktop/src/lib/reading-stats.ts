@@ -4,7 +4,7 @@
  * stats panel behaves identically.
  */
 
-import type { DayStat } from '@deepread/shared'
+import type { BookReadingStat, DayStat } from '@deepread/shared'
 import { invokeCommand, isTauriRuntime } from './ipc'
 
 const WEB_KEY = 'deepread.reading-stats'
@@ -55,4 +55,16 @@ export async function loadReadingStats(): Promise<ReadingStats> {
     days,
     totalSeconds: days.reduce((sum, entry) => sum + entry.seconds, 0),
   }
+}
+
+/**
+ * 每本书累计读了多少(排行榜)。
+ *
+ * 浏览器模式只按天记总量,没有分书的账,所以如实返回空 —— 拿「今天总共读了
+ * 多久」去冒充「这本书读得最久」是编数据,排行榜宁可空着。
+ */
+export async function loadBookStats(): Promise<readonly BookReadingStat[]> {
+  if (!isTauriRuntime()) return []
+  const response = await invokeCommand('reader.stats.books', undefined)
+  return response.books
 }

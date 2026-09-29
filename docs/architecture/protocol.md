@@ -44,13 +44,18 @@
 
 ### `reader.stats.add` / `reader.stats.get`(阅读时长)
 
-|      |                                                                                                             |
-| ---- | ----------------------------------------------------------------------------------------------------------- |
-| add  | Request `{ bookHash, day: 'YYYY-MM-DD', seconds }`;Response `{ daySeconds }`(该书当天累计)                  |
-| get  | Request `undefined`;Response `{ days: { day, seconds }[], totalSeconds }`(按日汇总、新→旧,最多 400 天)      |
-| 约定 | 时钟在前端:只有"书在屏上且窗口可见"才累计,每 30s 上报一次增量;单次上报上限 1 小时(睡眠唤醒的跃变不能算阅读) |
-| 约定 | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                              |
-| 约定 | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除               |
+|                 |                                                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------------------- |
+| add             | Request `{ bookHash, day: 'YYYY-MM-DD', seconds }`;Response `{ daySeconds }`(该书当天累计)                  |
+| get             | Request `undefined`;Response `{ days: { day, seconds }[], totalSeconds }`(按日汇总、新→旧,最多 400 天)      |
+| 约定            | 时钟在前端:只有"书在屏上且窗口可见"才累计,每 30s 上报一次增量;单次上报上限 1 小时(睡眠唤醒的跃变不能算阅读) |
+| 约定            | `day` 是本地日历日(用户看到的"今天"),不是 UTC;格式非法直接拒收                                              |
+| books           | Request `undefined`;Response `{ books: BookReadingStat[] }`,按总时长降序,上限 20 本                         |
+| BookReadingStat | `{ bookHash, displayName: string \| null, fileName, seconds }`                                              |
+| 约定            | 只统计**还在书架上的书**(INNER JOIN `books`):已移出书架的书不该占着排行榜                                   |
+| 约定            | 标题两个来源都给,Rust 不做文件名清洗,前端复用 `shelfTitle`                                                  |
+| 约定            | 浏览器模式没有分书的账,前端如实返回空数组,不拿按天的总量冒充"这本读得最久"                                  |
+| 约定            | 表 `reading_stats(book_hash, day, seconds)` 主键 `(book_hash, day)`;`library.remove` 一并删除               |
 
 ### `reader.notes.list`(跨书批注聚合,W4)
 
@@ -75,22 +80,23 @@
 | 约定 | 启动时整目录加入 asset 协议 scope;`library.remove` 顺带删除该书的缓存封面                                      |
 | 约定 | 浏览器模式(无 IPC)走 IndexedDB,键同为 book hash;`apps/desktop/src/lib/cover-store.ts` 是唯一知道两种后端的地方 |
 
-### `library.list` / `library.import` / `library.remove` / `library.rename`
+### `library.list` / `library.import` / `library.remove` / `library.info.set`
 
-|             |                                                                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
-| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                                                   |
-| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                           |
-| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                            |
-| rename      | Request `{ bookHash, displayName }`;Response `{ book: LibraryBook }`                                                      |
-| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                         |
-| LibraryBook | `{ hash, fileName, displayName: string \| null, format, path, size, addedAt, progress: number \| null, tags: string[] }`  |
-| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                       |
-| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                  |
-| 约定        | `displayName` 为书籍自带元数据标题,前端惰性解析后经 `rename` 回写;`null` 表示尚未解析(书架回退到清洗后的文件名)           |
-| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                  |
-| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)           |
-| 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除) |
+|             |                                                                                                                                                                                   |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                                                                                                           |
+| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                                                                                   |
+| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                                                                                    |
+| info.set    | Request `{ bookHash, displayName, author, subtitle, publisher, language }`(各字段 `string \| null`,`null` = 清空);Response `{ book: LibraryBook }`                                |
+| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                                                                                 |
+| LibraryBook | `{ hash, fileName, displayName, author, subtitle, publisher, language (均 string \| null), format, path, size, addedAt, progress: number \| null, tags: string[] }`               |
+| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                                                                               |
+| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                                                                          |
+| 约定        | 元数据字段(`displayName` / `author` / `subtitle` / `publisher` / `language`)由书自带元数据惰性解析后经 `info.set` 回写;**只填还空着的字段** —— 用户手改过的值不会被后来的解析盖掉 |
+| 约定        | `info.set` 是整体赋值:`null` 表示清空该字段;前端把空字符串转成 `null` 再提交                                                                                                      |
+| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                                                                          |
+| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)                                                                   |
+| 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除)                                                         |
 
 ### `ai.*` 与 `secret.*`(Phase 3)
 

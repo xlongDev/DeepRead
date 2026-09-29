@@ -494,6 +494,70 @@ pub fn list_notes(conn: &Connection) -> Result<Vec<NoteEntry>, AppError> {
     Ok(notes)
 }
 
+/// 一本书累计读了多少(排行榜用)。标题两个来源都给,清洗是前端的事。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookReadingStat {
+    pub book_hash: String,
+    pub display_name: Option<String>,
+    pub file_name: String,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsBooksResponse {
+    pub books: Vec<BookReadingStat>,
+}
+
+/// 按书聚合阅读时长,降序。
+///
+/// 只统计**还在书架上的书**(内连接 books):已经移出的书不该占着排行榜,
+/// 尽管它的历史时长还留在表里(外键 CASCADE 没开,时长是显式清理的)。
+pub fn list_book_stats(conn: &Connection, limit: usize) -> Result<Vec<BookReadingStat>, AppError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT b.hash, b.display_name, b.file_name, COALESCE(SUM(s.seconds), 0) AS total
+             FROM reading_stats s
+             JOIN books b ON b.hash = s.book_hash
+             GROUP BY b.hash
+             ORDER BY total DESC, b.hash ASC
+             LIMIT ?1",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query per-book stats").with_cause(err)
+        })?;
+    let rows = statement
+        .query_map([limit], |row| {
+            Ok(BookReadingStat {
+                book_hash: row.get(0)?,
+                display_name: row.get(1)?,
+                file_name: row.get(2)?,
+                seconds: row.get::<_, i64>(3)?.max(0) as u64,
+            })
+        })
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read per-book stats").with_cause(err)
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read per-book stat row").with_cause(err)
+        })?;
+    Ok(rows)
+}
+
+#[tauri::command(rename = "reader.stats.books")]
+pub fn reader_stats_books(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<StatsBooksResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(StatsBooksResponse {
+        books: list_book_stats(&conn, 20)?,
+    })
+}
+
 #[tauri::command(rename = "reader.notes.list")]
 pub fn reader_notes_list(
     db: tauri::State<'_, crate::storage::Db>,
@@ -559,6 +623,49 @@ mod tests {
             }],
             updated_at: "2026-09-09T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn per_book_stats_aggregate_across_days_and_rank_by_total() {
+        let conn = memory_db();
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        seed_book(&conn, &first);
+        seed_book(&conn, &second);
+        conn.execute(
+            "UPDATE books SET display_name = '夜航书' WHERE hash = ?1",
+            [&first],
+        )
+        .unwrap();
+
+        // 第一本跨两天共 90 分钟,第二本一天 30 分钟 —— 聚合必须跨天累加。
+        add_reading_seconds(&conn, &first, "2026-09-27", 3600).unwrap();
+        add_reading_seconds(&conn, &first, "2026-09-28", 1800).unwrap();
+        add_reading_seconds(&conn, &second, "2026-09-28", 1800).unwrap();
+
+        let ranked = list_book_stats(&conn, 20).unwrap();
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].book_hash, first);
+        assert_eq!(ranked[0].seconds, 5400);
+        assert_eq!(ranked[0].display_name.as_deref(), Some("夜航书"));
+        assert_eq!(ranked[1].seconds, 1800);
+        // 第二本没有元数据标题:fileName 原样带出,回退是前端的事。
+        assert_eq!(ranked[1].display_name, None);
+        assert_eq!(ranked[1].file_name, "t");
+    }
+
+    #[test]
+    fn per_book_stats_skip_books_gone_from_the_shelf() {
+        let conn = memory_db();
+        let hash = "a".repeat(64);
+        seed_book(&conn, &hash);
+        add_reading_seconds(&conn, &hash, "2026-09-28", 600).unwrap();
+        assert_eq!(list_book_stats(&conn, 20).unwrap().len(), 1);
+
+        // 移出书架后,它的历史时长不该再占着排行榜。
+        conn.execute("DELETE FROM books WHERE hash = ?1", [&hash])
+            .unwrap();
+        assert!(list_book_stats(&conn, 20).unwrap().is_empty());
     }
 
     #[test]

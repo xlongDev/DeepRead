@@ -19,7 +19,11 @@
         "minWidth": 480,
         "minHeight": 360,
         "titleBarStyle": "Overlay",
-        "useHttpsScheme": true
+        "useHttpsScheme": true,
+        "trafficLightPosition": {
+          "x": 20,
+          "y": 21
+        }
       }
     ],
     "security": {

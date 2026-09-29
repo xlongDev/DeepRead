@@ -39,6 +39,12 @@ pub struct LibraryBook {
     pub file_name: String,
     /// Clean title from the book's own metadata; `None` until resolved.
     pub display_name: Option<String>,
+    /// Author from the book's own metadata (or edited by hand). Shown on the
+    /// shelf card, so it lives here rather than behind a separate query.
+    pub author: Option<String>,
+    pub subtitle: Option<String>,
+    pub publisher: Option<String>,
+    pub language: Option<String>,
     pub format: String,
     pub path: String,
     pub size: u64,
@@ -120,17 +126,35 @@ pub struct LibraryCoverPutResponse {
     pub path: String,
 }
 
+/// 书籍元数据的整表提交:面板一次给出全部字段,`None` / 空串 = 清空该项。
+/// 不做"只写变化列"的局部更新 —— 那要动态拼 SQL,而面板本来就是整表编辑。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LibraryRenameRequest {
+pub struct LibraryInfoSetRequest {
     pub book_hash: String,
-    pub display_name: String,
+    pub display_name: Option<String>,
+    pub author: Option<String>,
+    pub subtitle: Option<String>,
+    pub publisher: Option<String>,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct LibraryRenameResponse {
+pub struct LibraryInfoSetResponse {
     pub book: LibraryBook,
+}
+
+/// 重新导入时要原样保留的既有元数据。不含 path/size —— 那两个每次都要刷新,
+/// 保留它们反而是错的。
+struct ExistingBookMeta {
+    added_at: String,
+    display_name: Option<String>,
+    tags: Vec<String>,
+    author: Option<String>,
+    subtitle: Option<String>,
+    publisher: Option<String>,
+    language: Option<String>,
 }
 
 pub fn detect_format(file_name: &str) -> Option<&'static str> {
@@ -170,6 +194,10 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
         hash: row.get("hash")?,
         file_name: row.get("file_name")?,
         display_name: row.get("display_name")?,
+        author: row.get("author")?,
+        subtitle: row.get("subtitle")?,
+        publisher: row.get("publisher")?,
+        language: row.get("language")?,
         format: row.get("format")?,
         path: row.get("path")?,
         size: row.get::<_, i64>("size")? as u64,
@@ -191,7 +219,7 @@ fn parse_tags(raw: &str) -> Vec<String> {
 pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
         .prepare(
-            "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
+            "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
                     b.tags, p.fraction AS progress
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
@@ -286,19 +314,36 @@ pub fn set_tags(conn: &Connection, hash: &str, tags: &[String]) -> Result<Librar
 
 /// Set the shelf title for a book (the frontend resolves it from the book's
 /// own metadata and backfills older rows).
-pub fn rename_book(
+/// 写书籍元数据。空白项一律存 NULL —— 空串与"没填"在界面上是同一件事,
+/// 存成两种值只会让后面每次判断都要兼顾。
+pub fn set_book_info(
     conn: &Connection,
     hash: &str,
-    display_name: &str,
+    request: &LibraryInfoSetRequest,
 ) -> Result<LibraryBook, AppError> {
     crate::state::validate_hash(hash)?;
+    fn clean(value: &Option<String>) -> Option<String> {
+        value
+            .as_ref()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+    }
     let updated = conn
         .execute(
-            "UPDATE books SET display_name = ?1 WHERE hash = ?2",
-            rusqlite::params![display_name, hash],
+            "UPDATE books SET display_name = ?1, author = ?2, subtitle = ?3,
+                    publisher = ?4, language = ?5
+             WHERE hash = ?6",
+            rusqlite::params![
+                clean(&request.display_name),
+                clean(&request.author),
+                clean(&request.subtitle),
+                clean(&request.publisher),
+                clean(&request.language),
+                hash,
+            ],
         )
         .map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to rename book").with_cause(err)
+            AppError::new(ErrorCode::StorageIo, "failed to update book info").with_cause(err)
         })?;
     if updated == 0 {
         return Err(AppError::new(
@@ -314,7 +359,7 @@ pub fn rename_book(
 /// Read one book (with its progress) by hash.
 fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
     conn.query_row(
-        "SELECT b.hash, b.file_name, b.display_name, b.format, b.path, b.size, b.added_at,
+        "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
                 b.tags, p.fraction AS progress
          FROM books b
          LEFT JOIN progress p ON p.book_hash = b.hash
@@ -349,13 +394,24 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     }
 
     let (hash, size) = hash_file(&path)?;
-    // Re-importing a known file keeps its added_at, its resolved title and its
-    // tags — the point of re-import is usually a moved file, not a reset.
-    let existing: Option<(String, Option<String>, String)> = conn
+    // Re-importing a known file keeps its added_at and everything the user or the
+    // book itself已经填好的元数据 —— 重新导入通常是因为文件搬了位置,不是要重来一遍。
+    let existing: Option<ExistingBookMeta> = conn
         .query_row(
-            "SELECT added_at, display_name, tags FROM books WHERE hash = ?1",
+            "SELECT added_at, display_name, tags, author, subtitle, publisher, language
+             FROM books WHERE hash = ?1",
             [&hash],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok(ExistingBookMeta {
+                    added_at: row.get(0)?,
+                    display_name: row.get(1)?,
+                    tags: parse_tags(row.get::<_, String>(2)?.as_str()),
+                    author: row.get(3)?,
+                    subtitle: row.get(4)?,
+                    publisher: row.get(5)?,
+                    language: row.get(6)?,
+                })
+            },
         )
         .map(Some)
         .or_else(|err| match err {
@@ -368,23 +424,29 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     let book = LibraryBook {
         hash: hash.clone(),
         file_name,
-        display_name: existing.as_ref().and_then(|(_, name, _)| name.clone()),
+        display_name: existing.as_ref().and_then(|meta| meta.display_name.clone()),
+        author: existing.as_ref().and_then(|meta| meta.author.clone()),
+        subtitle: existing.as_ref().and_then(|meta| meta.subtitle.clone()),
+        publisher: existing.as_ref().and_then(|meta| meta.publisher.clone()),
+        language: existing.as_ref().and_then(|meta| meta.language.clone()),
         format: format.to_string(),
         path: raw_path.to_string(),
         size,
         added_at: existing
             .as_ref()
-            .map(|(added_at, _, _)| added_at.clone())
+            .map(|meta| meta.added_at.clone())
             .unwrap_or_else(crate::timestamps::rfc3339_now),
         progress: None,
         tags: existing
             .as_ref()
-            .map(|(_, _, tags)| parse_tags(tags))
+            .map(|meta| meta.tags.clone())
             .unwrap_or_default(),
     };
     conn.execute(
-        "INSERT OR REPLACE INTO books (hash, file_name, display_name, format, path, size, added_at, tags)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT OR REPLACE INTO books
+             (hash, file_name, display_name, format, path, size, added_at, tags,
+              author, subtitle, publisher, language)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             book.hash,
             book.file_name,
@@ -393,7 +455,11 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
             book.path,
             book.size as i64,
             book.added_at,
-            serde_json::to_string(&book.tags).unwrap_or_else(|_| "[]".to_string())
+            serde_json::to_string(&book.tags).unwrap_or_else(|_| "[]".to_string()),
+            book.author,
+            book.subtitle,
+            book.publisher,
+            book.language,
         ],
     )
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save book").with_cause(err))?;
@@ -588,16 +654,16 @@ pub fn library_cover_put(
     })
 }
 
-#[tauri::command(rename = "library.rename")]
-pub fn library_rename(
+#[tauri::command(rename = "library.info.set")]
+pub fn library_info_set(
     db: tauri::State<'_, Db>,
-    request: LibraryRenameRequest,
-) -> Result<LibraryRenameResponse, AppError> {
+    request: LibraryInfoSetRequest,
+) -> Result<LibraryInfoSetResponse, AppError> {
     let conn =
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
-    Ok(LibraryRenameResponse {
-        book: rename_book(&conn, &request.book_hash, &request.display_name)?,
+    Ok(LibraryInfoSetResponse {
+        book: set_book_info(&conn, &request.book_hash, &request)?,
     })
 }
 
@@ -728,6 +794,10 @@ mod tests {
             hash: "0".repeat(64),
             file_name: "a.epub".into(),
             display_name: Some("A Book".into()),
+            author: Some("A Writer".into()),
+            subtitle: None,
+            publisher: None,
+            language: Some("zh".into()),
             format: "epub".into(),
             path: "/tmp/a.epub".into(),
             size: 3,
@@ -738,6 +808,9 @@ mod tests {
         let json = serde_json::to_value(&book).unwrap();
         assert_eq!(json["fileName"], "a.epub");
         assert_eq!(json["displayName"], "A Book");
+        // 新增的元数据也要按 camelCase 出线,前端才拿得到。
+        assert_eq!(json["author"], "A Writer");
+        assert_eq!(json["language"], "zh");
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
         assert_eq!(json["progress"], 0.25);
         assert_eq!(json["tags"][0], "技术");
@@ -941,8 +1014,26 @@ mod tests {
         let imported = import_book(&conn, path.to_str().unwrap()).unwrap();
         assert!(imported.display_name.is_none());
 
-        let renamed = rename_book(&conn, &imported.hash, "夜航书").unwrap();
+        let renamed = set_book_info(
+            &conn,
+            &imported.hash,
+            &LibraryInfoSetRequest {
+                book_hash: imported.hash.clone(),
+                display_name: Some("夜航书".to_string()),
+                // 同一张表里的其它元数据:一次提交,一起落库。
+                author: Some("圣埃克苏佩里".to_string()),
+                subtitle: Some("   ".to_string()),
+                publisher: None,
+                language: Some("zh".to_string()),
+            },
+        )
+        .unwrap();
         assert_eq!(renamed.display_name.as_deref(), Some("夜航书"));
+        assert_eq!(renamed.author.as_deref(), Some("圣埃克苏佩里"));
+        assert_eq!(renamed.language.as_deref(), Some("zh"));
+        // 空白与 None 都是"没填":两者都存 NULL,免得后面每次判断都要兼顾两种空。
+        assert_eq!(renamed.subtitle, None);
+        assert_eq!(renamed.publisher, None);
         assert_eq!(renamed.file_name, "garbage (z-library).epub");
 
         // Moving/renaming the file re-imports the same content: the resolved

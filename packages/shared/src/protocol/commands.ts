@@ -19,10 +19,11 @@ export const COMMAND = {
   libraryList: 'library.list',
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
-  libraryRename: 'library.rename',
+  libraryInfoSet: 'library.info.set',
   libraryTagSet: 'library.tag.set',
   readerStatsAdd: 'reader.stats.add',
   readerStatsGet: 'reader.stats.get',
+  readerStatsBooks: 'reader.stats.books',
   readerNotesList: 'reader.notes.list',
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
@@ -126,6 +127,11 @@ export interface LibraryBook {
    * name and backfills lazily.
    */
   readonly displayName: string | null
+  /** Author from the book's own metadata, or typed by hand. Shown on the card. */
+  readonly author: string | null
+  readonly subtitle: string | null
+  readonly publisher: string | null
+  readonly language: string | null
   readonly format: string
   readonly path: string
   readonly size: number
@@ -156,12 +162,20 @@ export interface LibraryRemoveResponse {
   readonly removed: boolean
 }
 
-export interface LibraryRenameRequest {
+/**
+ * 书籍元数据的整表提交:面板一次给全部字段,`null` = 清空该项。
+ * 不做「只写变化列」的局部更新 —— 那要动态拼 SQL,而面板本来就是整表编辑。
+ */
+export interface LibraryInfoSetRequest {
   readonly bookHash: string
-  readonly displayName: string
+  readonly displayName: string | null
+  readonly author: string | null
+  readonly subtitle: string | null
+  readonly publisher: string | null
+  readonly language: string | null
 }
 
-export interface LibraryRenameResponse {
+export interface LibraryInfoSetResponse {
   readonly book: LibraryBook
 }
 
@@ -181,6 +195,23 @@ export interface ReaderStatsGetResponse {
   /** Per-day totals across all books, newest first. */
   readonly days: readonly { readonly day: string; readonly seconds: number }[]
   readonly totalSeconds: number
+}
+
+/**
+ * 一本书累计读了多少(排行榜用)。
+ *
+ * 标题两个来源都给:Rust 不做文件名清洗,前端复用与书架同一个 `shelfTitle`。
+ */
+export interface BookReadingStat {
+  readonly bookHash: string
+  readonly displayName: string | null
+  readonly fileName: string
+  readonly seconds: number
+}
+
+export interface ReaderStatsBooksResponse {
+  /** 按总时长降序;上限 20 本 —— 排行榜是给人看的,不是全量导出。 */
+  readonly books: readonly BookReadingStat[]
 }
 
 /**
@@ -674,9 +705,9 @@ export interface CommandMap {
     readonly request: LibraryRemoveRequest
     readonly response: LibraryRemoveResponse
   }
-  [COMMAND.libraryRename]: {
-    readonly request: LibraryRenameRequest
-    readonly response: LibraryRenameResponse
+  [COMMAND.libraryInfoSet]: {
+    readonly request: LibraryInfoSetRequest
+    readonly response: LibraryInfoSetResponse
   }
   [COMMAND.libraryTagSet]: {
     readonly request: LibraryTagSetRequest
@@ -689,6 +720,10 @@ export interface CommandMap {
   [COMMAND.readerStatsGet]: {
     readonly request: undefined
     readonly response: ReaderStatsGetResponse
+  }
+  [COMMAND.readerStatsBooks]: {
+    readonly request: undefined
+    readonly response: ReaderStatsBooksResponse
   }
   [COMMAND.readerNotesList]: {
     readonly request: undefined
@@ -906,6 +941,10 @@ export const libraryBookSchema = z.object({
   hash: bookHash,
   fileName: z.string().min(1).max(512),
   displayName: z.string().min(1).max(512).nullable(),
+  author: z.string().max(512).nullable(),
+  subtitle: z.string().max(512).nullable(),
+  publisher: z.string().max(512).nullable(),
+  language: z.string().max(64).nullable(),
   format: z.string().min(1).max(16),
   path: z.string().min(1).max(4096),
   size: z.number().int().min(0),
@@ -929,11 +968,15 @@ export const libraryImportRequestSchema = z.object({ path: z.string().min(1).max
 export const libraryImportResponseSchema = z.object({ book: libraryBookSchema })
 export const libraryRemoveRequestSchema = z.object({ bookHash: bookHash })
 export const libraryRemoveResponseSchema = z.object({ removed: z.boolean() })
-export const libraryRenameRequestSchema = z.object({
+export const libraryInfoSetRequestSchema = z.object({
   bookHash: bookHash,
-  displayName: z.string().min(1).max(512),
+  displayName: z.string().min(1).max(512).nullable(),
+  author: z.string().max(512).nullable(),
+  subtitle: z.string().max(512).nullable(),
+  publisher: z.string().max(512).nullable(),
+  language: z.string().max(64).nullable(),
 })
-export const libraryRenameResponseSchema = z.object({ book: libraryBookSchema })
+export const libraryInfoSetResponseSchema = z.object({ book: libraryBookSchema })
 const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 export const readerStatsAddRequestSchema = z.object({
   bookHash: bookHash,
@@ -945,6 +988,15 @@ export const readerStatsAddResponseSchema = z.object({ daySeconds: z.number().in
 export const readerStatsGetResponseSchema = z.object({
   days: z.array(z.object({ day: dayKey, seconds: z.number().int().min(0) })).max(400),
   totalSeconds: z.number().int().min(0),
+})
+const bookReadingStatSchema = z.object({
+  bookHash,
+  displayName: z.string().max(512).nullable(),
+  fileName: z.string().min(1).max(1024),
+  seconds: z.number().int().min(0),
+})
+export const readerStatsBooksResponseSchema = z.object({
+  books: z.array(bookReadingStatSchema).max(20),
 })
 const noteEntrySchema = z.object({
   id: z.string().min(1).max(128),
@@ -1248,10 +1300,11 @@ export const responseValidators: {
   [COMMAND.libraryList]: libraryListResponseSchema,
   [COMMAND.libraryImport]: libraryImportResponseSchema,
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
-  [COMMAND.libraryRename]: libraryRenameResponseSchema,
+  [COMMAND.libraryInfoSet]: libraryInfoSetResponseSchema,
   [COMMAND.libraryTagSet]: libraryTagSetResponseSchema,
   [COMMAND.readerStatsAdd]: readerStatsAddResponseSchema,
   [COMMAND.readerStatsGet]: readerStatsGetResponseSchema,
+  [COMMAND.readerStatsBooks]: readerStatsBooksResponseSchema,
   [COMMAND.readerNotesList]: readerNotesListResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
@@ -1301,10 +1354,11 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryList]: undefined,
   [COMMAND.libraryImport]: libraryImportRequestSchema,
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
-  [COMMAND.libraryRename]: libraryRenameRequestSchema,
+  [COMMAND.libraryInfoSet]: libraryInfoSetRequestSchema,
   [COMMAND.libraryTagSet]: libraryTagSetRequestSchema,
   [COMMAND.readerStatsAdd]: readerStatsAddRequestSchema,
   [COMMAND.readerStatsGet]: undefined,
+  [COMMAND.readerStatsBooks]: undefined,
   [COMMAND.readerNotesList]: undefined,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,

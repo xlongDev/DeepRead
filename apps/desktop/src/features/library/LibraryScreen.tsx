@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpenText, Cloud, Gear, Sparkle, X } from '@phosphor-icons/react'
+import { BookOpenText, Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   dailySeries,
-  localDayKey,
   toAppError,
   type AppInfo,
+  type BookReadingStat,
   type NoteEntry,
 } from '@deepread/shared'
-import { extractCover, extractTitle } from '@deepread/reader-adapter'
+import { extractCover, extractMetadata } from '@deepread/reader-adapter'
 import {
   ACCEPTED_EXTENSIONS,
   DIALOG_EXTENSIONS,
@@ -25,7 +25,7 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
-import { loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
+import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadNotes } from '../../lib/notes'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
@@ -37,9 +37,14 @@ import { StatsView } from './StatsView'
 import {
   APP_THEMES,
   BULK_CONFIRM,
+  FAVORITE_TAG,
   formatBytes,
+  isFinished,
+  isReading,
+  matchesSmartFilter,
   PROBLEM_MESSAGE,
   shelfTitle,
+  SMART_FILTERS,
   SORT_DEFAULT_DIR,
   sortBooks,
   sortDirFromStorage,
@@ -49,6 +54,7 @@ import {
   type AppTheme,
   type LibraryView,
   type ShelfBook,
+  type SmartFilter,
   type SortDir,
   type SortKey,
   type ViewMode,
@@ -59,9 +65,9 @@ import { AiProviderForm, useAiProviders } from '../settings/AiProviderSettings'
 // the app run. Blob URLs are per-run by nature, so no cross-restart cache.
 const coverCache = new Map<string, string>()
 const coverAttempted = new Set<string>()
-/** Books whose title is not resolvable from metadata (txt/md/fb2/cbz) or already resolved. */
-const titleAttempted = new Set<string>()
-const TITLE_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
+/** 元数据已处理过的书:格式不带元数据(txt/md/fb2/cbz)、或已经解析并回写完毕。 */
+const metaAttempted = new Set<string>()
+const META_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
 
 /**
  * Browser mode (dev): the shelf state must survive LibraryScreen remounts
@@ -76,6 +82,42 @@ let browserShelf: readonly ShelfBook[] = []
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
   readonly backend: AppInfo | null
+}
+
+/**
+ * 侧栏开关的图标:圆角面板 + 一条分隔线。
+ *
+ * 展开 = 分隔线在 1/3 处(左栏在);收起 = 线滑到贴着左缘(面板收拢)。
+ * 动画就是这一条线的 transform —— 比两张图标交叉淡入干净,也省一张图。
+ */
+function SidebarToggleIcon({ expanded }: { readonly expanded: boolean }) {
+  return (
+    <svg width={18} height={18} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect
+        x="2.4"
+        y="3.4"
+        width="15.2"
+        height="13.2"
+        rx="4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <line
+        x1="7.6"
+        y1="4.9"
+        x2="7.6"
+        y2="15.1"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        className="sidebar-toggle-divider"
+        style={{
+          transform: expanded ? 'translateX(0)' : 'translateX(-2.3px)',
+          opacity: expanded ? 1 : 0.45,
+        }}
+      />
+    </svg>
+  )
 }
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
@@ -98,6 +140,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash: 'demo1',
         fileName: '化雪的季节.txt',
         displayName: null,
+        author: '迟子建',
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: 'txt',
         path: '/fixtures/化雪的季节.txt',
         size: 382,
@@ -109,6 +155,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash: 'demo2',
         fileName: '夜航书.epub',
         displayName: null,
+        author: '圣埃克苏佩里',
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: 'epub',
         path: '/fixtures/夜航书.epub',
         size: 2391,
@@ -120,6 +170,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash: 'demo3',
         fileName: '山中手记.fb2',
         displayName: null,
+        author: '汪曾祺',
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: 'fb2',
         path: '/fixtures/山中手记.fb2',
         size: 619,
@@ -131,6 +185,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash: 'demo4',
         fileName: '阅读笔记.md',
         displayName: null,
+        author: null,
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: 'md',
         path: '/fixtures/阅读笔记.md',
         size: 300,
@@ -142,6 +200,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash: 'demo5',
         fileName: '图解大模型生成式AI原理与实战 (z-library.sk, 1lib.sk, z-lib.sk).pdf',
         displayName: '图解大模型生成式AI原理与实战',
+        author: '李智勇',
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: 'pdf',
         path: '/fixtures/demo.pdf',
         size: 11_000_000,
@@ -178,12 +240,24 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   /** null = 全部标签。 */
+  /** 侧栏筛选:点当前已选中的标签 = 取消筛选,所以这里存的是「当前选中项」。 */
   const [tagFilter, setTagFilter] = useState<string | null>(null)
+  /** 侧栏收起状态。收起后主区拿到全部宽度,切换按钮留在窗口条上,仍然点得到。 */
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => localStorage.getItem('deepread.shelf.sidebar') !== 'hidden',
+  )
+  useEffect(() => {
+    localStorage.setItem('deepread.shelf.sidebar', sidebarOpen ? 'shown' : 'hidden')
+  }, [sidebarOpen])
+  /** 侧栏「我的分组」;与标签筛选叠加生效。 */
+  const [smartFilter, setSmartFilter] = useState<SmartFilter>('all')
   const [tagDraft, setTagDraft] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
   /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
   const [view, setView] = useState<LibraryView>('shelf')
   const [stats, setStats] = useState<ReadingStats | null>(null)
+  /** 每本书累计读了多少(排行榜)。 */
+  const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
   const [notes, setNotes] = useState<readonly NoteEntry[]>([])
   const [notesLoaded, setNotesLoaded] = useState(false)
   const [notesError, setNotesError] = useState<string | null>(null)
@@ -256,39 +330,54 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         const bookUrl = isTauriRuntime() ? convertFileSrc(book.path) : browserBookUrl(book.hash)
         if (!isTauriRuntime() && bookUrl === '') continue
 
-        // Resolve the real title once per book, then persist it so the shelf
-        // stops showing download-site file names forever.
-        if (book.displayName === null && !titleAttempted.has(book.hash)) {
-          if (!TITLE_FORMATS.includes(book.format)) {
-            titleAttempted.add(book.hash)
+        // 元数据每本只解析一次,解析完就回写 —— 书架才不会永远顶着下载站的
+        // 文件名与空作者。判据是「还有字段空着」而不是「标题为空」:用户手改过
+        // 标题的书,作者/出版社同样该被补上。
+        const needsMeta =
+          book.displayName === null ||
+          book.author === null ||
+          book.publisher === null ||
+          book.language === null
+        if (needsMeta && !metaAttempted.has(book.hash)) {
+          if (!META_FORMATS.includes(book.format)) {
+            metaAttempted.add(book.hash)
           } else {
-            titleAttempted.add(book.hash)
-            const title = await extractTitle(
+            metaAttempted.add(book.hash)
+            const meta = await extractMetadata(
               bookUrl,
-              book.format as Parameters<typeof extractTitle>[1],
+              book.format as Parameters<typeof extractMetadata>[1],
             )
-            if (title === null) titleAttempted.delete(book.hash)
-            else if (isTauriRuntime()) {
+            const patch = {
+              // 只填它还空着的字段:用户手填过的值不该被书里的元数据盖掉。
+              displayName: book.displayName ?? meta.title,
+              author: book.author ?? meta.author,
+              publisher: book.publisher ?? meta.publisher,
+              language: book.language ?? meta.language,
+            }
+            if (
+              patch.displayName === book.displayName &&
+              patch.author === book.author &&
+              patch.publisher === book.publisher &&
+              patch.language === book.language
+            ) {
+              // 书里什么都没有:下次进书架再试一遍(可能是文件当时不可读)。
+              metaAttempted.delete(book.hash)
+            } else if (isTauriRuntime()) {
               try {
-                const response = await invokeCommand('library.rename', {
+                const response = await invokeCommand('library.info.set', {
                   bookHash: book.hash,
-                  displayName: title,
+                  subtitle: book.subtitle,
+                  ...patch,
                 })
                 setBooks((current) =>
-                  current.map((item) =>
-                    item.hash === book.hash
-                      ? { ...item, displayName: response.book.displayName }
-                      : item,
-                  ),
+                  current.map((item) => (item.hash === book.hash ? response.book : item)),
                 )
               } catch {
-                titleAttempted.delete(book.hash)
+                metaAttempted.delete(book.hash)
               }
             } else {
               setBooks((current) =>
-                current.map((item) =>
-                  item.hash === book.hash ? { ...item, displayName: title } : item,
-                ),
+                current.map((item) => (item.hash === book.hash ? { ...item, ...patch } : item)),
               )
             }
           }
@@ -385,6 +474,10 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         hash,
         fileName: file.name,
         displayName: null,
+        author: null,
+        subtitle: null,
+        publisher: null,
+        language: null,
         format: classified.format,
         path: '',
         size: file.size,
@@ -406,20 +499,47 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }, [])
 
-  const removeFromLibrary = useCallback(async (hash: string): Promise<void> => {
-    if (!isTauriRuntime()) {
-      browserShelf = browserShelf.filter((book) => book.hash !== hash)
-      deleteBrowserFile(hash)
-      setBooks((current) => current.filter((book) => book.hash !== hash))
-      return
-    }
-    try {
-      await invokeCommand('library.remove', { bookHash: hash })
-      setBooks((current) => current.filter((b) => b.hash !== hash))
-    } catch (error) {
-      setProblem(toAppError(error).message ?? null)
-    }
+  /**
+   * 忘掉与这本书有关的一切会话级缓存。
+   *
+   * 必须做:hash 是**文件内容的哈希** —— 同一个文件删掉再导入,hash 一模一样。
+   * 不清的话 `coverAttempted` 会直接跳过封面解析,并把已经随删除一起消失的旧图
+   * URL(asset 路径)当成缓存贴上去 → 空白封面;`metaAttempted` 同样会让元数据
+   * 不再重新解析。
+   */
+  const forgetBook = useCallback((hash: string): void => {
+    const stale = coverCache.get(hash)
+    // blob: 是我们自己 create 的,得自己 revoke;asset 路径不能 revoke。
+    if (stale?.startsWith('blob:')) URL.revokeObjectURL(stale)
+    coverCache.delete(hash)
+    coverAttempted.delete(hash)
+    metaAttempted.delete(hash)
+    setCovers((current) => {
+      if (!current.has(hash)) return current
+      const next = new Map(current)
+      next.delete(hash)
+      return next
+    })
   }, [])
+
+  const removeFromLibrary = useCallback(
+    async (hash: string): Promise<void> => {
+      forgetBook(hash)
+      if (!isTauriRuntime()) {
+        browserShelf = browserShelf.filter((book) => book.hash !== hash)
+        deleteBrowserFile(hash)
+        setBooks((current) => current.filter((book) => book.hash !== hash))
+        return
+      }
+      try {
+        await invokeCommand('library.remove', { bookHash: hash })
+        setBooks((current) => current.filter((b) => b.hash !== hash))
+      } catch (error) {
+        setProblem(toAppError(error).message ?? null)
+      }
+    },
+    [forgetBook],
+  )
 
   const runBackup = useCallback(async (): Promise<void> => {
     const path = await save({
@@ -553,12 +673,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   useEffect(() => {
     if (view !== 'stats') return
     let cancelled = false
-    void loadReadingStats()
-      .then((loaded) => {
-        if (!cancelled) setStats(loaded)
+    void Promise.all([loadReadingStats(), loadBookStats()])
+      .then(([loaded, perBook]) => {
+        if (cancelled) return
+        setStats(loaded)
+        setTopBooks(perBook)
       })
       .catch(() => {
-        if (!cancelled) setStats({ days: [], totalSeconds: 0 })
+        if (cancelled) return
+        setStats({ days: [], totalSeconds: 0 })
       })
     return () => {
       cancelled = true
@@ -587,7 +710,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }, [view])
 
-  const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
+  /** 已读完:与侧栏「我的分组」同一个判定,不另立标准。 */
+  const finishedCount = books.filter(isFinished).length
   const statsSeries = dailySeries(stats?.days ?? [], 7)
   // 柱高按当日峰值归一;全零时给个地板值,免得除零。
   const statsPeak = Math.max(60, ...statsSeries.map((entry) => entry.seconds))
@@ -596,11 +720,32 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     () => [...new Set(books.flatMap((book) => book.tags))].sort((a, b) => a.localeCompare(b, 'zh')),
     [books],
   )
+  /** 我的分组的计数:按进度与标签现算,不需要用户维护任何东西。 */
+  const smartCounts = useMemo<Record<SmartFilter, number>>(() => {
+    const counts: Record<SmartFilter, number> = { all: 0, reading: 0, favorite: 0, finished: 0 }
+    for (const book of books) {
+      for (const filter of SMART_FILTERS) {
+        if (matchesSmartFilter(book, filter.id)) counts[filter.id] += 1
+      }
+    }
+    return counts
+  }, [books])
+  /** 分组与标签可叠加:两个条件都满足才留下。 */
   const visible = useMemo(
     () =>
-      tagFilter === null ? filtered : filtered.filter((book) => book.tags.includes(tagFilter)),
-    [filtered, tagFilter],
+      filtered.filter(
+        (book) =>
+          matchesSmartFilter(book, smartFilter) &&
+          (tagFilter === null || book.tags.includes(tagFilter)),
+      ),
+    [filtered, smartFilter, tagFilter],
   )
+  /** 零结果时把「用户到底筛了什么」原话说回去,而不是只说没有。 */
+  const emptyHint = useMemo(() => {
+    if (query.trim() !== '') return query
+    if (tagFilter !== null) return tagFilter
+    return SMART_FILTERS.find((filter) => filter.id === smartFilter)?.label ?? ''
+  }, [query, tagFilter, smartFilter])
   const selectedBooks = books.filter((book) => selected.has(book.hash))
 
   const toggleSelected = (hash: string): void => {
@@ -617,6 +762,25 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setSelected(new Set())
     setConfirmRemove(null)
   }
+
+  /**
+   * 点空白处退出批量管理。
+   *
+   * 监听挂在 document 上,而不是给 <main> 挂 onClick —— 那是非交互元素,既过不了
+   * a11y 规则,也会把"点卡片切换选中"一起吃掉。卡片、工具条、批量条、弹窗都排除。
+   */
+  useEffect(() => {
+    if (!selecting) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (!(target instanceof HTMLElement)) return
+      const inside = '.book-card, .book-row, .shelf-bulk, .shelf-toolbar, .modal-panel'
+      if (target.closest(inside) !== null) return
+      exitSelection()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [selecting])
 
   /** 书架偏好写 localStorage:这两个选择属于用户习惯,不该每次启动都重置。 */
   const changeShelfMode = (mode: ViewMode): void => {
@@ -680,6 +844,34 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }
 
+  /**
+   * 批量收藏。语义是「一起变」而不是「逐个翻转」:全部都收藏了 → 一起取消,
+   * 否则一起加上。逐个翻转的话,混合选中状态下点一次会变得更乱。
+   */
+  const favoriteSelected = async (): Promise<void> => {
+    if (selectedBooks.length === 0) return
+    const drop = selectedBooks.every((book) => book.tags.includes(FAVORITE_TAG))
+    setBulkBusy(true)
+    try {
+      const updated = new Map<string, ShelfBook>()
+      for (const book of selectedBooks) {
+        // 已经是我们想要的状态就别写库(少一次 IPC、少一次同步变更)。
+        if (book.tags.includes(FAVORITE_TAG) === !drop) continue
+        try {
+          const saved = await saveTags(book, toggleFavoriteTag(book.tags))
+          updated.set(saved.hash, saved)
+        } catch (error) {
+          setProblem(toAppError(error).message)
+        }
+      }
+      if (updated.size > 0) {
+        setBooks((current) => current.map((book) => updated.get(book.hash) ?? book))
+      }
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   const removeSelected = async (): Promise<void> => {
     if (confirmRemove !== BULK_CONFIRM) {
       setConfirmRemove(BULK_CONFIRM)
@@ -712,10 +904,20 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setEditBook(book)
   }
 
+  /** 卡片上「打标签」浮层:点一下就落库,失败时把书架状态留原样。 */
+  const setBookTags = async (book: ShelfBook, next: readonly string[]): Promise<void> => {
+    try {
+      const saved = await saveTags(book, next)
+      setBooks((current) => current.map((item) => (item.hash === saved.hash ? saved : item)))
+    } catch (error) {
+      setProblem(toAppError(error).message)
+    }
+  }
+
   /**
-   * 保存书籍信息:标题走 `library.rename`,标签走 `library.tag.set`。两条都是
-   * 既有命令 —— 这一版没有新协议、没有迁移。两者分开提交:标题失败不会连带
-   * 把标签一起丢掉,弹窗留在原地让用户重试。
+   * 保存书籍信息:元数据走 `library.info.set`(一次提交整张表),标签走
+   * `library.tag.set`。两条分开提交 —— 元数据失败不会连带把标签丢掉,
+   * 弹窗留在原地让用户重试。
    */
   const saveBookInfo = async (draft: BookInfoDraft): Promise<void> => {
     const book = editBook
@@ -724,16 +926,34 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setInfoError(null)
     try {
       let saved = book
-      const title = draft.title.trim()
-      if (title !== '' && title !== shelfTitle(book)) {
+      const next = {
+        displayName: draft.title.trim(),
+        author: draft.author.trim(),
+        subtitle: draft.subtitle.trim(),
+        publisher: draft.publisher.trim(),
+        language: draft.language.trim(),
+      }
+      const changed =
+        (next.displayName !== '' && next.displayName !== shelfTitle(book)) ||
+        next.author !== (book.author ?? '') ||
+        next.subtitle !== (book.subtitle ?? '') ||
+        next.publisher !== (book.publisher ?? '') ||
+        next.language !== (book.language ?? '')
+      if (changed) {
+        // 空白统一送 null:Rust 那边也把空串存成 NULL,界面上"没填"只有一种表示。
+        const payload = {
+          bookHash: book.hash,
+          displayName: next.displayName === '' ? null : next.displayName,
+          author: next.author === '' ? null : next.author,
+          subtitle: next.subtitle === '' ? null : next.subtitle,
+          publisher: next.publisher === '' ? null : next.publisher,
+          language: next.language === '' ? null : next.language,
+        }
         if (isTauriRuntime()) {
-          const response = await invokeCommand('library.rename', {
-            bookHash: book.hash,
-            displayName: title,
-          })
+          const response = await invokeCommand('library.info.set', payload)
           saved = response.book
         } else {
-          saved = { ...saved, displayName: title }
+          saved = { ...saved, ...payload, displayName: payload.displayName ?? saved.displayName }
         }
       }
       if (draft.tags.join('\u0000') !== book.tags.join('\u0000')) {
@@ -749,7 +969,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }
 
   const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
-  const reading = books.filter((book) => (book.progress ?? 0) > 0).length
+  // 「在读」与侧栏分组同一个定义:翻开过但没读完;读完的归「已读完」。
+  const reading = books.filter(isReading).length
 
   /** 浏览器模式从注册表里的 File 解析 URL;桌面端走 asset 协议。 */
   const openBook = (book: ShelfBook): void => {
@@ -759,23 +980,19 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }
 
   /**
-   * 从笔记页回到原文:把批注的 CFI 一起交给阅读器,它会直接落到那一句。
+   * 从笔记页打开一本书:带 CFI 就落到那条批注,不带就回上次读到的位置。
    * 书可能已经被移出书架(批注随之删除,但这一屏还是旧的),所以要如实说
    * 清楚,而不是打开一本不存在的书。
    */
-  const openNote = (entry: NoteEntry): void => {
-    const book = books.find((item) => item.hash === entry.bookHash)
+  const openShelfBook = (bookHash: string, cfi?: string): void => {
+    const book = books.find((item) => item.hash === bookHash)
     if (book === undefined) {
       setProblem('这本书已经不在书架里了,这条笔记暂时打不开。')
       return
     }
     setProblem(null)
     onOpenBook(
-      openedBookFromLibrary(
-        book,
-        isTauriRuntime() ? undefined : getBrowserFile(book.hash),
-        entry.cfi,
-      ),
+      openedBookFromLibrary(book, isTauriRuntime() ? undefined : getBrowserFile(book.hash), cfi),
     )
   }
 
@@ -792,7 +1009,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   return (
     <div
-      className={`library${dragging ? ' is-dragging' : ''}`}
+      className={`library${dragging ? ' is-dragging' : ''}${sidebarOpen ? '' : ' is-sidebar-hidden'}`}
       onDragOver={(event) => {
         event.preventDefault()
         setDragging(true)
@@ -806,44 +1023,35 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         void importFromBrowserFiles(Array.from(event.dataTransfer.files))
       }}
     >
-      <header className="library-header" data-tauri-drag-region>
-        <div className="library-brand-block" data-tauri-drag-region>
-          <span className="library-mark" aria-hidden>
-            <BookOpenText size={17} weight="fill" />
-          </span>
-          <span className="library-brand">Deepread</span>
-          <span className="library-tagline">个人阅读操作系统</span>
-        </div>
-        <div className="header-actions">
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={() => setSettingsOpen(true)}
-            title="设置"
-            aria-label="打开设置"
-          >
-            <Gear size={17} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={() => setSyncOpen(true)}
-            title="云同步(WebDAV)"
-            aria-label="打开云同步"
-          >
-            <Cloud size={17} weight="regular" aria-hidden />
-          </button>
-        </div>
-      </header>
+      {/* 没有系统标题栏:这一条盖住窗口顶部,是唯一的拖拽把手 —— 侧栏收起时它还在。 */}
+      <div className="window-drag" data-tauri-drag-region />
+
+      {/* 开关必须常驻**且不挪窝**:Codex 的做法是图标钉在交通灯右边那个位置,
+          侧栏从它底下抽走 —— 位置跟着侧栏状态跑的话,收起后它会贴到交通灯上。 */}
+      <button
+        type="button"
+        className="sidebar-toggle"
+        onClick={() => setSidebarOpen((isOpen) => !isOpen)}
+        aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+        aria-expanded={sidebarOpen}
+        title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+      >
+        <SidebarToggleIcon expanded={sidebarOpen} />
+      </button>
 
       <LibrarySidebar
         view={view}
         onView={setView}
         shelfCount={books.length}
+        notesCount={notesLoaded ? notes.length : null}
+        smartFilter={smartFilter}
+        onSmartFilter={setSmartFilter}
+        smartCounts={smartCounts}
         tags={allTags}
         activeTag={tagFilter}
         onTag={(tag) => setTagFilter(tag)}
-        filtered={tagFilter !== null}
+        onOpenSync={() => setSyncOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <main className="library-main">
@@ -900,8 +1108,6 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 sortDir={sortDir}
                 onToggleSortDir={toggleSortDir}
                 tags={allTags}
-                tagFilter={tagFilter}
-                onTagFilter={setTagFilter}
                 selecting={selecting}
                 selected={selected}
                 onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
@@ -909,8 +1115,9 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 onOpenBook={openBook}
                 onToggleFavorite={toggleFavorite}
                 onEditInfo={openBookInfo}
+                onSetTags={(book, next) => void setBookTags(book, next)}
+                onFavoriteSelected={() => void favoriteSelected()}
                 onImport={triggerImport}
-                onOpenStats={() => setView('stats')}
                 confirmRemove={confirmRemove}
                 onRemoveClick={handleRemoveClick}
                 tagDraft={tagDraft}
@@ -919,7 +1126,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                 onSelectAll={toggleSelectAll}
                 onRemoveSelected={() => void removeSelected()}
                 bulkBusy={bulkBusy}
-                emptyHint={tagFilter ?? query}
+                emptyHint={emptyHint}
               />
             )}
           </>
@@ -930,16 +1137,19 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             notes={notes}
             loading={!notesLoaded}
             error={notesError}
-            onOpenNote={openNote}
+            onOpenNote={(entry) => openShelfBook(entry.bookHash, entry.cfi)}
+            onOpenBook={(bookHash) => openShelfBook(bookHash)}
           />
         )}
 
         {view === 'stats' && (
           <StatsView
             stats={stats}
-            todaySeconds={todaySeconds}
             series={statsSeries}
             peak={statsPeak}
+            finishedCount={finishedCount}
+            topBooks={topBooks}
+            onOpenBook={(bookHash) => openShelfBook(bookHash)}
           />
         )}
 

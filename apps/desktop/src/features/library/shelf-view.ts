@@ -15,6 +15,46 @@ export type SortDir = 'asc' | 'desc'
 export type ViewMode = 'grid' | 'list'
 
 /**
+ * 侧栏「我的分组」:不需要用户维护的视图,按进度与标签现算。
+ * 与标签筛选可叠加(两个条件都满足才显示),不互斥。
+ */
+export type SmartFilter = 'all' | 'reading' | 'favorite' | 'finished'
+
+export const SMART_FILTERS = [
+  { id: 'all', label: '全部' },
+  { id: 'reading', label: '在读' },
+  { id: 'favorite', label: '收藏' },
+  { id: 'finished', label: '已读完' },
+] as const satisfies readonly { readonly id: SmartFilter; readonly label: string }[]
+
+/** 「在读」= 翻开过但没读完。读完的归「已读完」,两者互斥。 */
+export function isReading(book: Pick<LibraryBook, 'progress'>): boolean {
+  const progress = book.progress ?? 0
+  return progress > 0 && progress < 1
+}
+
+export function isFinished(book: Pick<LibraryBook, 'progress'>): boolean {
+  return (book.progress ?? 0) >= 1
+}
+
+export function matchesSmartFilter(
+  book: Pick<LibraryBook, 'progress' | 'tags'>,
+  filter: SmartFilter,
+): boolean {
+  switch (filter) {
+    case 'reading':
+      return isReading(book)
+    case 'finished':
+      return isFinished(book)
+    case 'favorite':
+      return isFavorite(book)
+    case 'all':
+    default:
+      return true
+  }
+}
+
+/**
  * 每种排序自己的「自然」方向:最近添加、大文件、高进度都是降序符合直觉,
  * 书名则天然是 A→Z。换排序键时把方向重置回这个默认值,而不是沿用上一个
  * 键的方向 —— 否则用户会看到「按书名」却从 Z 开始。
@@ -154,10 +194,43 @@ const COVER_PALETTES: readonly (readonly [string, string])[] = [
   ['#e4efdd', '#c8e0b8'], // leaf
 ]
 
-/** Stable per-book color pair — the same book always looks the same. */
+/**
+ * 编辑面板里一键可加的常用标签。
+ *
+ * 只是个"起手式":用户大多在这几个类别里挑,让人从零开始敲一遍中文标签没必要。
+ * 不含「收藏」—— 它是卡片上的星标,不该在标签列表里出现两次。
+ */
+export const SUGGESTED_TAGS: readonly string[] = [
+  '文学',
+  '小说',
+  '历史',
+  '科幻',
+  '社科',
+  '哲学',
+  '技术',
+  '科普',
+  '传记',
+  '推理',
+  '艺术',
+  '心理学',
+  '经济',
+  '待读',
+] as const
+
+/**
+ * Stable per-book color pair — the same book always looks the same.
+ *
+ * 末尾那次雪崩混合不是装饰:直接把累加和取模会让**相似字符串撞进同一个
+ * 调色板** —— 而 SHA-256 的十六进制串相邻两位恰恰就是"相似"(实测 'a'×64、
+ * 'b'×64、'c'×64 全落在第 0 个)。混一轮之后 800 个真实 hash 在 8 个色板上
+ * 的分布是 92~110,肉眼看得出的差别。
+ */
 export function coverPalette(hash: string): readonly [string, string] {
   let value = 0
   for (const char of hash) value = (value * 31 + char.charCodeAt(0)) | 0
+  value ^= value >>> 15
+  value = Math.imul(value, 0x2c1b3c6d)
+  value ^= value >>> 12
   return COVER_PALETTES[Math.abs(value) % COVER_PALETTES.length] ?? COVER_PALETTES[0]!
 }
 

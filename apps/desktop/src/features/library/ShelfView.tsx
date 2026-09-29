@@ -11,7 +11,6 @@ import {
   ArrowUp,
   Check,
   CheckSquare,
-  ChartLineUp,
   DotsThree,
   ListBullets,
   MagnifyingGlass,
@@ -19,14 +18,17 @@ import {
   Plus,
   SquaresFour,
   Star,
+  Tag,
   Trash,
   X,
 } from '@phosphor-icons/react'
 import { DropdownMenu } from '../../components/DropdownMenu'
+import { ScrollingText } from '../../components/ScrollingText'
+import { TagPopover } from './TagPopover'
 import {
-  ALL_TAGS,
   BULK_CONFIRM,
   coverPalette,
+  FAVORITE_TAG,
   formatBytes,
   isFavorite,
   shelfTitle,
@@ -50,18 +52,18 @@ export interface ShelfViewProps {
   readonly sortDir: SortDir
   readonly onToggleSortDir: () => void
   readonly tags: readonly string[]
-  readonly tagFilter: string | null
-  readonly onTagFilter: (value: string | null) => void
   readonly selecting: boolean
   readonly selected: ReadonlySet<string>
   readonly onToggleSelecting: () => void
   readonly onToggleSelected: (hash: string) => void
   readonly onOpenBook: (book: ShelfBook) => void
   readonly onToggleFavorite: (book: ShelfBook) => void
-  readonly onEditInfo: (book: ShelfBook) => void
+  readonly onEditInfo: (book: ShelfBook, focus?: 'title' | 'tags') => void
+  /** 卡片上直接改标签:浮层里点一下就存,不走整张元数据表单。 */
+  readonly onSetTags: (book: ShelfBook, tags: readonly string[]) => void
+  /** 批量收藏:选中的一起变成收藏,或一起取消。 */
+  readonly onFavoriteSelected: () => void
   readonly onImport: () => void
-  /** 工具栏上的统计快捷入口:侧栏之外再给一条直达路径,高频动作不吃灰。 */
-  readonly onOpenStats: () => void
   /** 已进入待确认态的书籍 hash(单本移除与整批移出共用)。 */
   readonly confirmRemove: string | null
   readonly onRemoveClick: (hash: string) => void
@@ -88,8 +90,6 @@ export function ShelfView({
   sortDir,
   onToggleSortDir,
   tags,
-  tagFilter,
-  onTagFilter,
   selecting,
   selected,
   onToggleSelecting,
@@ -97,8 +97,9 @@ export function ShelfView({
   onOpenBook,
   onToggleFavorite,
   onEditInfo,
+  onSetTags,
+  onFavoriteSelected,
   onImport,
-  onOpenStats,
   confirmRemove,
   onRemoveClick,
   tagDraft,
@@ -116,6 +117,13 @@ export function ShelfView({
    */
   const [menuHash, setMenuHash] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  /** 「打标签」浮层锚在哪张卡片上。与操作菜单分开:入口不同,别互相顶开。 */
+  const [tagHash, setTagHash] = useState<string | null>(null)
+
+  const selectedBooksInView = books.filter((book) => selected.has(book.hash))
+  const allFavorite =
+    selectedBooksInView.length > 0 &&
+    selectedBooksInView.every((book) => book.tags.includes(FAVORITE_TAG))
 
   useEffect(() => {
     if (menuHash === null) return
@@ -277,25 +285,9 @@ export function ShelfView({
         >
           <ArrowUp size={15} weight="bold" aria-hidden />
         </button>
-        {tags.length > 0 && (
-          <DropdownMenu
-            ariaLabel="按标签筛选"
-            value={tagFilter ?? ALL_TAGS}
-            options={[
-              { value: ALL_TAGS, label: '全部标签' },
-              ...tags.map((tag) => ({ value: tag, label: tag })),
-            ]}
-            onChange={(next) => onTagFilter(next === ALL_TAGS ? null : next)}
-            className="dropdown-shelf-tags"
-          />
-        )}
-        <button type="button" className="shelf-manage" onClick={onOpenStats} title="阅读统计">
-          <ChartLineUp size={15} weight="regular" aria-hidden />
-          统计
-        </button>
         <button
           type="button"
-          className="shelf-manage"
+          className={`shelf-manage${selecting ? ' is-active' : ''}`}
           onClick={() => onToggleSelecting()}
           title={selecting ? '退出批量管理' : '批量管理'}
           aria-pressed={selecting}
@@ -372,8 +364,10 @@ export function ShelfView({
                     {book.format !== 'unknown' && (
                       <span className="book-format">{book.format.toUpperCase()}</span>
                     )}
+                    {/* 进度压在封面底边上、轨道半透明:它是这本书的一部分,
+                        不该在封面下面另起一行。 */}
                     {progress !== null && progress > 0 && (
-                      <span className="book-progress" aria-hidden>
+                      <span className="book-cover-progress" aria-hidden>
                         <span
                           className="book-progress-fill"
                           style={{ width: `${progress * 100}%` }}
@@ -387,14 +381,9 @@ export function ShelfView({
                     )}
                   </button>
                   {!selecting && (
+                    /* 悬浮才出现的一排图标。刻意不做「继续阅读」那种文案按钮 ——
+                       点封面本身就是继续读,按钮位置留给真正要选的动作。 */
                     <div className="card-actions">
-                      <button
-                        type="button"
-                        className="card-action-go"
-                        onClick={() => onOpenBook(book)}
-                      >
-                        {progress !== null && progress > 0 ? '继续阅读' : '开始阅读'}
-                      </button>
                       <button
                         type="button"
                         className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
@@ -411,24 +400,57 @@ export function ShelfView({
                       <button
                         type="button"
                         className="card-action-icon"
-                        aria-haspopup="menu"
-                        aria-expanded={menuHash === book.hash}
-                        aria-label={`更多操作 ${title}`}
-                        onClick={() =>
-                          menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
-                        }
+                        aria-label={`给《${title}》打标签`}
+                        aria-haspopup="dialog"
+                        aria-expanded={tagHash === book.hash}
+                        onClick={() => setTagHash(tagHash === book.hash ? null : book.hash)}
                       >
-                        <DotsThree size={16} weight="bold" aria-hidden />
+                        <Tag size={15} weight="regular" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className="card-action-icon"
+                        aria-label={`编辑《${title}》的信息`}
+                        onClick={() => onEditInfo(book)}
+                      >
+                        <PencilSimple size={15} weight="regular" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className={`card-action-icon is-danger${
+                          confirmRemove === book.hash ? ' is-confirming' : ''
+                        }`}
+                        aria-label={
+                          confirmRemove === book.hash ? `确认移出《${title}》` : `移出《${title}》`
+                        }
+                        onClick={() => onRemoveClick(book.hash)}
+                      >
+                        {confirmRemove === book.hash ? (
+                          <Check size={15} weight="bold" aria-hidden />
+                        ) : (
+                          <Trash size={15} weight="regular" aria-hidden />
+                        )}
                       </button>
                     </div>
+                  )}
+                  {tagHash === book.hash && (
+                    <TagPopover
+                      label={`《${title}》的标签`}
+                      tags={book.tags}
+                      onChange={(next) => onSetTags(book, next)}
+                      onClose={() => setTagHash(null)}
+                    />
                   )}
                   {renderMenu(book, 'is-card')}
                 </div>
                 <div className="book-meta">
-                  <span className="book-meta-title" title={title}>
-                    {title}
-                  </span>
-                  <span className="book-meta-sub">
+                  <ScrollingText text={title} className="book-meta-title" />
+                  {/* 作者单独一行:和进度挤在一行时,进度那段定宽文案会把
+                      作者压成「迟…」—— 作者是书的第二身份,不该只值两个字。 */}
+                  {book.author !== null && (
+                    <ScrollingText text={book.author} className="book-meta-author" />
+                  )}
+                  <span className="book-meta-read">
                     {book.tags.length > 0 ? `${book.tags.join(' / ')} · ` : ''}
                     {book.format === 'unknown'
                       ? '重新导入同一文件即可恢复'
@@ -437,7 +459,6 @@ export function ShelfView({
                         : formatBytes(book.size)}
                   </span>
                 </div>
-                {!selecting && removeButton(book)}
               </li>
             )
           })}
@@ -491,6 +512,7 @@ export function ShelfView({
                   <span className="book-row-main">
                     <span className="book-row-title">{title}</span>
                     <span className="book-row-sub">
+                      {book.author !== null ? `${book.author} · ` : ''}
                       {book.format.toUpperCase()} · {formatBytes(book.size)}
                       {progress !== null && progress > 0
                         ? ` · 读到 ${Math.round(progress * 100)}%`
@@ -540,41 +562,57 @@ export function ShelfView({
         </ul>
       )}
 
-      {selecting && (
-        <div className="shelf-bulk" role="toolbar" aria-label="批量操作">
-          <span className="shelf-bulk-count">已选 {selected.size} 本</span>
-          <button type="button" className="btn btn-ghost" onClick={onSelectAll}>
-            {selected.size === books.length ? '取消全选' : '全选'}
-          </button>
-          <input
-            className="shelf-bulk-tag"
-            list="deepread-tag-options"
-            placeholder="加标签…"
-            value={tagDraft}
-            onChange={(event) => onTagDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') onTagSelected()
-            }}
-            aria-label="给选中的书加标签"
-          />
-          <button
-            type="button"
-            className="btn"
-            disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
-            onClick={onTagSelected}
-          >
-            打标签
-          </button>
-          <button
-            type="button"
-            className={`btn${confirmRemove === BULK_CONFIRM ? ' is-danger' : ''}`}
-            disabled={bulkBusy || selected.size === 0}
-            onClick={onRemoveSelected}
-          >
-            {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
-          </button>
-        </div>
-      )}
+      {/* 工具条常驻、靠 `is-hidden` 收起:进出两个方向都由 CSS 过渡完成,
+          比"条件渲染 + 定时器卸载"少一个状态,也不会在卸载瞬间把书往上跳一下。 */}
+      <div
+        className={`shelf-bulk${selecting ? '' : ' is-hidden'}`}
+        role="toolbar"
+        aria-label="批量操作"
+        /* 收起期间按钮既不该被点,也不该被 Tab 到。 */
+        inert={!selecting}
+      >
+        <span className="shelf-bulk-count">已选 {selected.size} 本</span>
+        <button type="button" className="btn btn-ghost" onClick={onSelectAll}>
+          {selected.size === books.length ? '取消全选' : '全选'}
+        </button>
+        <button
+          type="button"
+          className={`btn btn-ghost${allFavorite ? ' is-on' : ''}`}
+          disabled={bulkBusy || selected.size === 0}
+          aria-pressed={allFavorite}
+          onClick={onFavoriteSelected}
+        >
+          <Star size={14} weight={allFavorite ? 'fill' : 'regular'} aria-hidden />
+          {allFavorite ? '取消收藏' : '收藏'}
+        </button>
+        <input
+          className="shelf-bulk-tag"
+          list="deepread-tag-options"
+          placeholder="加标签…"
+          value={tagDraft}
+          onChange={(event) => onTagDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onTagSelected()
+          }}
+          aria-label="给选中的书加标签"
+        />
+        <button
+          type="button"
+          className="btn"
+          disabled={bulkBusy || tagDraft.trim() === '' || selected.size === 0}
+          onClick={onTagSelected}
+        >
+          打标签
+        </button>
+        <button
+          type="button"
+          className={`btn${confirmRemove === BULK_CONFIRM ? ' is-danger' : ''}`}
+          disabled={bulkBusy || selected.size === 0}
+          onClick={onRemoveSelected}
+        >
+          {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
+        </button>
+      </div>
 
       <datalist id="deepread-tag-options">
         {tags.map((tag) => (

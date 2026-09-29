@@ -57,3 +57,37 @@ export function excerptPreview(excerpt: string | null, max = 160): string | null
   if (trimmed === '') return null
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`
 }
+
+/** 只有写了自己话的那几条 —— 「仅有笔记」筛选用的。 */
+export function onlyWithNotes(notes: readonly NoteEntry[]): readonly NoteEntry[] {
+  return notes.filter((note) => note.note !== null && note.note.trim() !== '')
+}
+
+/**
+ * 整页导出成 Markdown:按书分节,原文用引用块,自己写的那句话跟在后面。
+ * 摘录在这里**不截断** —— 截断是列表的呈现选择,不该带到导出结果里。
+ *
+ * 复制走剪贴板而不是写文件:桌面端写文件要先装 fs 插件或加一条 IPC,那属于
+ * 「批注导出」自己的一档事,不该顺手塞进来半个。
+ */
+export function notesToMarkdown(
+  groups: readonly NoteGroup[],
+  exportedAt: Date = new Date(),
+): string {
+  const lines: string[] = [
+    '# 阅读笔记',
+    '',
+    `导出时间:${exportedAt.toISOString().slice(0, 10)}`,
+    '',
+  ]
+  for (const group of groups) {
+    lines.push(`## ${group.title}`, '')
+    for (const note of group.notes) {
+      const excerpt = note.excerpt?.trim()
+      if (excerpt !== undefined && excerpt !== '') lines.push(`> ${excerpt}`, '')
+      const own = note.note?.trim()
+      if (own !== undefined && own !== '') lines.push(own, '')
+    }
+  }
+  return `${lines.join('\n').trimEnd()}\n`
+}

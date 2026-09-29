@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { NoteEntry } from '@deepread/shared'
-import { excerptPreview, formatNoteTime, groupNotesByBook } from './notes-view'
+import {
+  excerptPreview,
+  formatNoteTime,
+  groupNotesByBook,
+  notesToMarkdown,
+  onlyWithNotes,
+} from './notes-view'
 
 const note = (overrides: Partial<NoteEntry>): NoteEntry => ({
   id: 'n1',
@@ -71,5 +77,63 @@ describe('excerptPreview', () => {
   it('空内容当成没有摘录', () => {
     expect(excerptPreview(null)).toBeNull()
     expect(excerptPreview('   ')).toBeNull()
+  })
+})
+
+describe('onlyWithNotes', () => {
+  it('只留写了自己话的那几条', () => {
+    const notes = [
+      note({ id: 'n1', note: '我想的' }),
+      note({ id: 'n2', note: null }),
+      note({ id: 'n3', note: '   ' }),
+      note({ id: 'n4', note: '也想过的' }),
+    ]
+    expect(onlyWithNotes(notes).map((item) => item.id)).toEqual(['n1', 'n4'])
+  })
+})
+
+describe('notesToMarkdown', () => {
+  it('按书分节,原文用引用块,自己写的话跟在后面', () => {
+    const groups = groupNotesByBook([
+      note({ id: 'n1', displayName: '夜航书', excerpt: '原文一', note: '我自己写的' }),
+      note({
+        id: 'n2',
+        bookHash: 'b'.repeat(64),
+        displayName: '山中手记',
+        excerpt: '原文二',
+        note: null,
+      }),
+    ])
+    const markdown = notesToMarkdown(groups, new Date('2026-09-28T12:00:00Z'))
+
+    expect(markdown.split('\n')).toEqual([
+      '# 阅读笔记',
+      '',
+      '导出时间:2026-09-28',
+      '',
+      '## 夜航书',
+      '',
+      '> 原文一',
+      '',
+      '我自己写的',
+      '',
+      '## 山中手记',
+      '',
+      '> 原文二',
+      '',
+    ])
+  })
+
+  it('导出时**不**截断摘录 —— 截断是列表的呈现选择', () => {
+    const long = '一'.repeat(500)
+    const markdown = notesToMarkdown(groupNotesByBook([note({ excerpt: long })]))
+    expect(markdown).toContain(long)
+    expect(markdown).not.toContain('…')
+  })
+
+  it('没有批注时也产出合法的一页', () => {
+    expect(notesToMarkdown([], new Date('2026-09-28T12:00:00Z'))).toBe(
+      '# 阅读笔记\n\n导出时间:2026-09-28\n',
+    )
   })
 })

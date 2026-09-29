@@ -145,6 +145,15 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (book_hash, day)
     );
     "#,
+    // v7 — book metadata beyond the title: author (shown on the shelf card),
+    // plus subtitle/publisher/language which the info panel edits and future
+    // export/search will read. All nullable: absent means "the book didn't say".
+    r#"
+    ALTER TABLE books ADD COLUMN author TEXT;
+    ALTER TABLE books ADD COLUMN subtitle TEXT;
+    ALTER TABLE books ADD COLUMN publisher TEXT;
+    ALTER TABLE books ADD COLUMN language TEXT;
+    "#,
 ];
 
 pub fn open_db(path: &Path) -> Result<Connection, AppError> {

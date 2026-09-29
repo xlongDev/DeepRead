@@ -185,32 +185,93 @@ function normalizeTitle(raw: string | undefined | null): string | null {
     .replace(/\s+/g, ' ')
     .trim()
   if (text.length === 0 || text.length > 200) return null
-  if (/\.(pdf|docx?|pptx?|xlsx?|epub|txt)$/i.test(text)) return null
+  if (/\.(pdf|docx?|pptx?|xlsx?|epub|mobi|azw3|fb2|cbz|txt)$/i.test(text)) return null
   return text
 }
 
-/** Extract the real title for a book; null means "fall back to the file name". */
-export async function extractTitle(url: string, format: BookFormat): Promise<string | null> {
+/** 能从书里读到的元数据;每项都可能为 null(书没说,或者文件里写的是垃圾)。 */
+export interface ExtractedMeta {
+  readonly title: string | null
+  readonly author: string | null
+  readonly publisher: string | null
+  readonly language: string | null
+}
+
+const NO_META: ExtractedMeta = { title: null, author: null, publisher: null, language: null }
+
+/**
+ * 读一本书的元数据。
+ *
+ * 一次调用带回全部字段:标题回填与作者回填本来就是同一件事 —— 都是"打开书,
+ * 读它自己写着的元数据",分两次读等于把文件解析两遍。
+ */
+export async function extractMetadata(url: string, format: BookFormat): Promise<ExtractedMeta> {
   switch (format) {
     case 'epub':
-      return normalizeTitle((await openEpub(url))?.metadata?.title)
+      return metadataToFields((await openEpub(url))?.metadata)
     case 'mobi':
     case 'azw3':
-      return normalizeTitle((await openMobi(url))?.metadata?.title)
+      return metadataToFields((await openMobi(url))?.metadata)
     case 'pdf': {
       try {
         const pdfjs = await import('pdfjs-dist')
         const pdf = await pdfjs.getDocument({ url }).promise
-        const info = (await pdf.getMetadata()).info as { Title?: string } | undefined
+        const info = (await pdf.getMetadata()).info as
+          { Title?: string; Author?: string; Producer?: string } | undefined
         void pdf.cleanup()
-        return normalizeTitle(info?.Title)
+        return {
+          title: normalizeTitle(info?.Title),
+          author: normalizeTitle(info?.Author),
+          // PDF 没有出版社字段,Producer 是生成它的软件 —— 不算出版社,不填。
+          publisher: null,
+          language: null,
+        }
       } catch {
-        return null
+        return NO_META
       }
     }
     default:
-      return null
+      return NO_META
   }
+}
+
+/**
+ * 把 foliate-js 的元数据字段压成一个字符串。
+ *
+ * 两个格式的字段形状**不一样**,这是这里唯一需要小心的地方:
+ * - EPUB:`author` 是贡献者对象数组 `[{ name, role: ['aut'] }]`,`publisher` 是
+ *   单个贡献者对象,`language` 是字符串数组,标题带 alternate-script 时是语言映射
+ *   `{ zh: '…' }`;
+ * - MOBI:`author` 是字符串数组,其余是字符串。
+ *
+ * 早期版本按 `typeof raw === 'string'` 取,于是 EPUB 的作者/出版社/语言**永远**
+ * 是 null(只有 title 恰好是字符串,所以标题能出来、作者出不来)。
+ */
+function flattenMeta(value: unknown, depth = 0): string | null {
+  if (depth > 3) return null
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return flattenMeta(value[0], depth + 1)
+  if (value === null || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if ('name' in record) return flattenMeta(record.name, depth + 1) // 贡献者对象
+  if ('value' in record) return flattenMeta(record.value, depth + 1)
+  return flattenMeta(Object.values(record)[0], depth + 1) // 语言映射 { zh: '…' }
+}
+
+/** foliate 的原始 metadata → 我们要存的那几个字段。导出是为了能直接测。 */
+export function metadataToFields(meta: Record<string, unknown> | undefined): ExtractedMeta {
+  const read = (key: string): string | null => normalizeTitle(flattenMeta(meta?.[key]))
+  return {
+    title: read('title'),
+    author: read('author'),
+    publisher: read('publisher'),
+    language: read('language'),
+  }
+}
+
+/** Extract the real title for a book; null means "fall back to the file name". */
+export async function extractTitle(url: string, format: BookFormat): Promise<string | null> {
+  return (await extractMetadata(url, format)).title
 }
 
 /** Extract a cover URL for a book; null means "draw the generated cover". */
