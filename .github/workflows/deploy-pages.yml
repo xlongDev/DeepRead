@@ -1,0 +1,58 @@
+name: Deploy to GitHub Pages
+
+# Web 预览版:同一份前端代码跑在浏览器里(browser mode,无 Tauri IPC)。
+# 桌面构建走 release.yml,这里只管静态站点。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web bundle
+        run: pnpm build
+
+      - uses: actions/configure-pages@v5
+        with:
+          # 用 GITHUB_TOKEN 自动开启 Pages,省掉手动去 Settings 里点一次
+          enablement: true
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/desktop/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
