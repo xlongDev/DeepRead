@@ -58,10 +58,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          with:
-            tagName: v__VERSION__
-            releaseName: 'Deepread v__VERSION__ (${{ inputs.channel }})'
-            releaseBody: 'See the assets below to download and install. SHA-256 checksums are published alongside each artifact.'
-            releaseDraft: true
-            prerelease: ${{ inputs.channel != 'stable' }}
-            includeUpdaterJson: true
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Deepread v__VERSION__ (${{ inputs.channel }})'
+          releaseBody: 'See the assets below to download and install. SHA-256 checksums are published alongside each artifact.'
+          releaseDraft: true
+          prerelease: ${{ inputs.channel != 'stable' }}
+          includeUpdaterJson: true
