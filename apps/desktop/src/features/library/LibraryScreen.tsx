@@ -29,6 +29,7 @@ import {
   exportSnapshot,
   importSnapshot,
   importStoredBook,
+  readStorageEstimate,
   requestPersistentStorage,
   StorageQuotaError,
 } from '../../lib/web-store'
@@ -314,6 +315,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   useEffect(() => {
     if (isTauriRuntime()) return
     void requestPersistentStorage()
+  }, [])
+
+  /** 浏览器存储用量;桌面端没有这个概念(书留在用户自己的磁盘上)。 */
+  const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null)
+
+  useEffect(() => {
+    if (isTauriRuntime()) return
+    void readStorageEstimate().then(setStorageUsage)
   }, [])
 
   /**
@@ -1550,28 +1559,44 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               {settingsTab === 'ai' && (
                 <section className="modal-section">
                   <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
-                  <AiProviderForm
-                    providers={aiProviders}
-                    configForm={aiConfigForm}
-                    onFormChange={setAiConfigForm}
-                    onSave={() => saveAiProvider()}
-                    onRemove={removeAiProvider}
-                    onApplyPreset={(preset) => {
-                      setAiConfigForm((form) => ({
-                        ...form,
-                        name: preset.label,
-                        baseUrl: preset.baseUrl,
-                        model: preset.model,
-                      }))
-                    }}
-                    error={aiProviderError}
-                  />
-                  {aiLoaded && aiProviders.length > 0 && (
+                  {/*
+                   * 浏览器端不给表单。填了也存不下 —— 密钥在那边没有安全的地方
+                   * 放(IndexedDB 是明文的),而且直连各家 API 会被 CORS 拦下。
+                   * 与其让用户填完再撞一句「Tauri 运行时不可用」,不如一开始就
+                   * 说清楚;那也是「点了没反应」和「明确说没有」的区别。
+                   */}
+                  {!isTauriRuntime() ? (
                     <p className="ai-privacy">
-                      配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
-                      {aiProviders.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}
-                      。
+                      AI 助手与云端朗读仅在桌面版提供。浏览器里没有安全存放 API
+                      密钥的地方(本地存储是明文的),直连各家服务也会被跨域策略拦下。
                     </p>
+                  ) : (
+                    <>
+                      <AiProviderForm
+                        providers={aiProviders}
+                        configForm={aiConfigForm}
+                        onFormChange={setAiConfigForm}
+                        onSave={() => saveAiProvider()}
+                        onRemove={removeAiProvider}
+                        onApplyPreset={(preset) => {
+                          setAiConfigForm((form) => ({
+                            ...form,
+                            name: preset.label,
+                            baseUrl: preset.baseUrl,
+                            model: preset.model,
+                          }))
+                        }}
+                        error={aiProviderError}
+                      />
+                      {aiLoaded && aiProviders.length > 0 && (
+                        <p className="ai-privacy">
+                          配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
+                          {aiProviders.find((provider) => provider.id === aiActiveId)?.name ??
+                            '未选择'}
+                          。
+                        </p>
+                      )}
+                    </>
                   )}
                 </section>
               )}
@@ -1587,7 +1612,8 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                         onClick={() => void runBackup()}
                         disabled={backupBusy}
                       >
-                        {backupBusy ? '备份中…' : '备份到…'}
+                        {/* 桌面端要选存到哪;浏览器端直接下载,没有"到哪"这一步。 */}
+                        {backupBusy ? '备份中…' : isTauriRuntime() ? '备份到…' : '导出备份'}
                       </button>
                       <button
                         type="button"
@@ -1599,6 +1625,14 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                       </button>
                     </div>
                     {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+                    {/* 浏览器里书是自己存下来的,空间有上限 —— 在"备份"这一格
+                        顺带如实告诉用户还剩多少,别等写满了才发现。 */}
+                    {!isTauriRuntime() && storageUsage !== null && storageUsage.quota > 0 && (
+                      <p className="library-note">
+                        浏览器已用 {formatBytes(storageUsage.usage)},配额约{' '}
+                        {formatBytes(storageUsage.quota)}。
+                      </p>
+                    )}
                   </section>
                   <section className="modal-section">
                     <p className="modal-section-label">更新</p>
