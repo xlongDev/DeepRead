@@ -15,63 +15,18 @@
  * 用法:node scripts/smoke-web.mjs [--book <path>] [--keep-open]
  */
 
-import { existsSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+
+import { createReporter, findChromium, loadPlaywright, requireDevServer } from './lib/browser.mjs'
 
 const BASE = 'http://localhost:5173/'
 const PROJECT_ROOT = resolve(import.meta.dirname, '..')
 
-// ---------- 断言 ----------
+// ---------- 断言与环境探测(见 scripts/lib/browser.mjs) ----------
 
-let failures = 0
-const results = []
-
-function check(label, ok, detail = '') {
-  results.push({ label, ok })
-  if (!ok) failures += 1
-  console.log(`${ok ? '  ✓' : '  ✗'} ${label}${detail === '' ? '' : ` — ${detail}`}`)
-}
-
-function section(title) {
-  console.log(`\n${title}`)
-}
-
-// ---------- 环境探测 ----------
-
-/**
- * playwright 不在本项目的依赖里(装不上),所以除了正常解析,还回退到这台机器上
- * 已知的可用副本。回退时会明确警告 —— 别让「跑过了」被误读成「本项目能跑」。
- */
-async function loadPlaywright() {
-  const fallbacks = ['/Users/xiaolong/ai-resume-mvp/node_modules/playwright/index.mjs']
-  try {
-    return { module: await import('playwright'), fallback: false }
-  } catch {
-    for (const path of fallbacks) {
-      if (!existsSync(path)) continue
-      console.warn(`⚠ 本项目没有 playwright,回退到 ${path}\n`)
-      return { module: await import(path), fallback: true }
-    }
-  }
-  throw new Error('找不到 playwright。请在本项目安装,或改这里的回退路径。')
-}
-
-/** 扫描 ms-playwright 缓存目录,而不是写死版本号 —— 那个号会随浏览器升级变。 */
-function findChromium() {
-  const root = join(homedir(), 'Library/Caches/ms-playwright')
-  if (!existsSync(root)) return null
-  for (const entry of readdirSync(root)) {
-    if (!entry.startsWith('chromium-')) continue
-    const candidate = join(
-      root,
-      entry,
-      'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    )
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
+const reporter = createReporter()
+const { check, section } = reporter
 
 /** 找一本用来测的 epub:优先命令行传入,否则项目根目录里的第一本。 */
 function findSampleBook() {
@@ -95,12 +50,7 @@ if (book === null) {
   console.error('✗ 找不到测试用的 epub。用 --book <path> 指定一本。')
   process.exit(1)
 }
-try {
-  await fetch(BASE, { signal: AbortSignal.timeout(3000) })
-} catch {
-  console.error(`✗ dev server 不在 ${BASE}。先起一个:npx vite --port 5173`)
-  process.exit(1)
-}
+await requireDevServer(BASE)
 
 console.log(`web 端冒烟测试 · ${BASE}`)
 console.log(`  测试用书: ${book}`)
@@ -257,7 +207,4 @@ try {
 
 // ---------- 汇总 ----------
 
-const passed = results.filter((item) => item.ok).length
-console.log(`\n${failures === 0 ? '✓ 全部通过' : '✗ 有失败'}: ${passed}/${results.length}`)
-if (fallback) console.log('  (注意:用的是回退的 playwright,本项目自身没有安装)')
-process.exit(failures === 0 ? 0 : 1)
+process.exit(reporter.finish(fallback ? '(注意:用的是回退的 playwright,本项目自身没有安装)' : ''))

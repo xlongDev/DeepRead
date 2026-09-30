@@ -6,7 +6,13 @@
 
 ~~契约基于规范而非实测~~ → **2026-09-09 已实测集成**(ADR-0006):npm 官方包 1.0.1,EPUB/PDF 真书浏览器 E2E 通过,内核契约以 ambient 类型声明锁定(`reader-adapter/src/foliate-js.d.ts`)。
 
-**残余风险**:MOBI/AZW3/FB2/CBZ 有 fixtures 但尚无真书回归;内核升级可能破坏未声明 API。**缓解**:升级时跑 `pnpm fixtures` + 浏览器 E2E;MOBI/FB2 真书样本补入 fixtures。
+**残余风险**(2026-09-30 更新):**MOBI / AZW3 已过真书回归**(`pnpm smoke:formats`,
+正文分别渲染出 820 / 295 字符);FB2 / CBZ 仍只有 fixtures。内核升级可能破坏未声明 API。
+**缓解**:升级时跑 `pnpm fixtures` + `pnpm smoke:web` + `pnpm smoke:formats`。
+
+> 真书样本**不进仓库**(有版权),所以原计划的「补入 fixtures」改成了:脚本自己去
+> 项目根目录找,或用 `--samples <dir>` 指定。没有样本的格式会被标成「未验证」
+> 而不是悄悄算通过。
 
 ## R2 · 协议双端漂移 — 影响:中 / 概率:中
 

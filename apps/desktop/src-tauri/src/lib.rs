@@ -10,13 +10,16 @@ mod cloud;
 mod commands;
 mod dictionary;
 mod edge_tts;
-mod error;
+// 这四个对集成测试(tests/integration.rs)开放 —— 那边要跨模块走完整链路
+// 「导入 → 进度 → 批注 → 备份 → 恢复」,只能碰 pub 的东西。其余模块保持私有:
+// 命令层之外的内部实现没有理由暴露出去。
+pub mod error;
 mod events;
 mod fonts;
-mod library;
+pub mod library;
 mod secrets;
-mod state;
-mod storage;
+pub mod state;
+pub mod storage;
 mod timestamps;
 mod tts;
 

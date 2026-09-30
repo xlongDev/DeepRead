@@ -3,8 +3,8 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Deepread \u2014 a local-first, cross-platform AI ebook reader (Personal Reading OS)",
-  "packageManager": "pnpm@11.22.0",
+  "description": "Deepread — a local-first, cross-platform AI ebook reader (Personal Reading OS)",
+  "packageManager": "pnpm@12.8.1",
   "engines": {
     "node": ">=22"
   },
@@ -17,8 +17,9 @@
     "build": "pnpm --filter @deepread/desktop build",
     "verify": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
     "smoke:web": "node scripts/smoke-web.mjs",
+    "smoke:formats": "node scripts/smoke-formats.mjs",
     "dev": "pnpm --filter @deepread/desktop dev",
-    "tauri": "pnpm --filter @deepread/desktop tauri",
+    "tauri": "node scripts/tauri.mjs",
     "cargo:check": "cargo check --workspace --all-targets",
     "cargo:test": "cargo test --workspace",
     "cargo:fmt": "cargo fmt --all",
@@ -28,8 +29,8 @@
     "release": "node scripts/release.mjs"
   },
   "devDependencies": {
-    "oxlint": "1.82.0",
-    "prettier": "3.9.6",
+    "oxlint": "1.86.0",
+    "prettier": "3.9.9",
     "typescript": "7.0.2"
   }
 }

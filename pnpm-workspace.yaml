@@ -9,6 +9,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - marked@18.0.12
+  - '@tauri-apps/plugin-updater@2.13.1'
 
 overrides:
   ansi-regex: ^6.1.0

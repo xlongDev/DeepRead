@@ -12,13 +12,18 @@ Phase 8 生产化:更新器(minisign 公钥校验,应用内检查/安装/忽略)
 
 格式支持(只列真实验证过的能力,不伪造):
 
-| 格式                    | 状态                                            |
-| ----------------------- | ----------------------------------------------- |
-| EPUB                    | ✅ 浏览器 E2E 验证                              |
-| PDF                     | ✅ 浏览器 E2E 验证(内核官方适配器 + pdfjs-dist) |
-| MOBI / AZW3 / FB2 / CBZ | ✅ 内核原生解析(真书样本回归待补)               |
-| TXT / Markdown          | ✅ 适配器实现内核 book 接口(不转译文本)         |
-| CHM                     | ❌ 内核无解析器,如实报错                        |
+| 格式           | 状态                                             |
+| -------------- | ------------------------------------------------ |
+| EPUB           | ✅ 浏览器 E2E 验证                               |
+| PDF            | ✅ 浏览器 E2E 验证(内核官方适配器 + pdfjs-dist)  |
+| MOBI / AZW3    | ✅ 内核原生解析 + 真书回归(`pnpm smoke:formats`) |
+| FB2 / CBZ      | ✅ 内核原生解析(fixture 通过;真书样本回归待补)   |
+| TXT / Markdown | ✅ 适配器实现内核 book 接口(不转译文本)          |
+| CHM            | ❌ 内核无解析器,如实报错                         |
+
+> `smoke:formats` 用**真书样本**跑(受版权保护的书不进仓库,脚本自己去项目根目录
+> 找或用 `--samples` 指定)。没有样本的格式会被标成「未验证」而不是悄悄算通过。
+> 截至 2026-09-30:MOBI(820 字符正文)、AZW3(295 字符)通过;FB2/CBZ 无样本。
 
 开发速览:
 
@@ -28,6 +33,22 @@ pnpm fixtures   # 生成测试书(EPUB/FB2/TXT/MD/PDF)+ PDF.js 支持资源
 pnpm dev        # 浏览器开发模式;?open=/fixtures/夜航书.epub 可直开一本书
 pnpm tauri dev  # 桌面应用开发模式(阅读进度/划线持久化走 Rust 端)
 ```
+
+打发布包:
+
+```bash
+pnpm tauri build                        # 打 .app / .dmg
+node scripts/release.mjs                # 正式发布:门禁 + 构建 + 产物收集 + SHA256SUMS
+node scripts/release.mjs --skip-gates   # 门禁已单独跑过时
+```
+
+`pnpm tauri` 走的是 `scripts/tauri.mjs`,它会自动把 `~/.tauri/deepread.key` 当
+`TAURI_SIGNING_PRIVATE_KEY` 传下去 —— 因为 `tauri.conf.json` 配了 updater 公钥,
+构建时要签更新工件,而 Tauri **只认环境变量**、不会自己去 `~/.tauri/` 找。
+私钥不存在时静默跳过(CI 走 secret,别人 clone 下来没这个文件也不该失败)。
+
+`release.mjs` 比裸构建多两件事:跑全套门禁、把产物连同校验和收进
+`release/v<版本>/`(见 [docs/release.md](docs/release.md))。
 
 ## 目录结构
 

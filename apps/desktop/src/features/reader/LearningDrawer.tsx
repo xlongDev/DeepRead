@@ -220,6 +220,12 @@ export function LearningDrawer({
             front: question.question,
             back: `${question.options[question.answer] ?? ''}${explanation}`,
             source: 'mistake',
+            // oxlint 1.86 的 react(purity) 规则把这里判成「render 期间调用非纯
+            // 函数」,但 `answerQuestion` 是答题的事件处理器 —— 用户点选项时才
+            // 跑,不在 render 里。规则无法静态区分「组件体内定义的函数会不会被
+            // render 调用」,所以保守报错。`useCallback` 也救不了:它依赖
+            // `answers` 这个 state,每次 render 都变,memo 没有意义。
+            // eslint-disable-next-line react/purity -- 见上,事件处理器而非 render
             dueAt: new Date().toISOString(),
           },
         ],
