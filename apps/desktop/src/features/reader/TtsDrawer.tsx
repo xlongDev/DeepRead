@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   CaretDown,
   CaretDoubleLeft,
@@ -6,6 +14,7 @@ import {
   CaretLeft,
   CaretRight,
   Check,
+  Highlighter,
   Pause,
   Play,
   SpinnerBall,
@@ -13,7 +22,7 @@ import {
 } from '@phosphor-icons/react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { toAppError, type AiProviderConfig } from '@deepread/shared'
-import { splitSentences } from '@deepread/reader-core'
+import { splitSentencesWithOffsets } from '@deepread/reader-core'
 import { invokeCommand } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import {
@@ -21,12 +30,10 @@ import {
   CHARS_PER_SECOND,
   formatClock,
   locateBlock,
-  nextRate,
   sentenceIndexAt,
   splitChapterBlocks,
   totalChars as sumChars,
   voicesForLanguage,
-  withOffsets,
   type Block,
   type Sentence,
 } from './tts-plan'
@@ -34,11 +41,26 @@ import {
 type Engine = 'edge' | 'system' | 'cloud'
 
 const RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 1.75, 2] as const
+const RATE_KEYS = RATE_OPTIONS.map((rate) => rate.toString()) as readonly string[]
 const ENGINE_LABELS: Readonly<Record<Engine, string>> = {
   edge: 'Edge 语音',
   system: '系统语音',
   cloud: '云端语音',
 }
+
+/** TTS 高亮预设色:对比度都按深色文字背景搭配验证过,白底/羊皮/夜间
+ *  都能落得稳。每条都给一个语义化的名字,而不是「红/绿」——选色凭直觉
+ *  选不到名字,名字还能帮用户记住上一次选的是哪个。 */
+export const HIGHLIGHT_PRESETS = [
+  { name: '琥珀', color: '#f5d76e' },
+  { name: '青蓝', color: '#7dd3fc' },
+  { name: '粉梅', color: '#fda4af' },
+  { name: '薄荷', color: '#86efac' },
+  { name: '蜜橙', color: '#fdba74' },
+  { name: '紫罗兰', color: '#c4b5fd' },
+] as const
+
+type HighlightMode = 'off' | 'sentence' | 'word'
 
 const SETTINGS_KEY = 'deepread.tts.settings'
 
@@ -52,6 +74,9 @@ interface TtsSettings {
   narratorEdge: string
   narratorSystem?: string
   narratorCloud: string
+  /** 正文 TTS 高亮粒度:'word' 留作下一轮接入,目前等价于 'sentence'。 */
+  highlightMode: HighlightMode
+  highlightColor: string
 }
 
 const DEFAULT_SETTINGS: TtsSettings = {
@@ -62,6 +87,8 @@ const DEFAULT_SETTINGS: TtsSettings = {
   timerMinutes: 30,
   narratorEdge: 'zh-CN-XiaoxiaoNeural',
   narratorCloud: 'alloy',
+  highlightMode: 'sentence',
+  highlightColor: HIGHLIGHT_PRESETS[0].color,
 }
 
 interface TtsDrawerProps {
@@ -81,6 +108,16 @@ interface TtsDrawerProps {
   readonly getSectionText: () => Promise<string>
   /** 跳转章节(±1);返回 false 表示越界。 */
   readonly jumpSection: (delta: number) => Promise<boolean>
+  /** TTS 句级高亮广播:每次切到新句时通知父层;父层负责把高亮打回正文
+   *  并触发自动翻页。传 null 表示清掉当前高亮(暂停/切章/关闭)。 */
+  readonly onHighlight?: (
+    highlight: {
+      readonly mode: HighlightMode
+      readonly start: number
+      readonly end: number
+      readonly color: string
+    } | null,
+  ) => void
   /** 展开回完整播放器。 */
   readonly onExpand: () => void
   /** 收起为迷你播放条。 */
@@ -91,19 +128,29 @@ interface TtsDrawerProps {
 
 type Phase = 'idle' | 'loading' | 'playing' | 'paused'
 
-export function TtsDrawer({
-  bookTitle,
-  bookLanguage,
-  coverUrl,
-  sectionLabel,
-  minimized,
-  onPlayingChange,
-  getSectionText,
-  jumpSection,
-  onExpand,
-  onMinimize,
-  onClose,
-}: TtsDrawerProps) {
+export interface TtsDrawerHandle {
+  /** 真正停止播放并清空内部状态 — 父层调一次,TtsDrawer 会通过
+   *  onPlayingChange 反馈 idle,自然触发卸载。 */
+  readonly stop: () => void
+}
+
+export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function TtsDrawer(
+  {
+    bookTitle,
+    bookLanguage,
+    coverUrl,
+    sectionLabel,
+    minimized,
+    onPlayingChange,
+    getSectionText,
+    jumpSection,
+    onHighlight,
+    onExpand,
+    onMinimize,
+    onClose,
+  }: TtsDrawerProps,
+  ref,
+) {
   const [settings, setSettings] = useState<TtsSettings>(() => {
     try {
       const stored = localStorage.getItem(SETTINGS_KEY)
@@ -241,6 +288,8 @@ export function TtsDrawer({
     charPosRef.current = 0
   }, [])
 
+  useImperativeHandle(ref, () => ({ stop }), [stop])
+
   const armTimer = useCallback((): void => {
     if (timerRef.current) clearTimeout(timerRef.current)
     const { timerKind, timerMinutes } = settingsRef.current
@@ -250,7 +299,12 @@ export function TtsDrawer({
     // section/book 模式在章循环结束处检查。
   }, [stop])
 
-  /** 播放已合成的块文件;onTime 持续回报全章字符位置。resolve 于自然播完。 */
+  /** Ticker 当前正在播放的块:外层 60ms ticker 读这个推 charPos,
+   *  不再依赖 audio.ontimeupdate 的低频事件(浏览器通常 ~250ms)。
+   *  audio.currentTime 是浏览器自己的播放时钟,不会被 ticker 漂移影响。 */
+  const playingRef = useRef<{ readonly block: Block; readonly duration: number } | null>(null)
+
+  /** 播放已合成的块文件;外层 useEffect 跑 60ms ticker 推 charPos。 */
   const playBlockFile = useCallback(
     async (block: Block, path: string, seekRatio: number): Promise<void> => {
       const audio = new Audio(convertFileSrc(path))
@@ -262,22 +316,24 @@ export function TtsDrawer({
           settled = true
           resolve()
         }
-        audio.ontimeupdate = () => {
-          if (audio.duration > 0) {
-            const ratio = audio.currentTime / audio.duration
-            setCharPos(block.start + Math.round(ratio * block.text.length))
+        const applySeek = (): void => {
+          if (seekRatio > 0 && audio.duration > 0) {
+            audio.currentTime = seekRatio * audio.duration
           }
+          playingRef.current = { block, duration: audio.duration || 0 }
+          // 立即推一次,避免首个 ticker 之前是 0。
+          setCharPos(block.start + Math.round((seekRatio > 0 ? seekRatio : 0) * block.text.length))
+        }
+        audio.onloadedmetadata = () => applySeek()
+        // metadata 在某些环境下不会触发,保底用 canplay。
+        audio.oncanplay = () => {
+          if (playingRef.current === null) applySeek()
         }
         audio.onended = settle
         audio.onerror = () => {
           if (!settled) {
             settled = true
             reject(new Error('音频播放失败'))
-          }
-        }
-        if (seekRatio > 0) {
-          audio.onloadedmetadata = () => {
-            audio.currentTime = seekRatio * (audio.duration || 0)
           }
         }
         void audio.play().catch((reason: unknown) => {
@@ -287,6 +343,7 @@ export function TtsDrawer({
           }
         })
       })
+      playingRef.current = null
       setCharPos(block.start + block.text.length)
     },
     [],
@@ -300,7 +357,7 @@ export function TtsDrawer({
     const chars = block.text.length
     const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
     let elapsed = 0
-    const step = 100
+    const step = 60
     const clock = setInterval(() => {
       if (stopFlagRef.current) return
       elapsed += step
@@ -340,11 +397,11 @@ export function TtsDrawer({
           const text = (await getSectionText()).trim()
           if (text === '' || text === previous) return
           previous = text
-          const sentenceList = withOffsets(splitSentences(text))
+          const sentenceList = splitSentencesWithOffsets(text)
           sentencesRef.current = sentenceList
           setSentences(sentenceList)
           setPhase('playing')
-          const blocks = splitChapterBlocks(sentenceList)
+          const blocks = splitChapterBlocks(text, sentenceList)
           // 流水线:块 N 播放时后台合成块 N+1(readest 的 preload 思路)。
           // 缓存命中时预取立即返回,重听零等待。
           type Fetch = Promise<{ block: Block; path: string } | null>
@@ -392,8 +449,8 @@ export function TtsDrawer({
                 attempt += 1
                 if (attempt >= 2 || stopFlagRef.current || sectionTokenRef.current !== token)
                   throw blockError
-                // 连接中断:换新连接重试一次当前块。
-                await new Promise((resolve) => setTimeout(resolve, 600))
+                // ponytail: 不再等 600ms —— WebSocket 重连由 Rust 端的 retry 兜底,
+                // 这里拖一拍只把用户的播放体验拖黑。Edge 抽风再发起一次就好。
               }
             }
             if (stopFlagRef.current || sectionTokenRef.current !== token) return
@@ -504,10 +561,54 @@ export function TtsDrawer({
     voiceSettingsProbe.current = true
   }, [])
 
+  /** 主动 ticker:每 60ms 用 audio.currentTime 推 charPos,
+   *  比 ontimeupdate 的 ~250ms 浏览器默认频率快 4 倍,
+   *  句级高亮跟手更紧。playingRef 由 playBlockFile 设置/清除。 */
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const playing = playingRef.current
+      const audio = audioRef.current
+      if (!playing || !audio || audio.paused) return
+      if (audio.duration <= 0) return
+      const ratio = audio.currentTime / audio.duration
+      setCharPos(
+        playing.block.start +
+          Math.min(playing.block.text.length, Math.round(ratio * playing.block.text.length)),
+      )
+    }, 60)
+    return () => clearInterval(tick)
+  }, [])
+
   const totalChars = useMemo(() => sumChars(sentences), [sentences])
 
   /** 当前句:charPos 落在哪句区间。 */
   const sentenceIndex = useMemo(() => sentenceIndexAt(sentences, charPos), [sentences, charPos])
+
+  /** TTS 句级高亮广播:每次切句或高亮档/色变化时,把当前句的字符区间
+   *  发给父层。关档或暂停时传 null,让父层把上一条高亮清掉。 */
+  useEffect(() => {
+    if (phase !== 'playing' || sentences.length === 0) {
+      onHighlight?.(null)
+      return
+    }
+    const sentence = sentences[sentenceIndex]
+    if (!sentence) return
+    if (settings.highlightMode === 'off') {
+      onHighlight?.(null)
+      return
+    }
+    onHighlight?.({
+      mode: settings.highlightMode,
+      start: sentence.start,
+      end: sentence.start + sentence.text.length,
+      color: settings.highlightColor,
+    })
+    // 卸载/暂停时清掉:这一帧的 unmount cleanup 由父层兜底(onHighlight(null))。
+    return () => {
+      onHighlight?.(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sentenceIndex, sentences, phase, settings.highlightMode, settings.highlightColor])
 
   /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
   const seekToChar = useCallback(
@@ -776,8 +877,13 @@ export function TtsDrawer({
           <div className="tts-sentences" aria-live="polite">
             {phase === 'loading' ? (
               <div className="tts-loading" aria-label="正在合成语音">
-                <div className="tts-loading-bar" />
-                <div className="tts-loading-bar short" />
+                <div className="tts-loading-wave" aria-hidden>
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </div>
                 <span className="tts-loading-label">正在合成整章语音…</span>
               </div>
             ) : sentences.length === 0 ? (
@@ -804,7 +910,12 @@ export function TtsDrawer({
             )}
             {voiceSwitching && (
               <span className="tts-switching" aria-hidden>
-                <SpinnerBall size={16} weight="bold" /> 切换音色中…
+                <SpinnerBall size={16} weight="bold" /> 切换音色中
+                <span className="tts-switching-dots">
+                  <span />
+                  <span />
+                  <span />
+                </span>
               </span>
             )}
           </div>
@@ -888,19 +999,23 @@ export function TtsDrawer({
           </div>
 
           <div className="tts-cards">
-            <button
-              type="button"
-              className="tts-card"
-              onClick={() => {
-                setSettings((current) => ({
-                  ...current,
-                  rate: nextRate(RATE_OPTIONS, current.rate),
-                }))
+            <DropdownMenu
+              className="tts-card-dropdown"
+              ariaLabel="语速选择"
+              value={settings.rate.toString()}
+              options={RATE_KEYS.map((key) => ({
+                value: key,
+                label: `${key}×`,
+              }))}
+              onChange={(key) => {
+                const next = Number(key)
+                if (!Number.isFinite(next)) return
+                setSettings((current) => ({ ...current, rate: next }))
               }}
             >
               <span className="tts-card-value">{settings.rate}×</span>
               <span className="tts-card-label">语速</span>
-            </button>
+            </DropdownMenu>
             <button
               type="button"
               className="tts-card"
@@ -956,6 +1071,59 @@ export function TtsDrawer({
             ))}
           </div>
 
+          <div className="tts-highlight" aria-label="正文高亮设置">
+            <div className="tts-engine-row tts-highlight-mode" aria-label="高亮粒度">
+              {(['off', 'sentence', 'word'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`segmented-button${settings.highlightMode === mode ? ' is-active' : ''}`}
+                  onClick={() => setSettings((current) => ({ ...current, highlightMode: mode }))}
+                  aria-pressed={settings.highlightMode === mode}
+                  title={
+                    mode === 'off'
+                      ? '关闭正文高亮'
+                      : mode === 'sentence'
+                        ? '按整句高亮(自动翻页)'
+                        : '按词高亮(下一版接入,目前与句级一致)'
+                  }
+                >
+                  {mode === 'off' ? '关' : mode === 'sentence' ? '句级' : '词级'}
+                </button>
+              ))}
+            </div>
+            <div className="tts-highlight-colors" aria-label="高亮颜色">
+              {HIGHLIGHT_PRESETS.map((preset) => (
+                <button
+                  key={preset.color}
+                  type="button"
+                  className={`tts-color-chip${settings.highlightColor === preset.color ? ' is-active' : ''}`}
+                  style={{ background: preset.color }}
+                  onClick={() =>
+                    setSettings((current) => ({ ...current, highlightColor: preset.color }))
+                  }
+                  aria-label={`高亮色:${preset.name}`}
+                  aria-pressed={settings.highlightColor === preset.color}
+                  title={preset.name}
+                />
+              ))}
+              <label className="tts-color-custom" title="自定义颜色">
+                <input
+                  type="color"
+                  value={settings.highlightColor}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      highlightColor: event.target.value,
+                    }))
+                  }
+                  aria-label="自定义高亮颜色"
+                />
+                <Highlighter size={13} weight="bold" aria-hidden />
+              </label>
+            </div>
+          </div>
+
           <button
             type="button"
             className={`stats-toggle tts-auto-next${settings.autoNext ? ' is-on' : ''}`}
@@ -978,4 +1146,4 @@ export function TtsDrawer({
       )}
     </aside>
   )
-}
+})

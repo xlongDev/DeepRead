@@ -11,9 +11,13 @@ import {
   withOffsets,
 } from './tts-plan'
 
-/** 造句子列表:按给定的字符数生成 'a'*n,起点累加。 */
-function sentencesOf(...lengths: readonly number[]): ReturnType<typeof withOffsets> {
-  return withOffsets(lengths.map((n) => 'a'.repeat(n)))
+/** 造句子列表 + 与之匹配的原文('a' 连续、无间隙)。 */
+function sentencesOf(...lengths: readonly number[]): {
+  readonly text: string
+  readonly sentences: ReturnType<typeof withOffsets>
+} {
+  const sentences = withOffsets(lengths.map((n) => 'a'.repeat(n)))
+  return { text: sentences.map((s) => s.text).join(''), sentences }
 }
 
 describe('withOffsets', () => {
@@ -33,8 +37,8 @@ describe('withOffsets', () => {
 
 describe('splitChapterBlocks', () => {
   it('按 max 攒块,块起点是首句起点', () => {
-    // 三句各 4 字:前两句攒成 8 字块,第三句放不下,另起一块。
-    const blocks = splitChapterBlocks(sentencesOf(4, 4, 4), 8)
+    const { text, sentences } = sentencesOf(4, 4, 4)
+    const blocks = splitChapterBlocks(text, sentences, 8)
     expect(blocks).toEqual([
       { text: 'aaaaaaaa', start: 0 },
       { text: 'aaaa', start: 8 },
@@ -42,21 +46,28 @@ describe('splitChapterBlocks', () => {
   })
 
   it('单句超过 max 时自己成一块,不被切碎', () => {
-    const blocks = splitChapterBlocks(sentencesOf(10, 2), 8)
+    const { text, sentences } = sentencesOf(10, 2)
+    const blocks = splitChapterBlocks(text, sentences, 8)
     expect(blocks).toEqual([
       { text: 'a'.repeat(10), start: 0 },
       { text: 'aa', start: 10 },
     ])
   })
 
-  it('块文本拼起来等于原句文本拼起来(不丢字、不重字)', () => {
-    const sentences = sentencesOf(3, 7, 2, 9, 1, 5)
-    const blocks = splitChapterBlocks(sentences, 10)
-    expect(blocks.map((block) => block.text).join('')).toBe(sentences.map((s) => s.text).join(''))
+  it('块文本是原文切片 —— 句间空白留在块内,块内推进才不偏格', () => {
+    // 回归:块文本若只拼句子、丢掉句间的换行,块内 ratio*length 的换算
+    // 每过一个句界就偏一格,高亮越读越偏。
+    const text = '甲。\n乙。'
+    const sentences = [
+      { text: '甲。', start: 0 },
+      { text: '乙。', start: 3 },
+    ]
+    const blocks = splitChapterBlocks(text, sentences, 100)
+    expect(blocks).toEqual([{ text: '甲。\n乙。', start: 0 }])
   })
 
   it('空输入得到空列表', () => {
-    expect(splitChapterBlocks([])).toEqual([])
+    expect(splitChapterBlocks('', [])).toEqual([])
   })
 })
 

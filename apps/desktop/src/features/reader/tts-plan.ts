@@ -22,7 +22,7 @@ export interface Block {
   readonly start: number
 }
 
-/** 句子 -> 带上全章字符起点的条目;`splitSentences` 的输出不含位置。 */
+/** 句子 -> 带上全章字符起点的条目;`splitSentencesWithOffsets` 的输出即此形状。 */
 export function withOffsets(sentences: readonly string[]): Sentence[] {
   let cursor = 0
   return sentences.map((text) => {
@@ -33,26 +33,32 @@ export function withOffsets(sentences: readonly string[]): Sentence[] {
 }
 
 /**
- * 按句边界把整章切成 ≤max 的合成块,块与块的语音首尾相接。
- * 单句超过 max 时该块就是这一句(不再往下切,交给合成端处理)。
+ * 合成块:按句边界攒到 ≤max 字符。块文本是**原文切片**(含句间空白),
+ * 于是块内字符推进(`start + ratio * text.length`)与原文一一对应 ——
+ * 若块文本只拼接句子、丢掉句间换行,块内每过一个句界就会偏一格。
  */
-export function splitChapterBlocks(sentences: readonly Sentence[], max = MAX_SYNTH_CHARS): Block[] {
+export function splitChapterBlocks(
+  text: string,
+  sentences: readonly Sentence[],
+  max = MAX_SYNTH_CHARS,
+): Block[] {
   const blocks: Block[] = []
-  let current = ''
-  let currentStart = 0
-  let cursor = 0
+  let start = -1
+  let end = -1
   for (const sentence of sentences) {
-    if (current.length + sentence.text.length > max && current.length > 0) {
-      blocks.push({ text: current, start: currentStart })
-      current = sentence.text
-      currentStart = cursor
-    } else {
-      if (current.length === 0) currentStart = cursor
-      current += sentence.text
+    const sentenceEnd = sentence.start + sentence.text.length
+    if (start === -1) {
+      start = sentence.start
+      end = sentenceEnd
+      continue
     }
-    cursor += sentence.text.length
+    if (sentenceEnd - start > max) {
+      blocks.push({ text: text.slice(start, end), start })
+      start = sentence.start
+    }
+    end = sentenceEnd
   }
-  if (current.length > 0) blocks.push({ text: current, start: currentStart })
+  if (start !== -1) blocks.push({ text: text.slice(start, end), start })
   return blocks
 }
 

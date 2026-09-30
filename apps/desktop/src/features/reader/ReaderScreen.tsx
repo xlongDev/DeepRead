@@ -81,7 +81,7 @@ import { readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
 import { LearningDrawer } from './LearningDrawer'
-import { TtsDrawer } from './TtsDrawer'
+import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 
 const CHROME_TIMEOUT_MS = 2500
 const SAVE_DEBOUNCE_MS = 800
@@ -210,6 +210,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
   const [ttsMinimized, setTtsMinimized] = useState(false)
   const [ttsActive, setTtsActive] = useState(false)
+  const ttsDrawerRef = useRef<TtsDrawerHandle>(null)
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
   )
@@ -1918,6 +1919,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
 
         {(openPanel === 'tts' || ttsActive) && (
           <TtsDrawer
+            ref={ttsDrawerRef}
             bookHash={book.hash}
             bookTitle={title}
             bookLanguage={bookLanguage}
@@ -1927,14 +1929,29 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             onPlayingChange={setTtsActive}
             getSectionText={ttsGetSectionText}
             jumpSection={ttsJumpSection}
+            onHighlight={(highlight) => {
+              const adapter = adapterRef.current
+              if (!adapter) return
+              if (highlight === null) {
+                void adapter.clearTTSHighlight()
+                return
+              }
+              void adapter.setTTSHighlightByOffset(highlight.start, highlight.end, highlight.color)
+            }}
             onExpand={() => {
               setTtsMinimized(false)
               setOpenPanel('tts')
             }}
             onMinimize={() => setTtsMinimized(true)}
             onClose={() => {
-              setOpenPanel((panel) => (panel === 'tts' ? null : panel))
+              // 真正停止播放:TtsDrawer 的 stop() 会走 onPlayingChange(false),
+              // 父层 ttsActive 同步置 false,TtsDrawer 因此卸载。原先只切面板
+              // 状态,而 mini 的触发条件是 ttsMinimized || openPanel !== 'tts',
+              // 单独 setTtsMinimized(false) 不改 openPanel 仍判定为 mini —
+              // 用户看到的就是「点 × 没反应」。
+              ttsDrawerRef.current?.stop()
               setTtsMinimized(false)
+              setOpenPanel((panel) => (panel === 'tts' ? null : panel))
             }}
           />
         )}

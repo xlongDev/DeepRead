@@ -3594,37 +3594,103 @@ dialog.modal-panel {
   text-align: center;
 }
 
-/* 整章合成中的骨架。 */
+/* 整章合成中:五根声波从中心向两侧呼吸,呼应「语音」主题。 */
 .tts-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 14px;
   min-height: 140px;
 }
 
-.tts-loading-bar {
-  width: 72%;
-  height: 14px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--color-text-tertiary) 14%, transparent),
-    color-mix(in srgb, var(--color-text-tertiary) 5%, transparent),
-    color-mix(in srgb, var(--color-text-tertiary) 14%, transparent)
-  );
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.2s var(--ease-in-out) infinite;
+.tts-loading-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
 }
 
-.tts-loading-bar.short {
-  width: 46%;
+.tts-loading-wave span {
+  width: 3px;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  transform-origin: center;
+  animation: tts-wave 1s var(--ease-in-out) infinite;
+}
+
+.tts-loading-wave span:nth-child(1) {
+  height: 30%;
+  animation-delay: 0ms;
+}
+.tts-loading-wave span:nth-child(2) {
+  height: 60%;
+  animation-delay: 120ms;
+}
+.tts-loading-wave span:nth-child(3) {
+  height: 90%;
+  animation-delay: 240ms;
+}
+.tts-loading-wave span:nth-child(4) {
+  height: 60%;
+  animation-delay: 360ms;
+}
+.tts-loading-wave span:nth-child(5) {
+  height: 30%;
+  animation-delay: 480ms;
+}
+
+@keyframes tts-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
 }
 
 .tts-loading-label {
   font-size: 12px;
   color: var(--color-text-tertiary);
+  animation: fade-in 1.2s var(--ease-out) backwards;
+}
+
+/* 切音色的瞬时过渡:spinner + 三点呼吸,告诉用户「我还在,等一下」。 */
+.tts-switching-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  height: 6px;
+}
+.tts-switching-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  animation: tts-dot-pulse 1.2s var(--ease-in-out) infinite;
+}
+.tts-switching-dots span:nth-child(2) {
+  animation-delay: 160ms;
+}
+.tts-switching-dots span:nth-child(3) {
+  animation-delay: 320ms;
+}
+
+@keyframes tts-dot-pulse {
+  0%,
+  100% {
+    transform: scale(0.55);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* 音色热切换指示:悬浮在句子区右下角。 */
@@ -3843,6 +3909,79 @@ dialog.modal-panel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 3%, transparent);
+}
+
+/* TTS 正文高亮:档位三档 + 6 套预设 + 自定义色。 */
+.tts-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.tts-highlight-mode {
+  /* 复用 segmented 形态;字号稍小让一行塞下。 */
+  font-size: 11px;
+}
+
+.tts-highlight-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.tts-color-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 18%, transparent);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    transform var(--duration-fast) var(--ease-spring),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.tts-color-chip:hover {
+  transform: scale(1.08);
+  border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 30%, transparent);
+}
+
+.tts-color-chip.is-active {
+  border-color: var(--reader-fg, var(--color-text-primary));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-surface) 70%, transparent),
+    var(--shadow-soft);
+}
+
+.tts-color-custom {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  border: 1.5px dashed
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 25%, transparent);
+  color: var(--reader-fg, var(--color-text-primary));
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.tts-color-custom:hover {
+  border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 50%, transparent);
+}
+
+.tts-color-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .segmented-button {

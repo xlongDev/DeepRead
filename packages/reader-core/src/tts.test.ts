@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { assignSpeakers, buildSpeechSegments, splitDialogue, splitSentences } from './tts'
+import {
+  assignSpeakers,
+  buildSpeechSegments,
+  splitDialogue,
+  splitSentences,
+  splitSentencesWithOffsets,
+} from './tts'
 
 describe('splitSentences', () => {
   it('splits CJK sentences keeping the terminator', () => {
@@ -14,6 +20,32 @@ describe('splitSentences', () => {
     expect(splitSentences('第一段。\n\n第二段。')).toEqual(['第一段。', '第二段。'])
   })
 
+  it('keeps CJK semicolon-joined sentences intact when short', () => {
+    // 软 ender:短句里不切,读起来是同一句。
+    const out = splitSentences(
+      '黑麦威士忌流过食管进入胃，贝罕感到一阵轻微的灼烧感；而后，酒精迅速通过黏膜保护屏障弥散侵入上皮细胞，上百方细胞死亡。',
+    )
+    expect(out).toEqual([
+      '黑麦威士忌流过食管进入胃，贝罕感到一阵轻微的灼烧感；而后，酒精迅速通过黏膜保护屏障弥散侵入上皮细胞，上百方细胞死亡。',
+    ])
+  })
+
+  it('cuts CJK semicolon when the buffer grows past the soft threshold', () => {
+    // 软 ender:超长就切,避免一句包到合成上限之后被硬切。
+    const long = '很'.repeat(60) + '；' + '长'.repeat(60) + '。'
+    const sentences = splitSentences(long)
+    expect(sentences.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps western abbreviations intact', () => {
+    // 西文 ender 只看 ender 后是否空白/末尾。Dr. (3 字符) 还会被
+    // mergeShort 合回去。Prof. (5 字符) 不被合,可观察到切分。
+    const prof = splitSentences('Prof. Smith arrived.')
+    expect(prof).toEqual(['Prof.', 'Smith arrived.'])
+    // 但纯文本里句子完整切。
+    expect(splitSentences('First one. Second one!')).toEqual(['First one.', 'Second one!'])
+  })
+
   it('cuts an unterminated run at a comma boundary', () => {
     const long = '很'.repeat(100) + '，' + '长'.repeat(300)
     const sentences = splitSentences(long)
@@ -25,6 +57,39 @@ describe('splitSentences', () => {
 
   it('returns empty for empty text', () => {
     expect(splitSentences('')).toEqual([])
+  })
+})
+
+describe('splitSentencesWithOffsets', () => {
+  it('start 是原文下标 —— 空白计入后续句子的偏移', () => {
+    const text = '标题\n正文第一句。正文第二句。'
+    expect(splitSentencesWithOffsets(text)).toEqual([
+      { text: '标题', start: 0 },
+      { text: '正文第一句。', start: 3 },
+      { text: '正文第二句。', start: 9 },
+    ])
+  })
+
+  it('不合并短句 —— 短标题各自独立(高亮要的是「一句」,不是「一段」)', () => {
+    expect(splitSentencesWithOffsets('甲\n乙\n丙').map((s) => s.text)).toEqual(['甲', '乙', '丙'])
+  })
+
+  it('每一片的切片在原文里确实位于自己的 start', () => {
+    const text = '第一。\n\n第二句短。\n很长的一段没有标点'.repeat(3)
+    for (const slice of splitSentencesWithOffsets(text)) {
+      expect(text.slice(slice.start, slice.start + slice.text.length)).toBe(slice.text)
+    }
+  })
+
+  it('连续空白不产出空句子', () => {
+    const out = splitSentencesWithOffsets('甲。\n\n\n乙。')
+    expect(out.map((s) => s.text)).toEqual(['甲。', '乙。'])
+    expect(out[1]!.start).toBe(5)
+  })
+
+  it('与 splitSentences 对同一文本给出相同的句子集合(只是多了位置)', () => {
+    const text = '灯亮了。他走了！真的吗？'
+    expect(splitSentencesWithOffsets(text).map((s) => s.text)).toEqual(splitSentences(text))
   })
 })
 

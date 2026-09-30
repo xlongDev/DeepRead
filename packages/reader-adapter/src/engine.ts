@@ -39,6 +39,129 @@ const MAX_SEARCH_RESULTS = 200
 const MAX_SELECTION_TEXT = 2000
 const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
 
+/**
+ * 块级元素集合 —— 与 foliate-js `tts.js` 的 `blockTags` 一致,另补 `ul`
+ * (上游只列了 `ol`,是明显的不对称:`<ul><li>` 与 `<ol><li>` 应当同构)。
+ *
+ * 为什么需要它:`doc.body.textContent` 会把所有 text node 直接拼起来,
+ * 块级元素之间**不插任何分隔符**。于是 `<h1>第三章</h1><p>正文。</p>`
+ * 变成 "第三章正文。",断句器只能把它当一句 —— TTS 会连着念标题和正文,
+ * 句级高亮也整个糊成一段。按块级元素边界补一个虚拟换行,标题、段落、
+ * 列表项才各自成句。
+ */
+const BLOCK_TAGS = new Set([
+  'article',
+  'aside',
+  'audio',
+  'blockquote',
+  'caption',
+  'dd',
+  'details',
+  'dialog',
+  'div',
+  'dl',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hgroup',
+  'hr',
+  'li',
+  'main',
+  'math',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'tr',
+  'ul',
+])
+
+/**
+ * 遍历 section 文档,产出可朗读文本 + 文本节点到字符偏移的映射。
+ *
+ * 返回的 `nodes` 让 {@link findRangeByCharOffset} 能用**同一套偏移模型**
+ * 把字符区间还原成 DOM Range —— 两边必须共用这个函数,否则 TTS 报的
+ * 位置和正文高亮的位置会错位(多一个虚拟换行就整体偏一格)。
+ *
+ * @internal 导出仅为单测;产品代码请走 `getSectionText` / `setTTSHighlightByOffset`。
+ */
+export function walkSectionText(body: Element): {
+  readonly text: string
+  readonly nodes: readonly { readonly node: Text; readonly start: number }[]
+} {
+  const nodes: { node: Text; start: number }[] = []
+  let text = ''
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textNode = node as Text
+      if (textNode.data.length === 0) return
+      nodes.push({ node: textNode, start: text.length })
+      text += textNode.data
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const element = node as Element
+    const tag = element.tagName.toLowerCase()
+    // 脚本与样式不是正文;注音标注(ruby 的 rt)交给断句器按语言处理。
+    if (tag === 'script' || tag === 'style') return
+    for (const child of element.childNodes) visit(child)
+    if (BLOCK_TAGS.has(tag)) text += '\n'
+  }
+  for (const child of body.childNodes) visit(child)
+  return { text, nodes }
+}
+
+/**
+ * 在 section body 内按字符 offset 找 Range。offset 必须来自
+ * {@link walkSectionText} 的文本 —— 两者共用同一套块级换行规则。
+ *
+ * @internal 导出仅为单测。
+ */
+export function findRangeByCharOffset(
+  body: Element,
+  charStart: number,
+  charEnd: number,
+): Range | null {
+  if (charEnd <= charStart) return null
+  const doc = body.ownerDocument
+  const { nodes } = walkSectionText(body)
+  let startNode: Text | null = null
+  let startOffset = 0
+  let endNode: Text | null = null
+  let endOffset = 0
+  for (const entry of nodes) {
+    const nodeEnd = entry.start + entry.node.data.length
+    if (startNode === null && nodeEnd > charStart) {
+      startNode = entry.node
+      startOffset = charStart - entry.start
+    }
+    if (nodeEnd >= charEnd) {
+      endNode = entry.node
+      endOffset = charEnd - entry.start
+      break
+    }
+  }
+  if (startNode === null || endNode === null) return null
+  const range = doc.createRange()
+  try {
+    range.setStart(startNode, Math.max(0, Math.min(startOffset, startNode.data.length)))
+    range.setEnd(endNode, Math.max(0, Math.min(endOffset, endNode.data.length)))
+  } catch {
+    return null
+  }
+  return range
+}
+
 export interface EngineLocation {
   readonly cfi: string | undefined
   readonly fraction: number | undefined
@@ -67,6 +190,11 @@ export interface EngineCallbacks {
   onTapZone?: (zone: TapZone) => void
 }
 
+/**
+ * 在 book body 内按字符 offset 找 Range。offset 与 `getSectionText` 用的
+ * 是同一个 {@link walkSectionText} 模型(块级元素后有一个虚拟换行),
+ * 所以字符区间能精确落回 DOM。
+ */
 function titleFromName(name: string): string {
   return name.replace(
     /\.(epub|mobi|azw3?|kf8|prc|fb2|zip|cbz|pdf|txt|text|md|markdown|fbz|chm)$/i,
@@ -150,6 +278,11 @@ export class FoliateAdapter implements ReaderEngine {
   #pageMargin: number | undefined
   #bookCharStats: BookCharStats | null = null
   #bookCharStatsComputed = false
+  /** 当前 TTS 句级高亮对应的 annotation CFI;null = 没有高亮。 */
+  #ttsHighlightCfi: string | null = null
+  /** 最近一次 `getSectionText` 命中的 section index。TTS 高亮的 offset
+   *  就来自那次文本,必须落在同一个 content 上,否则 Range 越界。 */
+  #lastTextIndex: number | undefined
   readonly #onWindowResize = (): void => {
     // 页边距改变时栏宽随之联动(max-inline-size 由视口与边距推导),
     // 窗口缩放后必须重算,否则栏宽停留在旧尺寸上。
@@ -498,16 +631,46 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
-   * Plain text of one mounted section (current section when index omitted).
-   * Returns '' when the section document is not mounted yet.
+   * 可朗读纯文本(供 TTS 断句)。**不是** `body.textContent` —— 块级元素
+   * 之间补了虚拟换行,标题/段落/列表项各自成句(见 {@link walkSectionText})。
+   *
+   * 指定 index 时会等目标 section 挂载(最多 2s):内核翻页/切章与 TTS 推进
+   * 并不同步,若此时回退到 `contents[0]` 会读到**别的章**的文本,让语音
+   * 与正文彻底错位 —— 宁可等,也不要错。
    */
   async getSectionText(index?: number): Promise<string> {
     const view = this.#requireView()
-    const contents = view.renderer.getContents()
-    const content =
-      (index !== undefined ? contents.find((item) => item.index === index) : undefined) ??
-      contents[0]
-    return content?.doc.body.textContent ?? ''
+    if (index !== undefined) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const content = view.renderer.getContents().find((item) => item.index === index)
+        if (content) {
+          this.#lastTextIndex = index
+          return walkSectionText(content.doc.body).text
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      // 等不到目标 section(内核未挂载它) —— 退回当前挂载的第一个,保证
+      // 「读到的文本」和「高亮的 Range」至少落在同一个 doc 上。
+      const fallback = view.renderer.getContents()[0]
+      this.#lastTextIndex = fallback?.index
+      return fallback ? walkSectionText(fallback.doc.body).text : ''
+    }
+    const content = view.renderer.getContents()[0]
+    this.#lastTextIndex = content?.index
+    return content ? walkSectionText(content.doc.body).text : ''
+  }
+
+  /**
+   * 解析 TTS 该作用在哪个已挂载 content 上:优先最近一次取文本的
+   * section,退化到第一个挂载项。返回 undefined 表示一个都没挂载。
+   */
+  #resolveTtsContent(): { readonly doc: Document; readonly index: number } | undefined {
+    const contents = this.#requireView().renderer.getContents()
+    if (this.#lastTextIndex !== undefined) {
+      const matched = contents.find((item) => item.index === this.#lastTextIndex)
+      if (matched) return matched
+    }
+    return contents[0]
   }
 
   /**
@@ -589,6 +752,65 @@ export class FoliateAdapter implements ReaderEngine {
     if (cfi === undefined) return
     await this.#requireView().deleteAnnotation({ value: cfi })
     this.#annotationCfis.delete(annotationId)
+  }
+
+  /**
+   * TTS 句级高亮:把 [charStart, charEnd) 区间标为高亮,并把对应 Range
+   * 滚入视口中央。foliate-js 在 paginated 模式下会按需跨页,scrolled
+   * 模式下走原生滚动。
+   *
+   * offset 必须来自最近一次 `getSectionText` 的文本(同一个
+   * {@link walkSectionText} 模型),且高亮落在**同一个 section doc** 上 ——
+   * 之前这里写死 `getContents()[0]`,而文本可能取自别的 section,Range
+   * 于是越界、高亮整段消失,表现为「读了几句才开始高亮」。传入空色 = 关闭。
+   */
+  async setTTSHighlightByOffset(charStart: number, charEnd: number, color: string): Promise<void> {
+    const view = this.#requireView()
+    // 内核在切章/翻页的瞬时态里可能一个 content 都没挂载 —— 等一拍再试,
+    // 否则开头几句的高亮会被整个丢掉(用户看到「读了几句才亮」)。
+    let content = this.#resolveTtsContent()
+    if (!content) {
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      content = this.#resolveTtsContent()
+    }
+    if (!content) return
+    // 先清掉上一句的高亮,避免在同一帧叠多条 annotation。
+    if (this.#ttsHighlightCfi !== null) {
+      try {
+        await view.deleteAnnotation({ value: this.#ttsHighlightCfi })
+      } catch {
+        // kernel 在 page-turn 之间的瞬时态可能拒删 — 忽略,下一次覆盖即可。
+      }
+      this.#ttsHighlightCfi = null
+    }
+    if (color === '' || charEnd <= charStart) return
+    const range = findRangeByCharOffset(content.doc.body, charStart, charEnd)
+    if (range === null) return
+    try {
+      const cfi = view.getCFI(content.index, range)
+      await view.addAnnotation({ value: cfi, color })
+      this.#ttsHighlightCfi = cfi
+    } catch {
+      // 跨页渲染中的 getCFI 偶发失败 — 跳过本句高亮,下一句会再尝试。
+    }
+    // 自动翻页 / 滚动:让 Range 落到视口中央(paginated 走分页;scrolled
+    // 走原生滚动,foliate-js 内部按 flow 分发)。
+    try {
+      view.renderer.scrollToAnchor?.(range)
+    } catch {
+      // range 为空或文档正在切换 — 静默,内核 onRelocate 仍会落位。
+    }
+  }
+
+  /** 清除当前 TTS 句级高亮(切章 / 暂停 / 关闭时用)。 */
+  async clearTTSHighlight(): Promise<void> {
+    if (this.#ttsHighlightCfi === null) return
+    try {
+      await this.#requireView().deleteAnnotation({ value: this.#ttsHighlightCfi })
+    } catch {
+      // page-turn 之间的瞬时态 — 忽略,卸载时 dispose 自会清理。
+    }
+    this.#ttsHighlightCfi = null
   }
 
   /** 注入书籍文档的 @font-face 规则(内置 + 用户导入)。 */

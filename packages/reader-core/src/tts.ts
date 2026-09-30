@@ -13,8 +13,16 @@ export interface SpeechSegment {
   readonly speaker: string
 }
 
-/** Sentence enders: CJK punctuation plus western .!?; with the terminator kept. */
-const SENTENCE_ENDERS = new Set(['。', '！', '？', '；', '：', '…', '.', '!', '?', ';', ':'])
+/** CJK 硬句末:句号、感叹号、问号、省略号。每遇必切。 */
+const CJK_HARD_ENDERS = new Set(['。', '！', '？', '…'])
+
+/** CJK 软句末:分号、冒号。短句里保留(读起来是同一句),超长才切,
+ *  否则一句话能被分号拆成两半,歌词页失去意义。 */
+const CJK_SOFT_ENDERS = new Set(['；', '：'])
+
+/** 西文 ender。必须后跟空白或字符串结尾才切,
+ *  否则 Dr. Mr. 这种缩写会被误切。 */
+const ASCII_ENDERS = new Set(['.', '!', '?'])
 
 /** Quotes that wrap dialogue in CJK and western typography. */
 const DIALOGUE_QUOTES = /[「『“"']([^「『“"'」』”"'”]*?)[」』”"']/
@@ -25,7 +33,15 @@ const MAX_SENTENCE_CHARS = 220
  * Split text into speakable sentences (terminators kept on the chunk). Very
  * long un-terminated runs are cut at a comma boundary, then hard-cut, so no
  * single utterance outgrows the synthesizer's practical limits.
+ *
+ * 切句规则:
+ * - CJK 硬句末(。！？…)必切。
+ * - CJK 软句末(；：)只在 buffer 超过 {@link SOFT_ENDER_THRESHOLD} 字时才切,
+ *   短句里读起来是同一句的不切。
+ * - 西文 . ! ? 必须后跟空白/字符串结尾才切,Dr. / Mr. 这种缩写不切。
  */
+const SOFT_ENDER_THRESHOLD = 60
+
 export function splitSentences(text: string): string[] {
   const sentences: string[] = []
   let buffer = ''
@@ -33,16 +49,107 @@ export function splitSentences(text: string): string[] {
     if (buffer.trim()) pushChunked(sentences, buffer.trim())
     buffer = ''
   }
-  for (const char of text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === undefined) continue
+    buffer += char
     if (char === '\n') {
       flush()
       continue
     }
-    buffer += char
-    if (SENTENCE_ENDERS.has(char)) flush()
+    if (CJK_HARD_ENDERS.has(char)) {
+      flush()
+      continue
+    }
+    if (CJK_SOFT_ENDERS.has(char)) {
+      if (buffer.length > SOFT_ENDER_THRESHOLD) flush()
+      continue
+    }
+    if (ASCII_ENDERS.has(char)) {
+      const next = text[index + 1]
+      if (next === undefined || /\s/.test(next)) flush()
+    }
   }
   flush()
   return mergeShort(sentences)
+}
+
+function isSpace(char: string | undefined): boolean {
+  return char === undefined || /\s/.test(char)
+}
+
+/** 一个句子的文本,以及它在**原文**中的字符起点。 */
+export interface SentenceSlice {
+  readonly text: string
+  readonly start: number
+}
+
+/**
+ * 切句并带上**原文**字符偏移 —— TTS 高亮/自动翻页要的就是这个。
+ *
+ * 与 {@link splitSentences} 的区别:
+ * - 返回 `{ text, start }`,`start` 是句子在传入文本里的真实下标,调用方
+ *   据此把句子位置映射回 DOM。`splitSentences` 只给字符串,调用方用
+ *   「句子长度累加」推 start —— 一旦中间有被 trim 掉的空白(比如块级
+ *   元素之间的换行),后续每一句都会累积偏移,高亮越读越偏。
+ * - 不合并短句:短标题被并进正文,高亮范围就不再是「一句」。
+ *
+ * 空白(换行/块级边界)本身不产出句子,但计入后面句子的 `start`。
+ */
+export function splitSentencesWithOffsets(text: string): SentenceSlice[] {
+  const out: SentenceSlice[] = []
+  let from = -1
+  let to = -1
+  const flush = (): void => {
+    if (from !== -1 && to > from) pushSlices(out, text, from, to)
+    from = -1
+    to = -1
+  }
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === undefined) continue
+    if (char === '\n') {
+      flush()
+      continue
+    }
+    if (from === -1) from = index
+    to = index + 1
+    if (CJK_HARD_ENDERS.has(char)) {
+      flush()
+      continue
+    }
+    if (CJK_SOFT_ENDERS.has(char)) {
+      if (to - from > SOFT_ENDER_THRESHOLD) flush()
+      continue
+    }
+    if (ASCII_ENDERS.has(char)) {
+      const next = text[index + 1]
+      if (next === undefined || isSpace(next)) flush()
+    }
+  }
+  flush()
+  return out
+}
+
+/** 超长片段按逗号切,每片保留自己在原文里的 start(不 trim,边界已在 caller 收窄)。 */
+function pushSlices(out: SentenceSlice[], text: string, from: number, to: number): void {
+  let cursor = from
+  // 先收窄首尾空白:空白不属于句子,但 start 必须是原文下标。
+  while (cursor < to && isSpace(text[cursor])) cursor += 1
+  let end = to
+  while (end > cursor && isSpace(text[end - 1])) end -= 1
+  while (end - cursor > MAX_SENTENCE_CHARS) {
+    const window = text.slice(cursor, cursor + MAX_SENTENCE_CHARS)
+    const cut = Math.max(
+      window.lastIndexOf('，'),
+      window.lastIndexOf(','),
+      window.lastIndexOf('、'),
+    )
+    const at = cut > 40 ? cursor + cut + 1 : cursor + MAX_SENTENCE_CHARS
+    out.push({ text: text.slice(cursor, at), start: cursor })
+    cursor = at
+  }
+  if (end > cursor) out.push({ text: text.slice(cursor, end), start: cursor })
 }
 
 function pushChunked(out: string[], piece: string): void {
