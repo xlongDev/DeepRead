@@ -480,6 +480,15 @@ pub fn covers_dir(base: &Path) -> PathBuf {
     base.join("covers")
 }
 
+/// 从浏览器备份导入的书籍落在哪。
+///
+/// 桌面端的原则是「原文件留在用户磁盘上、不复制」,但这些书**没有原文件** ——
+/// 它们只活在浏览器里。收下备份就必须自己存一份,所以单独放一个目录,和用户
+/// 自己导入的书区分得开。
+pub fn imported_books_dir(base: &Path) -> PathBuf {
+    base.join("imported-books")
+}
+
 /// Extensions we write; `get` probes them in this order.
 const COVER_EXTENSIONS: [&str; 4] = ["png", "jpg", "webp", "gif"];
 
@@ -702,7 +711,7 @@ pub async fn notes_export<R: tauri::Runtime>(
         .dialog()
         .file()
         .set_title("导出批注")
-        .set_file_name(&format!("{name}.md"))
+        .set_file_name(format!("{name}.md"))
         .add_filter("Markdown", &["md"])
         .blocking_save_file();
     let Some(file_path) = path else {

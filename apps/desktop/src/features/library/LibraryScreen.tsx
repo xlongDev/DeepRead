@@ -720,20 +720,27 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     const backupPath = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: 'SQLite 备份', extensions: ['db'] }],
+      // .db 是本机 SQLite 快照,.json 是浏览器端导出的那份 —— 后者能被收下,
+      // 于是"在浏览器里读的书"可以接着在桌面版读。
+      filters: [{ name: '备份文件', extensions: ['db', 'json'] }],
     })
     if (!backupPath || typeof backupPath !== 'string') return
-    const checksumPath = `${backupPath}.sha256`
+    // JSON 备份没有旁路的 .sha256 文件:它的校验和是内联在文件里的,而 Rust
+    // 那边靠 serde 的严格解析兜底(见 import_json_snapshot 的说明)。
+    const isBrowserBackup = backupPath.toLowerCase().endsWith('.json')
     let checksum = ''
-    try {
-      const response = await fetch(convertFileSrc(checksumPath))
-      if (response.ok) checksum = (await response.text()).trim()
-    } catch {
-      // checksum file optional; Rust validates integrity regardless
-    }
-    if (!checksum) {
-      setBackupMsg('未找到校验和文件(.sha256),无法确认备份完整性。')
-      return
+    if (!isBrowserBackup) {
+      const checksumPath = `${backupPath}.sha256`
+      try {
+        const response = await fetch(convertFileSrc(checksumPath))
+        if (response.ok) checksum = (await response.text()).trim()
+      } catch {
+        // checksum file optional; Rust validates integrity regardless
+      }
+      if (!checksum) {
+        setBackupMsg('未找到校验和文件(.sha256),无法确认备份完整性。')
+        return
+      }
     }
     setBackupBusy(true)
     try {
