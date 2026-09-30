@@ -24,7 +24,14 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
-import { importStoredBook, requestPersistentStorage, StorageQuotaError } from '../../lib/web-store'
+import {
+  downloadText,
+  exportSnapshot,
+  importSnapshot,
+  importStoredBook,
+  requestPersistentStorage,
+  StorageQuotaError,
+} from '../../lib/web-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadNotes } from '../../lib/notes'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
@@ -102,6 +109,9 @@ interface LibraryScreenProps {
 
 export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  /** 浏览器端「从备份恢复」的文件选择器。用持久 input 而不是临时 create +
+   * click():那样用户一取消,等待 change 的 Promise 就永远悬着。 */
+  const restoreInputRef = useRef<HTMLInputElement>(null)
   /** `?demoShelf` 种下的示例书架;挡住 loadBooks,免得它被真实书架覆盖。 */
   const demoSeeded = useRef(false)
   const [books, setBooks] = useState<readonly ShelfBook[]>([])
@@ -581,7 +591,34 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     [forgetBook],
   )
 
+  /**
+   * 备份。
+   *
+   * 桌面端:Rust 把 SQLite 拷一份到用户选的路径。
+   * 浏览器端:把整个 IndexedDB(含书籍字节)序列化成 JSON 下载。**这条分支是
+   * 必须的** —— 浏览器里的数据本来就可能被清掉,而 `save()`(Tauri 的保存对话
+   * 框)在那边根本不存在,直接调会炸。
+   */
   const runBackup = useCallback(async (): Promise<void> => {
+    if (!isTauriRuntime()) {
+      setBackupBusy(true)
+      try {
+        const { text, bytes, checksum } = await exportSnapshot()
+        downloadText(
+          `deepread-backup-${new Date().toISOString().slice(0, 10)}.json`,
+          text,
+          'application/json',
+        )
+        setBackupMsg(
+          `已备份 ${formatBytes(bytes)} · 校验和 ${checksum.slice(0, 12)}…(校验和已写进备份文件)`,
+        )
+      } catch (backupError) {
+        setBackupMsg(toAppError(backupError).message)
+      } finally {
+        setBackupBusy(false)
+      }
+      return
+    }
     const path = await save({
       defaultPath: `deepread-backup-${new Date().toISOString().slice(0, 10)}.db`,
       filters: [{ name: 'SQLite 备份', extensions: ['db'] }],
@@ -646,7 +683,31 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setUpdateMsg(`已忽略版本 ${update?.version}。`)
   }, [update])
 
+  /**
+   * 恢复一份 web 端备份。
+   *
+   * 桌面端要旁路读一个 `.sha256` 文件;浏览器端没这回事 —— 校验和就写在备份
+   * 文件里(`exportSnapshot` 放进去的),`importSnapshot` 会先对上再动库。
+   */
+  const restoreBackupFile = useCallback(async (file: File, reload: () => void): Promise<void> => {
+    setBackupBusy(true)
+    try {
+      await importSnapshot(await file.text())
+      setBackupMsg('恢复完成:书架、进度与批注已还原。')
+      reload()
+    } catch (restoreError) {
+      setBackupMsg(toAppError(restoreError).message)
+    } finally {
+      setBackupBusy(false)
+    }
+  }, [])
+
   const runRestore = useCallback(async (reload: () => void): Promise<void> => {
+    // 浏览器端没有 `open()` 对话框,走隐藏的 file input(见下方 .library-file-input)。
+    if (!isTauriRuntime()) {
+      restoreInputRef.current?.click()
+      return
+    }
     const backupPath = await open({
       multiple: false,
       directory: false,
@@ -1595,6 +1656,17 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         onChange={(event) => {
           void importFromBrowserFiles(Array.from(event.target.files ?? []))
           event.target.value = ''
+        }}
+      />
+      <input
+        ref={restoreInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="visually-hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file !== undefined) void restoreBackupFile(file, loadBooks)
         }}
       />
     </div>

@@ -126,6 +126,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const hideChromeRef = useRef<() => void>(() => {})
   const chromeVisibleRef = useRef(true)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  /** 浏览器端导入阅读字体的文件选择器(桌面端走 openFileDialog)。 */
+  const fontInputRef = useRef<HTMLInputElement>(null)
   const progressRef = useRef<{ cfi: string; fraction: number } | null>(null)
   const annotationsRef = useRef<readonly AnnotationRecord[]>([])
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
@@ -416,8 +418,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [book, ttsCoverUrl])
 
   // 导入字体列表 → 组装 @font-face → 注入书籍文档。
+  // 两个平台同一条命令:桌面端读应用数据目录,浏览器端读 IndexedDB(fonts.list
+  // 在 ipc 层被分流)。
   useEffect(() => {
-    if (!isTauriRuntime()) return
     let cancelled = false
     void invokeCommand('fonts.list', undefined)
       .then((fonts) => {
@@ -431,7 +434,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [])
 
   useEffect(() => {
-    if (!isTauriRuntime()) return
     // 内核就绪前注入无效(adapter 还是 null),所以等进入阅读态再刷一次。
     if (phase !== 'reading') return
     void adapterRef.current?.setFontFaces(
@@ -994,7 +996,38 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
   }, [])
 
+  /** 浏览器端拿到字体 File 之后的那一段(桌面端走 `fonts.import`)。 */
+  const importFontFile = useCallback(
+    async (file: File): Promise<void> => {
+      setFontBusy(true)
+      try {
+        const { putStoredFont } = await import('../../lib/web-store')
+        const name = file.name.replace(/\.[^.]+$/, '')
+        await putStoredFont({
+          id: `font-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          name,
+          fileName: file.name,
+          blob: file,
+        })
+        const fonts = await invokeCommand('fonts.list', undefined)
+        setCustomFonts(fonts)
+        const imported = fonts[fonts.length - 1]
+        if (imported) updateLayout({ fontFamily: imported.name })
+      } catch (fontError) {
+        setPanelProblem(toAppError(fontError).message || null)
+      } finally {
+        setFontBusy(false)
+      }
+    },
+    [updateLayout],
+  )
+
   const importReadingFont = useCallback(async (): Promise<void> => {
+    // 浏览器端没有 `openFileDialog`,走隐藏的 file input(见 JSX 里那个)。
+    if (!isTauriRuntime()) {
+      fontInputRef.current?.click()
+      return
+    }
     const path = await openFileDialog({
       multiple: false,
       directory: false,
@@ -1219,6 +1252,18 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         } as React.CSSProperties
       }
     >
+      {/* 浏览器端导入阅读字体用(桌面端走 openFileDialog,不会碰它)。 */}
+      <input
+        ref={fontInputRef}
+        type="file"
+        accept=".ttf,.otf,.woff,.woff2"
+        className="visually-hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file !== undefined) void importFontFile(file)
+        }}
+      />
       <div
         className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
         onPointerDown={() => showChrome()}

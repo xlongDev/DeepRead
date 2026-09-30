@@ -17,25 +17,34 @@ import {
   type BookReadingStat,
   type CommandMap,
   type CommandName,
+  type LearningCard,
   type LibraryBook,
   type NoteEntry,
   type ReaderStatePayload,
+  type ReadingFont,
 } from '@deepread/shared'
 import {
   addStoredStat,
   deleteStoredBook,
+  deleteStoredCard,
   deleteStoredCover,
   deleteStoredFile,
+  deleteStoredFont,
   deleteStoredState,
   getStoredCover,
   getStoredState,
   listStoredBooks,
+  listStoredCards,
+  listStoredFonts,
   listStoredStats,
   listStoredStates,
+  NEW_CARD_DEFAULTS,
   putStoredBook,
+  putStoredCards,
   putStoredCover,
   putStoredState,
   type StoredBook,
+  type StoredFont,
 } from './web-store'
 
 /** 与 Rust 侧 `set_tags` / `note.update` 的上限保持一致,免得两端规则漂移。 */
@@ -46,6 +55,10 @@ const MAX_NOTE_LENGTH = 4000
 const MAX_TOP_BOOKS = 20
 /** notes.list 的整体上限,与 Rust 侧一致。 */
 const MAX_NOTES = 2000
+/** cards.add 的单次上限,与 Rust `MAX_CARDS_PER_ADD` 一致。 */
+const MAX_CARDS_PER_ADD = 200
+/** 与 Rust `CARD_SOURCES` 一致。 */
+const CARD_SOURCES: readonly string[] = ['highlight', 'quiz', 'mistake']
 
 function notFound(what: string): AppError {
   // `systemValidation`:书 / 批注不存在,本质是调用方给了一个无效的 key。
@@ -92,6 +105,25 @@ async function coverUrl(hash: string): Promise<string | null> {
   const url = URL.createObjectURL(blob)
   coverUrls.set(hash, url)
   return url
+}
+
+/**
+ * 字体字节的 object URL 缓存。`fonts.list` 每次都新建的话,每刷一次书架/面板
+ * 就漏一个,而且 @font-face 会反复重新解码同一个字体。
+ */
+const fontUrls = new Map<string, string>()
+
+/** 存的是 Blob,`ReadingFont.path` 要的是能直接喂给 @font-face 的 URL。 */
+function fontRowToReadingFont(font: StoredFont): ReadingFont {
+  const cached = fontUrls.get(font.id)
+  const url =
+    cached ??
+    (() => {
+      const created = URL.createObjectURL(font.blob)
+      fontUrls.set(font.id, created)
+      return created
+    })()
+  return { id: font.id, name: font.name, fileName: font.fileName, path: url }
 }
 
 /** base64 → Blob。封面要能喂给 <img>,所以得嗅出 MIME —— 空 type 的 Blob 不渲染。 */
@@ -267,6 +299,104 @@ export const webHandlers: {
     })
     return { notes: notes.slice(0, MAX_NOTES) }
   },
+
+  // ---------- 阅读字体 ----------
+  // `fonts.import` 不在这里:它的参数是文件路径,浏览器里没有路径 —— 那边走
+  // file input 拿到 File 后直接写库(和导入书籍同一个道理)。
+
+  [COMMAND.fontsList]: async () => (await listStoredFonts()).map(fontRowToReadingFont),
+
+  [COMMAND.fontsRemove]: async (request) => {
+    const fonts = await listStoredFonts()
+    if (!fonts.some((font) => font.id === request.id)) return false
+    await deleteStoredFont(request.id)
+    const stale = fontUrls.get(request.id)
+    if (stale !== undefined) {
+      URL.revokeObjectURL(stale)
+      fontUrls.delete(request.id)
+    }
+    return true
+  },
+
+  // ---------- 学习卡片 ----------
+  // 调度算法在 `@deepread/shared/srs`,后端只是个存储 —— web 端同样只存行、
+  // 按前端算好的字段落盘。默认值与 Rust 建表的 DEFAULT 一致(ease 2.5)。
+
+  [COMMAND.cardsList]: async (request) => {
+    const all = await listStoredCards()
+    const rows =
+      request.bookHash === undefined
+        ? all
+        : all.filter((card) => card.bookHash === request.bookHash)
+    // 与 Rust 的 ORDER BY due_at 一致。
+    return { cards: [...rows].sort((a, b) => a.dueAt.localeCompare(b.dueAt)) }
+  },
+
+  [COMMAND.cardsAdd]: async (request) => {
+    if (request.cards.length > MAX_CARDS_PER_ADD) {
+      throw new AppError(ErrorCodes.systemValidation, '一次添加的卡片过多', { retryable: false })
+    }
+    const existing = await listStoredCards()
+    const known = new Set(existing.map((card) => card.id))
+    const now = new Date().toISOString()
+    const rows: LearningCard[] = []
+    for (const card of request.cards) {
+      // Rust 侧是 INSERT OR IGNORE:从同一批批注重生成卡片**不重置复习进度**。
+      if (known.has(card.id)) continue
+      if (!CARD_SOURCES.includes(card.source)) {
+        throw new AppError(ErrorCodes.systemValidation, '未知的卡片来源', { retryable: false })
+      }
+      rows.push({
+        id: card.id,
+        bookHash: request.bookHash,
+        front: card.front,
+        back: card.back,
+        source: card.source,
+        ...(card.cfi === undefined ? {} : { cfi: card.cfi }),
+        ...NEW_CARD_DEFAULTS,
+        dueAt: card.dueAt,
+        createdAt: now,
+      })
+      known.add(card.id)
+    }
+    await putStoredCards(rows)
+    return { added: rows.length, savedAt: now }
+  },
+
+  [COMMAND.cardsRemove]: async (request) => {
+    const existing = await listStoredCards()
+    if (!existing.some((card) => card.id === request.id)) return { removed: false }
+    await deleteStoredCard(request.id)
+    return { removed: true }
+  },
+
+  [COMMAND.cardsReview]: async (request) => {
+    const existing = await listStoredCards()
+    const card = existing.find((item) => item.id === request.id)
+    if (card === undefined) throw notFound('卡片不存在')
+    await putStoredCards([
+      {
+        ...card,
+        ease: request.ease,
+        intervalDays: request.intervalDays,
+        reps: request.reps,
+        lapses: request.lapses,
+        dueAt: request.dueAt,
+      },
+    ])
+    return { dueAt: request.dueAt }
+  },
+
+  /**
+   * 浏览器里没有 Tauri 的 app handle,但底部状态栏如实告诉用户「你现在跑在
+   * 浏览器里」比抛一个「运行时不可用」有用得多。
+   */
+  [COMMAND.appInfo]: async () => ({
+    appName: 'DeepRead',
+    appVersion: 'web',
+    os: 'browser',
+    arch: 'web',
+  }),
 
   [COMMAND.readerNoteUpdate]: async (request) => {
     const trimmed = request.note.trim()

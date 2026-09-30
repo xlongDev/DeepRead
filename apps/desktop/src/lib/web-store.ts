@@ -14,16 +14,31 @@
  * 一律转成 `StorageQuotaError`,由上层给用户一句人话,而不是静默丢掉一本书。
  */
 
-import type { LibraryBook, ReaderStatePayload } from '@deepread/shared'
+import {
+  AppError,
+  ErrorCodes,
+  type LearningCard,
+  type LibraryBook,
+  type ReaderStatePayload,
+} from '@deepread/shared'
 
 const DB_NAME = 'deepread-web'
-const DB_VERSION = 1
+/**
+ * v2 加了 `cards`(学习卡片),v3 加了 `fonts`(阅读字体)。
+ *
+ * IndexedDB 的 onupgradeneeded 只在新库或版本提升时跑,所以已经建过库的用户
+ * 不会自动拿到新的 store —— 每加一个 store 版本号就得跟着升,否则第一次写入
+ * 就炸在 "object store not found"。
+ */
+const DB_VERSION = 3
 
 const STORE_BOOKS = 'books'
 const STORE_FILES = 'files'
 const STORE_COVERS = 'covers'
 const STORE_STATES = 'states'
 const STORE_STATS = 'stats'
+const STORE_CARDS = 'cards'
+const STORE_FONTS = 'fonts'
 
 /** 存进 `books` 的行:就是 `LibraryBook`,只是 `progress` 不落库(它由 states join 出来)。 */
 export type StoredBook = Omit<LibraryBook, 'progress'>
@@ -87,6 +102,12 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!database.objectStoreNames.contains(STORE_STATS)) {
         database.createObjectStore(STORE_STATS, { keyPath: 'key' })
+      }
+      if (!database.objectStoreNames.contains(STORE_CARDS)) {
+        database.createObjectStore(STORE_CARDS, { keyPath: 'id' })
+      }
+      if (!database.objectStoreNames.contains(STORE_FONTS)) {
+        database.createObjectStore(STORE_FONTS, { keyPath: 'id' })
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -260,6 +281,66 @@ export async function listStoredStats(): Promise<readonly StoredStat[]> {
   return rows ?? []
 }
 
+// ---------- cards(学习卡片) ----------
+
+/** 新卡片的 SRS 初值 —— 与 Rust 建表语句里的 DEFAULT 逐字对齐(ease 2.5)。 */
+export const NEW_CARD_DEFAULTS = {
+  ease: 2.5,
+  intervalDays: 0,
+  reps: 0,
+  lapses: 0,
+} as const
+
+export async function listStoredCards(): Promise<readonly LearningCard[]> {
+  const rows = await run<LearningCard[]>(STORE_CARDS, 'readonly', (store) => store.getAll())
+  return rows ?? []
+}
+
+export async function putStoredCards(cards: readonly LearningCard[]): Promise<void> {
+  if (cards.length === 0) return
+  const db = await getDatabase()
+  await new Promise<void>((resolve, reject) => {
+    let transaction: IDBTransaction
+    try {
+      transaction = db.transaction(STORE_CARDS, 'readwrite')
+      const store = transaction.objectStore(STORE_CARDS)
+      for (const card of cards) store.put(card)
+    } catch (error) {
+      reject(toStorageError(error))
+      return
+    }
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(toStorageError(transaction.error))
+    transaction.onabort = () => reject(toStorageError(transaction.error))
+  })
+}
+
+export async function deleteStoredCard(id: string): Promise<void> {
+  await run(STORE_CARDS, 'readwrite', (store) => store.delete(id))
+}
+
+/** 删书时清掉它的卡片 —— Rust 那边是 `ON DELETE CASCADE`,这边得自己来。 */
+export async function deleteStoredCardsByBook(hash: string): Promise<void> {
+  const all = await listStoredCards()
+  const stale = all.filter((card) => card.bookHash === hash).map((card) => card.id)
+  if (stale.length === 0) return
+  const db = await getDatabase()
+  await new Promise<void>((resolve, reject) => {
+    let transaction: IDBTransaction
+    try {
+      transaction = db.transaction(STORE_CARDS, 'readwrite')
+      const store = transaction.objectStore(STORE_CARDS)
+      for (const id of stale) store.delete(id)
+    } catch (error) {
+      reject(toStorageError(error))
+      return
+    }
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(toStorageError(transaction.error))
+    transaction.onabort = () => reject(toStorageError(transaction.error))
+  })
+}
+
 // ---------- 整本清空 ----------
 
 /** 移除一本书留下的全部痕迹。删书时漏掉任何一处都会留下孤儿数据。 */
@@ -269,7 +350,203 @@ export async function purgeStoredBook(hash: string): Promise<void> {
     deleteStoredFile(hash),
     deleteStoredCover(hash),
     deleteStoredState(hash),
+    deleteStoredCardsByBook(hash),
   ])
+}
+
+// ---------- fonts(用户导入的阅读字体) ----------
+
+/** 存进 `fonts` 的行。字节自己存 —— 浏览器里没有"字体在应用数据目录"这回事。 */
+export interface StoredFont {
+  readonly id: string
+  readonly name: string
+  readonly fileName: string
+  readonly blob: Blob
+}
+
+export async function listStoredFonts(): Promise<readonly StoredFont[]> {
+  const rows = await run<StoredFont[]>(STORE_FONTS, 'readonly', (store) => store.getAll())
+  return rows ?? []
+}
+
+export async function putStoredFont(font: StoredFont): Promise<void> {
+  await run(STORE_FONTS, 'readwrite', (store) => store.put(font))
+}
+
+export async function deleteStoredFont(id: string): Promise<void> {
+  await run(STORE_FONTS, 'readwrite', (store) => store.delete(id))
+}
+
+// ---------- 备份 / 恢复 ----------
+
+/**
+ * 备份快照的形状。
+ *
+ * **书籍字节是 base64 内联进去的** —— 只导元数据的备份恢复之后书打不开,那不是
+ * 备份。代价是文件会大(base64 比原始字节多约 1/3),但这是用户的全部数据,
+ * 该大就大。
+ *
+ * `checksum` 是对**除它自己之外**的那部分做的 SHA-256;恢复时先对得上才动库,
+ * 免得导入一半坏掉。
+ */
+export interface BackupSnapshot {
+  readonly version: 1
+  readonly createdAt: string
+  readonly books: readonly StoredBook[]
+  readonly files: readonly {
+    readonly hash: string
+    readonly fileName: string
+    readonly data: string
+  }[]
+  readonly covers: readonly { readonly hash: string; readonly data: string }[]
+  readonly states: readonly StoredState[]
+  readonly stats: readonly StoredStat[]
+  readonly cards: readonly LearningCard[]
+  readonly checksum: string
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      resolve(result.slice(result.indexOf(',') + 1)) // 去掉 "data:*;base64,"
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('读取失败'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** 反解:备份里没有 MIME,统一按二进制 Blob 还原(字节本身才是有用的)。 */
+export function base64ToBlob(base64: string): Blob {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new Blob([bytes])
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+/**
+ * 浏览器端落盘的通用做法:`<a download>`。
+ * 与 `notes-view.ts` 里导批注用的是同一招 —— 那边文件名写死了「批注」,
+ * 这里要能指定,所以自己有一份。
+ */
+export function downloadText(fileName: string, text: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+/** 导出整个库为一份 JSON 文本(调用方负责落盘 / 下载)。 */
+export async function exportSnapshot(): Promise<{
+  readonly text: string
+  readonly bytes: number
+  readonly checksum: string
+}> {
+  const [books, files, covers, states, stats, cards] = await Promise.all([
+    listStoredBooks(),
+    run<StoredFile[]>(STORE_FILES, 'readonly', (store) => store.getAll()).then((r) => r ?? []),
+    run<{ hash: string; blob: Blob }[]>(STORE_COVERS, 'readonly', (store) => store.getAll()).then(
+      (r) => r ?? [],
+    ),
+    listStoredStates(),
+    listStoredStats(),
+    listStoredCards(),
+  ])
+  const payload = {
+    version: 1 as const,
+    createdAt: new Date().toISOString(),
+    books,
+    files: await Promise.all(
+      files.map(async (file) => ({
+        hash: file.hash,
+        fileName: file.fileName,
+        data: await blobToBase64(file.blob),
+      })),
+    ),
+    covers: await Promise.all(
+      covers.map(async (cover) => ({
+        hash: cover.hash,
+        data: await blobToBase64(cover.blob),
+      })),
+    ),
+    states,
+    stats,
+    cards,
+  }
+  const checksum = await sha256Hex(JSON.stringify(payload))
+  const text = JSON.stringify({ ...payload, checksum })
+  return { text, bytes: new Blob([text]).size, checksum }
+}
+
+/** 整表替换:恢复是「以备份为准」,不是「能合就合」—— 合并出半新半旧更糟。 */
+async function replaceAll(store: string, rows: readonly unknown[]): Promise<void> {
+  const db = await getDatabase()
+  await new Promise<void>((resolve, reject) => {
+    let transaction: IDBTransaction
+    try {
+      transaction = db.transaction(store, 'readwrite')
+      const objectStore = transaction.objectStore(store)
+      objectStore.clear()
+      for (const row of rows) objectStore.put(row)
+    } catch (error) {
+      reject(toStorageError(error))
+      return
+    }
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(toStorageError(transaction.error))
+    transaction.onabort = () => reject(toStorageError(transaction.error))
+  })
+}
+
+/** 恢复一份快照。校验和不对就一个字节都不写。 */
+export async function importSnapshot(text: string): Promise<boolean> {
+  const parsed: unknown = JSON.parse(text)
+  if (parsed === null || typeof parsed !== 'object') {
+    throw new AppError(ErrorCodes.systemValidation, '这不是一份有效的备份', { retryable: false })
+  }
+  const { checksum, ...payload } = parsed as Record<string, unknown>
+  if (typeof checksum !== 'string') {
+    throw new AppError(ErrorCodes.systemValidation, '备份里没有校验和', { retryable: false })
+  }
+  const actual = await sha256Hex(JSON.stringify(payload))
+  if (actual !== checksum) {
+    throw new AppError(ErrorCodes.systemValidation, '备份校验和不匹配,文件可能已损坏')
+  }
+  const snapshot = payload as unknown as Omit<BackupSnapshot, 'checksum'>
+  await Promise.all([
+    replaceAll(STORE_BOOKS, snapshot.books ?? []),
+    replaceAll(
+      STORE_FILES,
+      (snapshot.files ?? []).map((file) => ({
+        hash: file.hash,
+        fileName: file.fileName,
+        blob: base64ToBlob(file.data),
+      })),
+    ),
+    replaceAll(
+      STORE_COVERS,
+      (snapshot.covers ?? []).map((cover) => ({
+        hash: cover.hash,
+        blob: base64ToBlob(cover.data),
+      })),
+    ),
+    replaceAll(STORE_STATES, snapshot.states ?? []),
+    replaceAll(STORE_STATS, snapshot.stats ?? []),
+    replaceAll(STORE_CARDS, snapshot.cards ?? []),
+  ])
+  return true
 }
 
 // ---------- 持久化 ----------
