@@ -17,6 +17,7 @@
 import {
   AppError,
   ErrorCodes,
+  sha256HexOfText,
   type LearningCard,
   type LibraryBook,
   type ReaderStatePayload,
@@ -406,11 +407,9 @@ export interface BackupSnapshot {
   readonly checksum: string
 }
 
+/** 校验和改走增量实现:快照大时不再把全文一次性 encode 进内存。 */
 async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
+  return sha256HexOfText(text)
 }
 
 /** 导出整个库为一份 JSON 文本(调用方负责落盘 / 下载)。 */
