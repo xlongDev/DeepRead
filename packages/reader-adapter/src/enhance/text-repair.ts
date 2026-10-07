@@ -118,15 +118,10 @@ const toChange = (proposal: Proposal): RepairChange => ({
   after: proposal.after,
 })
 
-/** Rebuild the text applying only the accepted proposals. Positions are
+/** Rebuild the text applying only the accepted proposals. Proposals are
  * re-derived from the text (ids are deterministic), so the caller only needs
- * the change list it showed the user. */
-export function applyRepair(
-  text: string,
-  changes: readonly RepairChange[],
-  acceptedIds: readonly string[],
-): string {
-  void changes
+ * the accepted ids it showed the user. */
+export function applyRepair(text: string, acceptedIds: readonly string[]): string {
   const accepted = new Set(acceptedIds)
   const proposals = computeProposals(text)
   const lines = text.split('\n')
@@ -162,7 +157,6 @@ export function repairText(text: string): RepairResult & { readonly original: st
     original: text,
     text: applyRepair(
       text,
-      proposals.map(toChange),
       proposals.map((p) => p.id),
     ),
     changes: proposals.map(toChange),

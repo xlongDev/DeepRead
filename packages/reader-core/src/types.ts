@@ -99,12 +99,9 @@ export interface ReaderLayout {
    */
   readonly fontWeight?: number
   /**
-   * Font-family override for reflowable content (`serif` | `sans` | `heitı`).
-   * Omit to keep the book's own fonts (原版排版优先).
-   */
-  /**
-   * 排版字体:'serif' / 'sans' 是系统栈;其他字符串是具名字体
+   * 正文字体:'serif' / 'sans' 是系统栈;其他字符串是具名字体
    * (内置霞鹜文楷 'LXGW WenKai' 或用户导入字体的 id)。
+   * Omit to keep the book's own fonts (原版排版优先).
    */
   readonly fontFamily?: string
 }

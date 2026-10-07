@@ -45,7 +45,7 @@ describe('applyRepair', () => {
   it('applies only the accepted proposals', () => {
     const review = reviewRepair(text)
     expect(review.proposals).toHaveLength(2)
-    const partially = applyRepair(review.original, review.proposals, [review.proposals[0]!.id])
+    const partially = applyRepair(review.original, [review.proposals[0]!.id])
     expect(partially).toBe('他走进房间，看见一封信。\n太多  空格  ')
   })
 
@@ -56,6 +56,6 @@ describe('applyRepair', () => {
 
   it('is a no-op when nothing is accepted', () => {
     const review = reviewRepair(text)
-    expect(applyRepair(review.original, review.proposals, [])).toBe(text)
+    expect(applyRepair(review.original, [])).toBe(text)
   })
 })

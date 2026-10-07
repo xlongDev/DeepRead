@@ -1092,7 +1092,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     if (!adapter || !review) return
     const source = adapter.getSourceText()
     if (source === null) return
-    const repaired = applyRepair(source, review.proposals, [...review.accepted])
+    const repaired = applyRepair(source, [...review.accepted])
     await adapter.replaceSource(repaired)
     setToc(await adapter.getTableOfContents())
     setRepairReview(null)
