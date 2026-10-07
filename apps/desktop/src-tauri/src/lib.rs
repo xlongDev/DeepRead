@@ -26,6 +26,20 @@ mod tts;
 use log::{info, warn};
 use tauri::Emitter;
 
+/// 进程级共享 HTTP 客户端(B2.1):连接池跨命令复用,且显式超时 —— 上游
+/// 挂起时不再永久挂住任务。连接 3s(断网/丢包快速失败);不设总超时,
+/// ai.chat 是流式长读,`read_timeout` 只掐「块间空闲 30s」,活着的流不受限。
+pub fn http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .read_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("reqwest client builds")
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -150,4 +164,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Deepread");
+}
+
+#[cfg(test)]
+mod http_tests {
+    /// 共享 client 的全部意义就在"是同一个":连接池复用靠它。配置(3s 连接
+    /// 超时 / 30s 空闲读超时)无法从 Client 实例反查,由代码评审与断网实测
+    /// 验收,这里锁住单例性。
+    #[test]
+    fn http_client_is_a_shared_singleton() {
+        let a = super::http() as *const reqwest::Client;
+        let b = super::http() as *const reqwest::Client;
+        assert_eq!(a, b);
+    }
 }

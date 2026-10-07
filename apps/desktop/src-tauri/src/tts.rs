@@ -134,7 +134,7 @@ pub async fn tts_audio(
         .ok_or_else(|| AppError::new(ErrorCode::TtsProviderError, "请先填写该服务的 API Key"))?;
 
     let url = speech_endpoint(&config.base_url);
-    let client = reqwest::Client::new();
+    let client = crate::http();
     let response = client
         .post(&url)
         .bearer_auth(&api_key)

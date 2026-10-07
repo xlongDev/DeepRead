@@ -655,7 +655,7 @@ pub async fn ai_chat(
         body["temperature"] = json!(temperature);
     }
     let url = chat_endpoint(&config.base_url);
-    let client = reqwest::Client::new();
+    let client = crate::http();
     let task_id = request.task_id.clone();
     let channel = on_event.clone();
 
@@ -667,7 +667,7 @@ pub async fn ai_chat(
                 emit_event(&channel, "chunk", json!(chunk));
             }
         };
-        let result = stream_chat(&client, &url, &api_key, body, cancelled, &on_chunk).await;
+        let result = stream_chat(client, &url, &api_key, body, cancelled, &on_chunk).await;
         match result {
             Ok(()) => emit_event(&channel, "done", json!(null)),
             Err(err) => emit_event(
@@ -704,8 +704,8 @@ pub async fn ai_embed(
         .clone()
         .unwrap_or_else(|| config.model.clone());
     let url = format!("{}/embeddings", config.base_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
-    let vectors = embed_texts(&client, &url, &api_key, &model, &request.texts).await?;
+    let client = crate::http();
+    let vectors = embed_texts(client, &url, &api_key, &model, &request.texts).await?;
     Ok(AiEmbedResponse { vectors })
 }
 

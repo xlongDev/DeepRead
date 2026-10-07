@@ -165,7 +165,7 @@ pub async fn edge_voices() -> Result<Vec<EdgeVoice>, AppError> {
     let url = format!(
         "{VOICES_ENDPOINT}?trustedclienttoken={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={gec}&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}"
     );
-    let response = reqwest::Client::new()
+    let response = crate::http()
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0")
         .header("Accept-Language", "en-US,en;q=0.9")
