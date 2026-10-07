@@ -72,9 +72,7 @@ describe('lookupWord', () => {
     words.push('dup', 'DUP', 'dup')
     // 固定步长乱序(可复现),模拟不守规范排序的 .idx。
     const shuffled = words.map((_, i) => words[(i * 7 + 3) % words.length]!)
-    const bigIndex = buildIndex(
-      makeIdx(shuffled.map((word) => ({ word, offset: 0, size: 0 }))),
-    )
+    const bigIndex = buildIndex(makeIdx(shuffled.map((word) => ({ word, offset: 0, size: 0 }))))
     const hits = lookupWord(bigIndex, new Uint8Array(0), 'dup', sequence)
     expect(hits).toHaveLength(3)
     expect(hits.map((hit) => hit.word.toLowerCase())).toEqual(['dup', 'dup', 'dup'])

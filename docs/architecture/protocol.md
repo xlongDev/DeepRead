@@ -110,13 +110,13 @@
 
 ### `ai.*` 与 `secret.*`(Phase 3)
 
-| 命令                         | 请求 → 响应                                                                                            | 说明                                           |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `ai.config.list/save/remove` | Provider 配置(不含密钥)→ 保存时密钥写入钥匙串                                                          | 配置存 `ai-config.json`;密钥地址 `ai.key.<id>` |
-| `ai.chat`                    | `{ taskId, configId, messages }` → `{ taskId }`;SSE 经 **Channel** 流回(chunk/done/cancelled/error 帧) | Rust 代持密钥直连上游;前端只收流               |
-| `ai.cancel`                  | `{ taskId }` → `{ cancelled }`                                                                         | 原子旗标,流循环即时生效                        |
-| `ai.embed`                   | `{ taskId, configId, texts[] }` → `{ vectors[][] }`                                                    | POST `{base}/embeddings`,密钥服务端解析        |
-| `ai.index.get/set`           | 按书籍哈希存取 `{ chunks[label,text,vector], embeddingModel, createdAt }`                              | `ai-index/<hash>.json`,64MB 上限 + 损坏防护    |
+| 命令                         | 请求 → 响应                                                                                            | 说明                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `ai.config.list/save/remove` | Provider 配置(不含密钥)→ 保存时密钥写入钥匙串                                                          | 配置存 `ai-config.json`;密钥地址 `ai.key.<id>`                                                             |
+| `ai.chat`                    | `{ taskId, configId, messages }` → `{ taskId }`;SSE 经 **Channel** 流回(chunk/done/cancelled/error 帧) | Rust 代持密钥直连上游;前端只收流                                                                           |
+| `ai.cancel`                  | `{ taskId }` → `{ cancelled }`                                                                         | 原子旗标,流循环即时生效                                                                                    |
+| `ai.embed`                   | `{ taskId, configId, texts[] }` → `{ vectors[][] }`                                                    | POST `{base}/embeddings`,密钥服务端解析                                                                    |
+| `ai.index.get/set`           | 按书籍哈希存取 `{ chunks[label,text,vector], embeddingModel, createdAt }`                              | `ai-index/<hash>.json`,64MB 上限 + 损坏防护                                                                |
 | `secret.set/delete`          | 钥匙串优先,无服务时降级 0600 文件                                                                      | 密钥永不回传 UI(仅 AI HTTP 客户端使用);`secret.get` 已移除 —— webview 无任何读取明文密钥的命令面(ADR-0010) |
 
 错误码:`AI_PROVIDER_ERROR`(连接失败/上游非 2xx/响应不合法,多数可重试)、`STORAGE_IO/CORRUPT`。
