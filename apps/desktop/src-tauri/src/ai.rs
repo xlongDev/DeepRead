@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 use crate::secrets::SecretStore;
@@ -27,8 +28,9 @@ pub struct AiState {
     pub cancelled: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiProviderConfig {
     pub id: String,
     pub name: String,
@@ -119,33 +121,38 @@ fn remove_provider_row(conn: &Connection, id: &str) -> Result<bool, AppError> {
     Ok(removed > 0)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiConfigSaveRequest {
     pub provider: AiProviderConfig,
     pub api_key: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiConfigListResponse {
     pub providers: Vec<AiProviderConfig>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiConfigSaveResponse {
     pub provider: AiProviderConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiConfigRemoveRequest {
     pub id: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiConfigRemoveResponse {
     pub removed: bool,
 }
@@ -208,36 +215,42 @@ pub fn ai_config_remove(
     Ok(AiConfigRemoveResponse { removed })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiChatRequest {
     pub task_id: String,
     pub config_id: String,
+    #[ts(type = "Array<{ role: 'system' | 'user' | 'assistant'; content: string }>")]
     pub messages: Vec<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiChatResponse {
     pub task_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiCancelRequest {
     pub task_id: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiCancelResponse {
     pub cancelled: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiEmbedRequest {
     #[allow(dead_code)] // protocol field; the embed call is not cancellable in-flight
     pub task_id: String,
@@ -245,49 +258,56 @@ pub struct AiEmbedRequest {
     pub texts: Vec<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiEmbedResponse {
     pub vectors: Vec<Vec<f64>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiIndexChunk {
     pub label: String,
     pub text: String,
     pub vector: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiIndexPayload {
     pub chunks: Vec<AiIndexChunk>,
     pub embedding_model: String,
     pub created_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiIndexGetRequest {
     pub book_hash: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiIndexGetResponse {
     pub index: Option<AiIndexPayload>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiIndexSetRequest {
     pub book_hash: String,
     pub index: AiIndexPayload,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiIndexSetResponse {
     pub saved_at: String,
 }
@@ -365,30 +385,36 @@ pub fn store_artifact(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiArtifactGetRequest {
     pub book_hash: String,
     pub kind: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiArtifactGetResponse {
+    #[ts(type = "Record<string, unknown> | null")]
     pub payload: Option<Value>,
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct AiArtifactSetRequest {
     pub book_hash: String,
     pub kind: String,
+    #[ts(type = "Record<string, unknown>")]
     pub payload: Value,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct AiArtifactSetResponse {
     pub saved_at: String,
 }

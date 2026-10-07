@@ -108,7 +108,7 @@ export function AiDrawer({
     setIndexStatus('building')
     try {
       const chunks = buildRagChunks(sections)
-      let vectors: readonly (readonly number[])[]
+      let vectors: number[][]
       if (isTauriRuntime() && activeId) {
         const response = await invokeCommand('ai.embed', {
           taskId: `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
@@ -202,7 +202,7 @@ export function AiDrawer({
         const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
         await invokeStreamingCommand(
           'ai.chat',
-          { taskId, configId: activeId, messages: chatMessages },
+          { taskId, configId: activeId, messages: [...chatMessages] },
           (event) => {
             if (event.type === 'chunk') parser.push(event.data)
           },
@@ -254,7 +254,7 @@ export function AiDrawer({
         if (isTauriRuntime() && activeId) {
           await invokeStreamingCommand(
             'ai.chat',
-            { taskId, configId: activeId, messages: insightMessages },
+            { taskId, configId: activeId, messages: [...insightMessages] },
             (event) => {
               if (event.type === 'chunk') parser.push(event.data)
             },
@@ -513,7 +513,7 @@ export function AiDrawer({
     try {
       await invokeStreamingCommand(
         'ai.chat',
-        { taskId, configId: configId ?? '', messages: outbound },
+        { taskId, configId: configId ?? '', messages: [...outbound] },
         (event) => {
           if (event.type === 'done' || event.type === 'cancelled') {
             setPhase('idle')

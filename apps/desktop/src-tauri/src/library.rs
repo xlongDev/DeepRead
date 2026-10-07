@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
+use ts_rs::TS;
 
 use crate::storage::Db;
 
@@ -32,7 +33,8 @@ const SUPPORTED_EXTENSIONS: &[(&str, &str)] = &[
     ("markdown", "md"),
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryBook {
     pub hash: String,
@@ -56,63 +58,73 @@ pub struct LibraryBook {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryImportRequest {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryListResponse {
     pub books: Vec<LibraryBook>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryImportResponse {
     pub book: LibraryBook,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryRemoveRequest {
     pub book_hash: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRemoveResponse {
     pub removed: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryTagSetRequest {
     pub book_hash: String,
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryTagSetResponse {
     pub book: LibraryBook,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryCoverGetRequest {
     pub book_hash: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryCoverGetResponse {
     /// Absolute path of the cached cover; `null` = not cached yet.
     pub path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryCoverPutRequest {
     pub book_hash: String,
@@ -120,7 +132,8 @@ pub struct LibraryCoverPutRequest {
     pub data: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryCoverPutResponse {
     pub path: String,
@@ -128,7 +141,8 @@ pub struct LibraryCoverPutResponse {
 
 /// 书籍元数据的整表提交:面板一次给出全部字段,`None` / 空串 = 清空该项。
 /// 不做"只写变化列"的局部更新 —— 那要动态拼 SQL,而面板本来就是整表编辑。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibraryInfoSetRequest {
     pub book_hash: String,
@@ -139,7 +153,8 @@ pub struct LibraryInfoSetRequest {
     pub language: Option<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryInfoSetResponse {
     pub book: LibraryBook,
@@ -679,7 +694,8 @@ pub fn library_info_set(
 /// 把批注写到本地 Markdown:桌面端走系统保存对话框,而不是浏览器 Blob
 /// 下载 —— WebView 默认会拦截 `<a download>`,用户点了什么都不会发生。
 /// 内容在 Rust 里 UTF-8 落盘,前端拿到 `path`/`cancelled` 之一。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotesExportRequest {
     /// 完整 Markdown 文本,UTF-8。
@@ -688,7 +704,8 @@ pub struct NotesExportRequest {
     pub default_name: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesExportResponse {
     /// 用户最终选定的绝对路径;`null` = 用户取消了对话框。

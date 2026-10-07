@@ -7,10 +7,15 @@
  *   (`app.ready` → `app:ready`); the mapping lives in the two boundary helpers
  *   (`apps/desktop/src/lib/ipc.ts` and `src-tauri/src/events.rs`)
  * - payloads are untrusted input and are validated before they reach handlers
+ * - **类型源 = Rust DTO**(ADR-0008):payload 类型由 ts-rs 生成,勿手改
  */
 
 import { z } from 'zod'
-import { ISO8601_PATTERN, type ISO8601 } from '../types'
+import { ISO8601_PATTERN } from '../types'
+
+import type { AppReadyPayload } from './generated/AppReadyPayload'
+
+export type { AppReadyPayload }
 
 export const EVENT = {
   appReady: 'app.ready',
@@ -23,11 +28,6 @@ export const EVENT = {
  * 供日志与调试对比。
  */
 export const PROTOCOL_VERSION = 1
-
-export interface AppReadyPayload {
-  readonly startedAt: ISO8601
-  readonly appVersion: string
-}
 
 /** The single source of truth for event payload shapes. */
 export interface EventMap {
@@ -46,9 +46,12 @@ export interface EventValidator<P> {
   parse(value: unknown): P
 }
 
-export const eventPayloadValidators: { [K in EventName]: EventValidator<EventMap[K]> } = {
+export const eventPayloadSchemas = {
   [EVENT.appReady]: z.object({
     startedAt: z.string().regex(ISO8601_PATTERN, 'must be an ISO 8601 timestamp'),
     appVersion: z.string().min(1),
   }),
 }
+
+export const eventPayloadValidators: { [K in EventName]: EventValidator<EventMap[K]> } =
+  eventPayloadSchemas

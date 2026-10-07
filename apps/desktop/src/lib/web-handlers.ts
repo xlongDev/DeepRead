@@ -72,7 +72,7 @@ async function withProgress(book: StoredBook): Promise<LibraryBook> {
   return { ...book, progress: state?.progress?.fraction ?? null }
 }
 
-async function listBooks(): Promise<readonly LibraryBook[]> {
+async function listBooks(): Promise<LibraryBook[]> {
   const [books, states] = await Promise.all([listStoredBooks(), listStoredStates()])
   const fractionByHash = new Map(
     states.map((state) => [state.hash, state.progress?.fraction ?? null]),
@@ -120,9 +120,9 @@ function toNoteEntry(
     readonly id: string
     readonly cfi: string
     readonly color: string
-    readonly note?: string
-    readonly excerpt?: string
-    readonly updatedAt?: string
+    readonly note?: string | null
+    readonly excerpt?: string | null
+    readonly updatedAt?: string | null
   },
 ): NoteEntry {
   return {
@@ -186,7 +186,7 @@ export const webHandlers: {
     const books = await listStoredBooks()
     const book = books.find((item) => item.hash === request.bookHash)
     if (book === undefined) throw notFound('这本书不在书架上')
-    const next: StoredBook = { ...book, tags: normalizeTags(request.tags) }
+    const next: StoredBook = { ...book, tags: [...normalizeTags(request.tags)] }
     await putStoredBook(next)
     return { book: await withProgress(next) }
   },

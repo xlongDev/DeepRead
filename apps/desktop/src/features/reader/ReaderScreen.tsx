@@ -99,6 +99,8 @@ function toDomainAnnotation(record: AnnotationRecord, bookId: string) {
   const now = new Date().toISOString()
   return {
     ...record,
+    // wire 的 note 是 string | null(生成类型);领域模型用 undefined 表示「没有」。
+    note: record.note ?? undefined,
     bookId,
     createdAt: now,
     updatedAt: now,
@@ -287,8 +289,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       bookHash: book.hash,
       state: {
         progress: progressRef.current,
-        annotations: annotationsRef.current,
-        bookmarks: bookmarksRef.current,
+        annotations: [...annotationsRef.current],
+        bookmarks: [...bookmarksRef.current],
         updatedAt: new Date().toISOString(),
       },
     }).catch(() => {
@@ -1149,7 +1151,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     for (const meta of dictionaries) {
       try {
         const loaded = await loadDictionary(meta)
-        for (const result of lookupWord(loaded.entries, loaded.dict, word, meta.sametypesequence)) {
+        for (const result of lookupWord(
+          loaded.entries,
+          loaded.dict,
+          word,
+          meta.sametypesequence ?? undefined,
+        )) {
           results.push({ dictName: meta.name, ...result })
         }
       } catch {

@@ -6,6 +6,7 @@
 //! sync, and both are covered by tests.
 
 use serde::Serialize;
+use ts_rs::TS;
 
 pub const EVENT_APP_READY: &str = "app.ready";
 
@@ -13,7 +14,10 @@ pub fn transport_name(logical: &str) -> String {
     logical.replace('.', ":")
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// ADR-0008: event payload types are generated from this struct — keep it the
+/// wire truth and let `cargo test` refresh `protocol/generated/`.
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct AppReadyPayload {
     pub started_at: String,

@@ -9,7 +9,8 @@
     "**/src-tauri/gen/**",
     "**/src-tauri/icons/**",
     "pnpm-lock.yaml",
-    "packages/reader-adapter/src/books/vendor/**"
+    "packages/reader-adapter/src/books/vendor/**",
+    "packages/shared/src/protocol/generated/**"
   ],
   "plugins": ["typescript", "react", "react-hooks", "jsx-a11y"],
   "categories": {

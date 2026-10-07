@@ -8,6 +8,7 @@
 use rusqlite::Connection;
 use rusqlite::params_from_iter;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 
@@ -23,13 +24,15 @@ fn validate_source(source: &str) -> Result<(), AppError> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CardRow {
     pub id: String,
     pub book_hash: String,
     pub front: String,
     pub back: String,
+    #[ts(type = "'highlight' | 'quiz' | 'mistake'")]
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cfi: Option<String>,
@@ -87,14 +90,16 @@ pub fn list_cards(conn: &Connection, book_hash: Option<&str>) -> Result<Vec<Card
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct NewCard {
     pub id: String,
     pub front: String,
     pub back: String,
+    #[ts(type = "'highlight' | 'quiz' | 'mistake'")]
     pub source: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cfi: Option<String>,
     pub due_at: String,
 }
@@ -165,47 +170,54 @@ pub fn review_card(
 
 // ---------- IPC wrappers ----------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CardsListRequest {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub book_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CardsListResponse {
     pub cards: Vec<CardRow>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CardsAddRequest {
     pub book_hash: String,
     pub cards: Vec<NewCard>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CardsAddResponse {
     pub added: usize,
     pub saved_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CardsRemoveRequest {
     pub id: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CardsRemoveResponse {
     pub removed: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CardsReviewRequest {
     pub id: String,
     pub ease: f64,
@@ -215,8 +227,9 @@ pub struct CardsReviewRequest {
     pub due_at: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CardsReviewResponse {
     pub due_at: String,
 }

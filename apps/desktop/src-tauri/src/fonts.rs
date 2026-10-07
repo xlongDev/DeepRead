@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 
@@ -25,8 +26,9 @@ fn is_font_file(name: &str) -> bool {
         .any(|extension| lower.ends_with(extension))
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ReadingFont {
     /// Stable id: hash of the file name (renames re-import as new fonts).
     pub id: String,
@@ -139,14 +141,16 @@ pub fn command_fonts_remove(
     remove_font(&base, &request.id)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct FontImportRequest {
     pub path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct FontRemoveRequest {
     pub id: String,
 }

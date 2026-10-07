@@ -6,19 +6,22 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 use crate::timestamps::rfc3339_now;
 
 pub const MAX_NONCE_LENGTH: usize = 128;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PingRequest {
     pub nonce: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PingResponse {
     pub nonce: String,
@@ -60,7 +63,8 @@ pub fn system_ping(request: PingRequest) -> Result<PingResponse, AppError> {
     )
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub app_name: String,

@@ -1,0 +1,8 @@
+# ts-rs(A→TS 协议类型生成,ADR-0008)的全局导出配置:
+# - TS_RS_EXPORT_DIR:生成物统一落在 shared 包的 protocol/generated/,由
+#   cargo test 触发、CI 以 `git diff --exit-code` 门禁;relative = true 使路径
+#   相对本文件所在目录(仓库根)解析。
+# - TS_RS_LARGE_INT:i64/u64 生成 number 而非 bigint —— 与既有 TS 镜像一致。
+[env]
+TS_RS_EXPORT_DIR = { value = "packages/shared/src/protocol/generated", relative = true }
+TS_RS_LARGE_INT = "number"

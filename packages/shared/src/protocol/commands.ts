@@ -1,15 +1,229 @@
 /**
  * Typed IPC command catalog.
  *
- * Rules (spec §40 / §57):
+ * Rules (spec §40 / §57 / ADR-0008):
  * - every command has a name, request type, response type and error type (`AppErrorPayload`)
- * - responses are untrusted input: the frontend validates them with the schemas below
+ * - **类型源 = Rust DTO**:wire 类型由 ts-rs 从 Rust 结构体生成到 `./generated/`
+ *   (`cargo test` 刷新,CI 以 `git diff --exit-code` 门禁,生成物不入手改)。
+ *   下面的 import 把生成类型以协议名重导出 —— 改形状去改 Rust,不要改这里。
+ * - responses are untrusted input: the frontend validates them with the zod
+ *   schemas below; `protocol.test.ts` 把校验器输出对生成类型做编译期断言,
+ *   类型漂移从此是编译错误而不是靠人眼
  * - requests are validated on the Rust side by typed serde structs + explicit checks
- * - Sprint 2 replaces the hand-mirrored Rust types with schema-first codegen
  */
 
 import { z } from 'zod'
-import { ISO8601_PATTERN, type ISO8601 } from '../types'
+import { ISO8601_PATTERN } from '../types'
+
+// ---------- wire 类型:ts-rs 生成(ADR-0008),别名保持前端既有命名 ----------
+
+import type { PingRequest as SystemPingRequest } from './generated/PingRequest'
+import type { PingResponse as SystemPingResponse } from './generated/PingResponse'
+import type { AppInfo } from './generated/AppInfo'
+import type { StoredAnnotation as AnnotationRecord } from './generated/StoredAnnotation'
+import type { StoredBookmark as BookmarkRecord } from './generated/StoredBookmark'
+import type { ReaderState as ReaderStatePayload } from './generated/ReaderState'
+import type { BookReadingStat } from './generated/BookReadingStat'
+import type { NoteEntry } from './generated/NoteEntry'
+import type { StateGetRequest as ReaderStateGetRequest } from './generated/StateGetRequest'
+import type { StateGetResponse as ReaderStateGetResponse } from './generated/StateGetResponse'
+import type { StateSetRequest as ReaderStateSetRequest } from './generated/StateSetRequest'
+import type { StateSetResponse as ReaderStateSetResponse } from './generated/StateSetResponse'
+import type { StatsAddRequest as ReaderStatsAddRequest } from './generated/StatsAddRequest'
+import type { StatsAddResponse as ReaderStatsAddResponse } from './generated/StatsAddResponse'
+import type { StatsGetResponse as ReaderStatsGetResponse } from './generated/StatsGetResponse'
+import type { StatsBooksResponse as ReaderStatsBooksResponse } from './generated/StatsBooksResponse'
+import type { NotesListResponse as ReaderNotesListResponse } from './generated/NotesListResponse'
+import type { NoteUpdateRequest as ReaderNoteUpdateRequest } from './generated/NoteUpdateRequest'
+import type { NoteUpdateResponse as ReaderNoteUpdateResponse } from './generated/NoteUpdateResponse'
+import type { LibraryBook } from './generated/LibraryBook'
+import type { LibraryListResponse } from './generated/LibraryListResponse'
+import type { LibraryImportRequest } from './generated/LibraryImportRequest'
+import type { LibraryImportResponse } from './generated/LibraryImportResponse'
+import type { LibraryRemoveRequest } from './generated/LibraryRemoveRequest'
+import type { LibraryRemoveResponse } from './generated/LibraryRemoveResponse'
+import type { LibraryInfoSetRequest } from './generated/LibraryInfoSetRequest'
+import type { LibraryInfoSetResponse } from './generated/LibraryInfoSetResponse'
+import type { LibraryTagSetRequest } from './generated/LibraryTagSetRequest'
+import type { LibraryTagSetResponse } from './generated/LibraryTagSetResponse'
+import type { LibraryCoverGetRequest } from './generated/LibraryCoverGetRequest'
+import type { LibraryCoverGetResponse } from './generated/LibraryCoverGetResponse'
+import type { LibraryCoverPutRequest } from './generated/LibraryCoverPutRequest'
+import type { LibraryCoverPutResponse } from './generated/LibraryCoverPutResponse'
+import type { NotesExportRequest } from './generated/NotesExportRequest'
+import type { NotesExportResponse } from './generated/NotesExportResponse'
+import type { DictionaryMeta } from './generated/DictionaryMeta'
+import type { DictionaryListResponse } from './generated/DictionaryListResponse'
+import type { DictionaryRegisterRequest } from './generated/DictionaryRegisterRequest'
+import type { DictionaryRegisterResponse } from './generated/DictionaryRegisterResponse'
+import type { DictionaryRemoveRequest } from './generated/DictionaryRemoveRequest'
+import type { DictionaryRemoveResponse } from './generated/DictionaryRemoveResponse'
+import type { AiProviderConfig } from './generated/AiProviderConfig'
+import type { AiConfigListResponse } from './generated/AiConfigListResponse'
+import type { AiConfigSaveRequest } from './generated/AiConfigSaveRequest'
+import type { AiConfigSaveResponse } from './generated/AiConfigSaveResponse'
+import type { AiConfigRemoveRequest } from './generated/AiConfigRemoveRequest'
+import type { AiConfigRemoveResponse } from './generated/AiConfigRemoveResponse'
+import type { AiChatRequest } from './generated/AiChatRequest'
+import type { AiChatResponse } from './generated/AiChatResponse'
+import type { AiCancelRequest } from './generated/AiCancelRequest'
+import type { AiCancelResponse } from './generated/AiCancelResponse'
+import type { AiEmbedRequest } from './generated/AiEmbedRequest'
+import type { AiEmbedResponse } from './generated/AiEmbedResponse'
+import type { AiIndexChunk } from './generated/AiIndexChunk'
+import type { AiIndexPayload } from './generated/AiIndexPayload'
+import type { AiIndexGetRequest } from './generated/AiIndexGetRequest'
+import type { AiIndexGetResponse } from './generated/AiIndexGetResponse'
+import type { AiIndexSetRequest } from './generated/AiIndexSetRequest'
+import type { AiIndexSetResponse } from './generated/AiIndexSetResponse'
+import type { AiArtifactGetRequest } from './generated/AiArtifactGetRequest'
+import type { AiArtifactGetResponse } from './generated/AiArtifactGetResponse'
+import type { AiArtifactSetRequest } from './generated/AiArtifactSetRequest'
+import type { AiArtifactSetResponse } from './generated/AiArtifactSetResponse'
+import type { StorageBackupRequest } from './generated/StorageBackupRequest'
+import type { StorageBackupResponse } from './generated/StorageBackupResponse'
+import type { StorageRestoreRequest } from './generated/StorageRestoreRequest'
+import type { StorageRestoreResponse } from './generated/StorageRestoreResponse'
+import type { SecretSetRequest } from './generated/SecretSetRequest'
+import type { SecretDeleteRequest } from './generated/SecretDeleteRequest'
+import type { SecretDeleteResponse } from './generated/SecretDeleteResponse'
+import type { CardRow as LearningCard } from './generated/CardRow'
+import type { NewCard as NewCardInput } from './generated/NewCard'
+import type { CardsListRequest } from './generated/CardsListRequest'
+import type { CardsListResponse } from './generated/CardsListResponse'
+import type { CardsAddRequest } from './generated/CardsAddRequest'
+import type { CardsAddResponse } from './generated/CardsAddResponse'
+import type { CardsRemoveRequest } from './generated/CardsRemoveRequest'
+import type { CardsRemoveResponse } from './generated/CardsRemoveResponse'
+import type { CardsReviewRequest } from './generated/CardsReviewRequest'
+import type { CardsReviewResponse } from './generated/CardsReviewResponse'
+import type { TtsAudioRequest } from './generated/TtsAudioRequest'
+import type { TtsAudioResponse } from './generated/TtsAudioResponse'
+import type { EdgeTtsAudioRequest } from './generated/EdgeTtsAudioRequest'
+import type { EdgeTtsAudioResponse } from './generated/EdgeTtsAudioResponse'
+import type { EdgeVoice as EdgeTtsVoice } from './generated/EdgeVoice'
+import type { EdgeVoicesResponse as EdgeTtsVoicesResponse } from './generated/EdgeVoicesResponse'
+import type { ReadingFont } from './generated/ReadingFont'
+import type { FontImportRequest } from './generated/FontImportRequest'
+import type { FontRemoveRequest } from './generated/FontRemoveRequest'
+import type { CloudConfig } from './generated/CloudConfig'
+import type { CloudConfigGetResponse } from './generated/CloudConfigGetResponse'
+import type { CloudConfigSaveRequest } from './generated/CloudConfigSaveRequest'
+import type { CloudConfigSaveResponse } from './generated/CloudConfigSaveResponse'
+import type { CloudConfigTestRequest } from './generated/CloudConfigTestRequest'
+import type { CloudTestResponse as CloudConfigTestResponse } from './generated/CloudTestResponse'
+import type { CloudClearResponse as CloudConfigClearResponse } from './generated/CloudClearResponse'
+import type { CloudWebdavGetRequest } from './generated/CloudWebdavGetRequest'
+import type { CloudWebdavGetResponse } from './generated/CloudWebdavGetResponse'
+import type { CloudWebdavPutRequest } from './generated/CloudWebdavPutRequest'
+import type { CloudWebdavPutResponse } from './generated/CloudWebdavPutResponse'
+import type { CloudBackupResponse } from './generated/CloudBackupResponse'
+import type { CloudRestoreResponse } from './generated/CloudRestoreResponse'
+
+export type {
+  AiArtifactGetRequest,
+  AiArtifactGetResponse,
+  AiArtifactSetRequest,
+  AiArtifactSetResponse,
+  AiCancelRequest,
+  AiCancelResponse,
+  AiChatRequest,
+  AiChatResponse,
+  AiConfigListResponse,
+  AiConfigRemoveRequest,
+  AiConfigRemoveResponse,
+  AiConfigSaveRequest,
+  AiConfigSaveResponse,
+  AiEmbedRequest,
+  AiEmbedResponse,
+  AiIndexChunk,
+  AiIndexGetRequest,
+  AiIndexGetResponse,
+  AiIndexPayload,
+  AiIndexSetRequest,
+  AiIndexSetResponse,
+  AiProviderConfig,
+  AnnotationRecord,
+  AppInfo,
+  BookReadingStat,
+  BookmarkRecord,
+  CardsAddRequest,
+  CardsAddResponse,
+  CardsListRequest,
+  CardsListResponse,
+  CardsRemoveRequest,
+  CardsRemoveResponse,
+  CardsReviewRequest,
+  CardsReviewResponse,
+  CloudBackupResponse,
+  CloudConfig,
+  CloudConfigClearResponse,
+  CloudConfigGetResponse,
+  CloudConfigSaveRequest,
+  CloudConfigSaveResponse,
+  CloudConfigTestRequest,
+  CloudConfigTestResponse,
+  CloudRestoreResponse,
+  CloudWebdavGetRequest,
+  CloudWebdavGetResponse,
+  CloudWebdavPutRequest,
+  CloudWebdavPutResponse,
+  DictionaryListResponse,
+  DictionaryMeta,
+  DictionaryRegisterRequest,
+  DictionaryRegisterResponse,
+  DictionaryRemoveRequest,
+  DictionaryRemoveResponse,
+  EdgeTtsAudioRequest,
+  EdgeTtsAudioResponse,
+  EdgeTtsVoice,
+  EdgeTtsVoicesResponse,
+  FontImportRequest,
+  FontRemoveRequest,
+  LearningCard,
+  LibraryBook,
+  LibraryCoverGetRequest,
+  LibraryCoverGetResponse,
+  LibraryCoverPutRequest,
+  LibraryCoverPutResponse,
+  LibraryImportRequest,
+  LibraryImportResponse,
+  LibraryInfoSetRequest,
+  LibraryInfoSetResponse,
+  LibraryListResponse,
+  LibraryRemoveRequest,
+  LibraryRemoveResponse,
+  LibraryTagSetRequest,
+  LibraryTagSetResponse,
+  NewCardInput,
+  NoteEntry,
+  NotesExportRequest,
+  NotesExportResponse,
+  ReaderNoteUpdateRequest,
+  ReaderNoteUpdateResponse,
+  ReaderNotesListResponse,
+  ReaderStateGetRequest,
+  ReaderStateGetResponse,
+  ReaderStatePayload,
+  ReaderStateSetRequest,
+  ReaderStateSetResponse,
+  ReaderStatsAddRequest,
+  ReaderStatsAddResponse,
+  ReaderStatsBooksResponse,
+  ReaderStatsGetResponse,
+  ReadingFont,
+  SecretDeleteRequest,
+  SecretDeleteResponse,
+  SecretSetRequest,
+  StorageBackupRequest,
+  StorageBackupResponse,
+  StorageRestoreRequest,
+  StorageRestoreResponse,
+  SystemPingRequest,
+  SystemPingResponse,
+  TtsAudioRequest,
+  TtsAudioResponse,
+}
 
 export const COMMAND = {
   systemPing: 'system.ping',
@@ -66,652 +280,13 @@ export const COMMAND = {
   secretDelete: 'secret.delete',
 } as const
 
-export interface SystemPingRequest {
-  readonly nonce: string
-}
-
-export interface SystemPingResponse {
-  readonly nonce: string
-  readonly serverTime: ISO8601
-  readonly appVersion: string
-}
-
-export interface AppInfo {
-  readonly appName: string
-  readonly appVersion: string
-  readonly os: string
-  readonly arch: string
-}
-
-/** One persisted highlight/annotation, anchored by CFI (kernel-level locator). */
-export interface AnnotationRecord {
-  readonly id: string
-  readonly cfi: string
-  readonly color: string
-  readonly note?: string
-  readonly excerpt?: string
-  /** Record-level merge timestamp (sync §51); absent for pre-v3 rows. */
-  readonly updatedAt?: ISO8601
-  /** Tombstone: deleted on this device; kept so sync never resurrects it. */
-  readonly deleted?: boolean
-}
-
-/** One bookmark: a named CFI anchor in the book. */
-export interface BookmarkRecord {
-  readonly id: string
-  readonly cfi: string
-  readonly label?: string
-  readonly createdAt: ISO8601
-  /** Tombstone: deleted on this device; kept so sync never resurrects it. */
-  readonly deleted?: boolean
-}
-
-/** Per-book reader state, persisted keyed by the hash of the book file. */
-export interface ReaderStatePayload {
-  readonly progress: { readonly cfi: string; readonly fraction: number } | null
-  readonly annotations: readonly AnnotationRecord[]
-  readonly bookmarks: readonly BookmarkRecord[]
-  readonly updatedAt: ISO8601
-}
-
-/**
- * A book registered in the library. The file stays at its original location
- * (spec: original content is never moved or modified); it is served to the
- * reader kernel through the asset protocol.
- */
-export interface LibraryBook {
-  readonly hash: string
-  readonly fileName: string
-  /**
-   * Clean, human-facing title (from the book's own metadata when available).
-   * `null` means "not resolved yet" — the shelf falls back to a cleaned file
-   * name and backfills lazily.
-   */
-  readonly displayName: string | null
-  /** Author from the book's own metadata, or typed by hand. Shown on the card. */
-  readonly author: string | null
-  readonly subtitle: string | null
-  readonly publisher: string | null
-  readonly language: string | null
-  readonly format: string
-  readonly path: string
-  readonly size: number
-  readonly addedAt: ISO8601
-  /** Reading fraction (0-1) joined in by `library.list`; null = never opened. */
-  readonly progress: number | null
-  /** User collections; empty means untagged. */
-  readonly tags: readonly string[]
-}
-
-export interface LibraryListResponse {
-  readonly books: readonly LibraryBook[]
-}
-
-export interface LibraryImportRequest {
-  readonly path: string
-}
-
-export interface LibraryImportResponse {
-  readonly book: LibraryBook
-}
-
-export interface LibraryRemoveRequest {
-  readonly bookHash: string
-}
-
-export interface LibraryRemoveResponse {
-  readonly removed: boolean
-}
-
-/**
- * 书籍元数据的整表提交:面板一次给全部字段,`null` = 清空该项。
- * 不做「只写变化列」的局部更新 —— 那要动态拼 SQL,而面板本来就是整表编辑。
- */
-export interface LibraryInfoSetRequest {
-  readonly bookHash: string
-  readonly displayName: string | null
-  readonly author: string | null
-  readonly subtitle: string | null
-  readonly publisher: string | null
-  readonly language: string | null
-}
-
-export interface LibraryInfoSetResponse {
-  readonly book: LibraryBook
-}
-
-export interface ReaderStatsAddRequest {
-  readonly bookHash: string
-  /** Local calendar day of the reading session, `YYYY-MM-DD`. */
-  readonly day: string
-  readonly seconds: number
-}
-
-export interface ReaderStatsAddResponse {
-  /** Total for that book on that day after the update. */
-  readonly daySeconds: number
-}
-
-export interface ReaderStatsGetResponse {
-  /** Per-day totals across all books, newest first. */
-  readonly days: readonly { readonly day: string; readonly seconds: number }[]
-  readonly totalSeconds: number
-}
-
-/**
- * 一本书累计读了多少(排行榜用)。
- *
- * 标题两个来源都给:Rust 不做文件名清洗,前端复用与书架同一个 `shelfTitle`。
- */
-export interface BookReadingStat {
-  readonly bookHash: string
-  readonly displayName: string | null
-  readonly fileName: string
-  readonly seconds: number
-}
-
-export interface ReaderStatsBooksResponse {
-  /** 按总时长降序;上限 20 本 —— 排行榜是给人看的,不是全量导出。 */
-  readonly books: readonly BookReadingStat[]
-}
-
-/**
- * 一条批注,离开它所属的书出现在笔记页上。
- *
- * 标题两个字段都给:Rust 侧不做清洗(那套规则属于前端),前端用与书架同一个
- * `shelfTitle` 回退逻辑,免得同一个书名在两处长得不一样。
- */
-export interface NoteEntry {
-  readonly id: string
-  readonly bookHash: string
-  /** 书籍自带元数据标题;`null` = 尚未解析,回退到清洗后的文件名。 */
-  readonly displayName: string | null
-  readonly fileName: string
-  readonly cfi: string
-  readonly color: string
-  /** 用户自己写的那句话。 */
-  readonly note: string | null
-  /** 原文摘录。 */
-  readonly excerpt: string | null
-  /** 记录级合并时间戳(同步 §51);v3 之前的行为 `null`。 */
-  readonly updatedAt: ISO8601 | null
-}
-
-export interface ReaderNotesListResponse {
-  /** 未删除的批注,新→旧;没有时间戳的排在最后,整体上限 2000 条。 */
-  readonly notes: readonly NoteEntry[]
-}
-
-export interface ReaderNoteUpdateRequest {
-  readonly noteId: string
-  /** 自己写的那句话;空串 = 清空,回到纯高亮。 */
-  readonly note: string
-}
-
-export interface ReaderNoteUpdateResponse {
-  /** 更新后的完整条目(与 notes.list 的行形状一致)。 */
-  readonly entry: NoteEntry
-}
-
-export interface LibraryTagSetRequest {
-  readonly bookHash: string
-  /** Full replacement set: the shelf sends what the book should end up with. */
-  readonly tags: readonly string[]
-}
-
-export interface LibraryTagSetResponse {
-  readonly book: LibraryBook
-}
-
-export interface LibraryCoverGetRequest {
-  readonly bookHash: string
-}
-
-export interface LibraryCoverGetResponse {
-  /** Absolute path of the cached cover; null when it has not been extracted yet. */
-  readonly path: string | null
-}
-
-export interface LibraryCoverPutRequest {
-  readonly bookHash: string
-  /** Base64 of the extracted cover image (bytes travel badly through JSON IPC). */
-  readonly data: string
-}
-
-export interface LibraryCoverPutResponse {
-  readonly path: string
-}
-
-/**
- * 导出批注到本地 Markdown。桌面端 WebView 会拦截 `<a download>`,所以落盘
- * 必须走系统保存对话框 + Rust 写文件 —— 这条命令就是那个入口。
- */
-export interface NotesExportRequest {
-  readonly markdown: string
-  /** 保存对话框的默认文件名(不含 `.md`)。 */
-  readonly defaultName: string
-}
-
-export interface NotesExportResponse {
-  /** 用户最终选定的绝对路径;null = 用户取消了对话框。 */
-  readonly path: string | null
-}
-
-/** A registered StarDict dictionary (files stay at their original location). */
-export interface DictionaryMeta {
-  readonly id: string
-  readonly name: string
-  readonly wordCount: number
-  readonly sametypesequence?: string
-  readonly ifoPath: string
-  readonly idxPath: string
-  readonly dictPath: string
-}
-
-export interface DictionaryListResponse {
-  readonly dictionaries: readonly DictionaryMeta[]
-}
-
-export interface DictionaryRegisterRequest {
-  readonly path: string
-}
-
-export interface DictionaryRegisterResponse {
-  readonly dictionary: DictionaryMeta
-}
-
-export interface DictionaryRemoveRequest {
-  readonly id: string
-}
-
-export interface DictionaryRemoveResponse {
-  readonly removed: boolean
-}
-
-/**
- * AI provider configuration (non-secret half). The API key lives in the OS
- * keychain, addressed by the config id — it never crosses IPC back to the UI.
- */
-export interface AiProviderConfig {
-  readonly id: string
-  readonly name: string
-  readonly baseUrl: string
-  readonly model: string
-  /** Embedding model for RAG; defaults to the chat model when absent. */
-  readonly embeddingModel?: string
-  /** Speech-synthesis model for cloud TTS (spec §31: configured separately). */
-  readonly ttsModel?: string
-}
-
-export interface AiConfigListResponse {
-  readonly providers: readonly AiProviderConfig[]
-}
-
-export interface AiConfigSaveRequest {
-  readonly provider: AiProviderConfig
-  readonly apiKey: string
-}
-
-export interface AiConfigSaveResponse {
-  readonly provider: AiProviderConfig
-}
-
-export interface AiConfigRemoveRequest {
-  readonly id: string
-}
-
-export interface AiConfigRemoveResponse {
-  readonly removed: boolean
-}
-
-export interface AiChatRequest {
-  readonly taskId: string
-  readonly configId: string
-  /** OpenAI-compatible chat messages (validated by zod on the sender side). */
-  readonly messages: readonly {
-    readonly role: 'system' | 'user' | 'assistant'
-    readonly content: string
-  }[]
-  readonly temperature?: number
-}
-
-/** ai.chat returns the taskId immediately; stream events arrive via channel. */
-export interface AiChatResponse {
-  readonly taskId: string
-}
-
-export interface AiCancelRequest {
-  readonly taskId: string
-}
-
-export interface AiCancelResponse {
-  readonly cancelled: boolean
-}
-
-export interface AiEmbedRequest {
-  readonly taskId: string
-  readonly configId: string
-  readonly texts: readonly string[]
-}
-
-export interface AiEmbedResponse {
-  readonly vectors: readonly (readonly number[])[]
-}
-
-/** One indexed chunk of a book (chapter-labeled, embedded). */
-export interface AiIndexChunk {
-  readonly label: string
-  readonly text: string
-  readonly vector: readonly number[]
-}
-
-export interface AiIndexPayload {
-  readonly chunks: readonly AiIndexChunk[]
-  readonly embeddingModel: string
-  readonly createdAt: ISO8601
-}
-
-export interface AiIndexGetRequest {
-  readonly bookHash: string
-}
-
-export interface AiIndexGetResponse {
-  readonly index: AiIndexPayload | null
-}
-
-export interface AiIndexSetRequest {
-  readonly bookHash: string
-  readonly index: AiIndexPayload
-}
-
-export interface AiIndexSetResponse {
-  readonly savedAt: ISO8601
-}
-
-/** Generic per-book AI artifact (summary/outline/notes/…), JSON value payload. */
-export type AiArtifactKind = 'summary' | 'outline' | 'notes' | 'characters'
-
-export interface AiArtifactGetRequest {
-  readonly bookHash: string
-  readonly kind: AiArtifactKind
-}
-
-export interface AiArtifactGetResponse {
-  readonly payload: Record<string, unknown> | null
-  readonly createdAt: ISO8601 | null
-}
-
-export interface AiArtifactSetRequest {
-  readonly bookHash: string
-  readonly kind: AiArtifactKind
-  readonly payload: Record<string, unknown>
-}
-
-export interface AiArtifactSetResponse {
-  readonly savedAt: ISO8601
-}
-
-/** Backup the SQLite database to a user-chosen file (spec §126). */
-export interface StorageBackupRequest {
-  readonly path: string
-}
-export interface StorageBackupResponse {
-  readonly bytes: number
-  readonly checksum: string
-}
-
-/** Restore from a validated snapshot; migrations re-run if the backup is older. */
-export interface StorageRestoreRequest {
-  readonly path: string
-  readonly checksum: string
-}
-
-export interface StorageRestoreResponse {
-  readonly restored: boolean
-}
-
-export interface SecretSetRequest {
-  readonly key: string
-  readonly value: string
-}
-
-export interface SecretGetRequest {
-  readonly key: string
-}
-
-export interface SecretGetResponse {
-  readonly value: string | null
-}
-
-export interface SecretDeleteRequest {
-  readonly key: string
-}
-
-export interface SecretDeleteResponse {
-  readonly deleted: boolean
-}
-
-export interface ReaderStateGetRequest {
-  readonly bookHash: string
-}
-
-export interface ReaderStateGetResponse {
-  readonly state: ReaderStatePayload | null
-}
-
-export interface ReaderStateSetRequest {
-  readonly bookHash: string
-  readonly state: ReaderStatePayload
-}
-
-export interface ReaderStateSetResponse {
-  readonly savedAt: ISO8601
-}
-
-/** One learning card (flashcard, quiz item or mistake) with SM-2-lite state. */
-export type CardSource = 'highlight' | 'quiz' | 'mistake'
-
-export interface LearningCard {
-  readonly id: string
-  readonly bookHash: string
-  readonly front: string
-  readonly back: string
-  readonly source: CardSource
-  readonly cfi?: string
-  readonly ease: number
-  readonly intervalDays: number
-  readonly reps: number
-  readonly lapses: number
-  readonly dueAt: ISO8601
-  readonly createdAt: ISO8601
-}
-
-export interface CardsListRequest {
-  readonly bookHash?: string
-}
-
-export interface CardsListResponse {
-  readonly cards: readonly LearningCard[]
-}
-
-export interface NewCardInput {
-  readonly id: string
-  readonly front: string
-  readonly back: string
-  readonly source: CardSource
-  readonly cfi?: string
-  readonly dueAt: ISO8601
-}
-
-export interface CardsAddRequest {
-  readonly bookHash: string
-  readonly cards: readonly NewCardInput[]
-}
-
-export interface CardsAddResponse {
-  readonly added: number
-  readonly savedAt: ISO8601
-}
-
-export interface CardsRemoveRequest {
-  readonly id: string
-}
-
-export interface CardsRemoveResponse {
-  readonly removed: boolean
-}
-
-/** The frontend schedules (SM-2 lite, `@deepread/shared/srs`); the backend stores. */
-export interface CardsReviewRequest {
-  readonly id: string
-  readonly ease: number
-  readonly intervalDays: number
-  readonly reps: number
-  readonly lapses: number
-  readonly dueAt: ISO8601
-}
-
-export interface CardsReviewResponse {
-  readonly dueAt: ISO8601
-}
-
-/**
- * Cloud speech synthesis through the provider proxy (spec §44). Returns the
- * path of a cached audio file (keyed by a hash of the request) that the
- * webview plays via the asset protocol.
- */
-export interface TtsAudioRequest {
-  readonly configId: string
-  readonly text: string
-  readonly voice: string
-  readonly speed?: number
-}
-
-export interface TtsAudioResponse {
-  readonly path: string
-  readonly cached: boolean
-}
-
-/**
- * Edge read-aloud synthesis (spec §44b): same cached-audio contract as the
- * cloud path, no API key — the Edge browser endpoint is keyless.
- */
-export interface EdgeTtsAudioRequest {
-  readonly text: string
-  readonly voice: string
-  readonly lang?: string
-  readonly rate?: number
-}
-
-export interface EdgeTtsAudioResponse {
-  readonly path: string
-  readonly cached: boolean
-}
-
-export interface EdgeTtsVoice {
-  readonly shortName: string
-  readonly friendlyName: string
-  readonly locale: string
-  readonly gender: string
-}
-
-export interface EdgeTtsVoicesResponse {
-  readonly voices: readonly EdgeTtsVoice[]
-}
-
-/** 用户导入的阅读字体(存放在应用数据目录,经 asset protocol 提供)。 */
-export interface ReadingFont {
-  readonly id: string
-  readonly name: string
-  readonly fileName: string
-  readonly path: string
-}
-
-export interface FontImportRequest {
-  readonly path: string
-}
-
-export interface FontRemoveRequest {
-  readonly id: string
-}
-
-/** WebDAV cloud configuration (non-secret half; password lives in the keychain). */
-export interface CloudConfig {
-  readonly endpoint: string
-  readonly username: string
-}
-
-export interface CloudConfigGetResponse {
-  readonly config: CloudConfig | null
-  readonly deviceId: string
-  readonly deviceName: string
-}
-
-export interface CloudConfigSaveRequest {
-  readonly endpoint: string
-  readonly username: string
-  readonly password: string
-}
-
-export interface CloudConfigSaveResponse {
-  readonly config: CloudConfig
-}
-
-/** Probe credentials; empty password reuses the stored one. */
-export interface CloudConfigTestRequest {
-  readonly endpoint: string
-  readonly username: string
-  readonly password: string
-}
-
-export interface CloudConfigTestResponse {
-  readonly ok: boolean
-}
-
-export interface CloudConfigClearResponse {
-  readonly cleared: boolean
-}
-
-/** Raw WebDAV transport used by the frontend merge engine (spec §50-§53). */
-export interface CloudWebdavGetRequest {
-  readonly path: string
-}
-
-export interface CloudWebdavGetResponse {
-  /** null when the remote document does not exist yet. */
-  readonly body: string | null
-}
-
-export interface CloudWebdavPutRequest {
-  readonly path: string
-  readonly body: string
-}
-
-export interface CloudWebdavPutResponse {
-  readonly ok: boolean
-}
-
-/** Snapshot the SQLite database and upload it to WebDAV (spec §126/§53). */
-export interface CloudBackupResponse {
-  readonly remotePath: string
-  readonly bytes: number
-  readonly checksum: string
-}
-
-export interface CloudRestoreResponse {
-  readonly restored: boolean
-}
-
-/** The single source of truth for command request/response shapes. */
+/** The single source of truth for command request/response shapes(类型 = 生成物). */
 export interface CommandMap {
   [COMMAND.systemPing]: {
     readonly request: SystemPingRequest
     readonly response: SystemPingResponse
   }
-  [COMMAND.appInfo]: {
-    readonly request: undefined
-    readonly response: AppInfo
-  }
+  [COMMAND.appInfo]: { readonly request: undefined; readonly response: AppInfo }
   [COMMAND.readerStateGet]: {
     readonly request: ReaderStateGetRequest
     readonly response: ReaderStateGetResponse
@@ -720,10 +295,7 @@ export interface CommandMap {
     readonly request: ReaderStateSetRequest
     readonly response: ReaderStateSetResponse
   }
-  [COMMAND.libraryList]: {
-    readonly request: undefined
-    readonly response: LibraryListResponse
-  }
+  [COMMAND.libraryList]: { readonly request: undefined; readonly response: LibraryListResponse }
   [COMMAND.libraryImport]: {
     readonly request: LibraryImportRequest
     readonly response: LibraryImportResponse
@@ -784,10 +356,7 @@ export interface CommandMap {
     readonly request: DictionaryRemoveRequest
     readonly response: DictionaryRemoveResponse
   }
-  [COMMAND.aiConfigList]: {
-    readonly request: undefined
-    readonly response: AiConfigListResponse
-  }
+  [COMMAND.aiConfigList]: { readonly request: undefined; readonly response: AiConfigListResponse }
   [COMMAND.aiConfigSave]: {
     readonly request: AiConfigSaveRequest
     readonly response: AiConfigSaveResponse
@@ -797,18 +366,9 @@ export interface CommandMap {
     readonly response: AiConfigRemoveResponse
   }
   /** ai.chat streams events through a Tauri Channel, not the return value. */
-  [COMMAND.aiChat]: {
-    readonly request: AiChatRequest
-    readonly response: AiChatResponse
-  }
-  [COMMAND.aiCancel]: {
-    readonly request: AiCancelRequest
-    readonly response: AiCancelResponse
-  }
-  [COMMAND.aiEmbed]: {
-    readonly request: AiEmbedRequest
-    readonly response: AiEmbedResponse
-  }
+  [COMMAND.aiChat]: { readonly request: AiChatRequest; readonly response: AiChatResponse }
+  [COMMAND.aiCancel]: { readonly request: AiCancelRequest; readonly response: AiCancelResponse }
+  [COMMAND.aiEmbed]: { readonly request: AiEmbedRequest; readonly response: AiEmbedResponse }
   [COMMAND.aiIndexGet]: {
     readonly request: AiIndexGetRequest
     readonly response: AiIndexGetResponse
@@ -821,6 +381,10 @@ export interface CommandMap {
     readonly request: AiArtifactGetRequest
     readonly response: AiArtifactGetResponse
   }
+  [COMMAND.aiArtifactSet]: {
+    readonly request: AiArtifactSetRequest
+    readonly response: AiArtifactSetResponse
+  }
   [COMMAND.storageBackup]: {
     readonly request: StorageBackupRequest
     readonly response: StorageBackupResponse
@@ -829,14 +393,13 @@ export interface CommandMap {
     readonly request: StorageRestoreRequest
     readonly response: StorageRestoreResponse
   }
-  [COMMAND.cardsList]: {
-    readonly request: CardsListRequest
-    readonly response: CardsListResponse
+  [COMMAND.secretSet]: { readonly request: SecretSetRequest; readonly response: null }
+  [COMMAND.secretDelete]: {
+    readonly request: SecretDeleteRequest
+    readonly response: SecretDeleteResponse
   }
-  [COMMAND.cardsAdd]: {
-    readonly request: CardsAddRequest
-    readonly response: CardsAddResponse
-  }
+  [COMMAND.cardsList]: { readonly request: CardsListRequest; readonly response: CardsListResponse }
+  [COMMAND.cardsAdd]: { readonly request: CardsAddRequest; readonly response: CardsAddResponse }
   [COMMAND.cardsRemove]: {
     readonly request: CardsRemoveRequest
     readonly response: CardsRemoveResponse
@@ -845,30 +408,15 @@ export interface CommandMap {
     readonly request: CardsReviewRequest
     readonly response: CardsReviewResponse
   }
-  [COMMAND.ttsAudio]: {
-    readonly request: TtsAudioRequest
-    readonly response: TtsAudioResponse
-  }
+  [COMMAND.ttsAudio]: { readonly request: TtsAudioRequest; readonly response: TtsAudioResponse }
   [COMMAND.ttsEdgeAudio]: {
     readonly request: EdgeTtsAudioRequest
     readonly response: EdgeTtsAudioResponse
   }
-  [COMMAND.ttsEdgeVoices]: {
-    readonly request: undefined
-    readonly response: EdgeTtsVoicesResponse
-  }
-  [COMMAND.fontsList]: {
-    readonly request: undefined
-    readonly response: readonly ReadingFont[]
-  }
-  [COMMAND.fontsImport]: {
-    readonly request: FontImportRequest
-    readonly response: ReadingFont
-  }
-  [COMMAND.fontsRemove]: {
-    readonly request: FontRemoveRequest
-    readonly response: boolean
-  }
+  [COMMAND.ttsEdgeVoices]: { readonly request: undefined; readonly response: EdgeTtsVoicesResponse }
+  [COMMAND.fontsList]: { readonly request: undefined; readonly response: ReadingFont[] }
+  [COMMAND.fontsImport]: { readonly request: FontImportRequest; readonly response: ReadingFont }
+  [COMMAND.fontsRemove]: { readonly request: FontRemoveRequest; readonly response: boolean }
   [COMMAND.cloudConfigGet]: {
     readonly request: undefined
     readonly response: CloudConfigGetResponse
@@ -893,26 +441,8 @@ export interface CommandMap {
     readonly request: CloudWebdavPutRequest
     readonly response: CloudWebdavPutResponse
   }
-  [COMMAND.cloudBackup]: {
-    readonly request: undefined
-    readonly response: CloudBackupResponse
-  }
-  [COMMAND.cloudRestore]: {
-    readonly request: undefined
-    readonly response: CloudRestoreResponse
-  }
-  [COMMAND.aiArtifactSet]: {
-    readonly request: AiArtifactSetRequest
-    readonly response: AiArtifactSetResponse
-  }
-  [COMMAND.secretSet]: {
-    readonly request: { readonly key: string; readonly value: string }
-    readonly response: null
-  }
-  [COMMAND.secretDelete]: {
-    readonly request: { readonly key: string }
-    readonly response: { readonly deleted: boolean }
-  }
+  [COMMAND.cloudBackup]: { readonly request: undefined; readonly response: CloudBackupResponse }
+  [COMMAND.cloudRestore]: { readonly request: undefined; readonly response: CloudRestoreResponse }
 }
 
 export type CommandName = keyof CommandMap
@@ -1332,9 +862,11 @@ export interface ResponseValidator<T> {
   parse(value: unknown): T
 }
 
-export const responseValidators: {
-  [K in CommandName]: ResponseValidator<CommandMap[K]['response']>
-} = {
+/**
+ * 响应校验器的具体 zod 表 —— 仅供 protocol.test.ts 的编译期 wire 断言读取
+ * (responseValidators 的注解类型把 zod 形状擦成了 ResponseValidator<T>)。
+ */
+export const responseSchemas = {
   [COMMAND.systemPing]: systemPingResponseSchema,
   [COMMAND.appInfo]: appInfoSchema,
   [COMMAND.readerStateGet]: readerStateGetResponseSchema,
@@ -1388,6 +920,10 @@ export const responseValidators: {
   [COMMAND.cloudBackup]: cloudBackupResponseSchema,
   [COMMAND.cloudRestore]: cloudRestoreResponseSchema,
 }
+
+export const responseValidators: {
+  [K in CommandName]: ResponseValidator<CommandMap[K]['response']>
+} = responseSchemas
 
 export const requestValidators: { [K in CommandName]: ResponseValidator<unknown> | undefined } = {
   [COMMAND.systemPing]: systemPingRequestSchema,
@@ -1443,3 +979,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.cloudBackup]: undefined,
   [COMMAND.cloudRestore]: undefined,
 }
+
+/** 协议枚举的 TS 侧单一来源:与 Rust 侧的字符串清单(ADD_CARDS/validate_artifact_kind)对齐。 */
+export type AiArtifactKind = z.output<typeof artifactKindSchema>
+export type CardSource = z.output<typeof cardSourceSchema>

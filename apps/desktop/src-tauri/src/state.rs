@@ -4,6 +4,7 @@
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 
@@ -25,14 +26,16 @@ pub fn validate_hash(hash: &str) -> Result<(), AppError> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredProgress {
     pub cfi: String,
     pub fraction: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAnnotation {
     pub id: String,
@@ -50,7 +53,8 @@ pub struct StoredAnnotation {
     pub deleted: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredBookmark {
     pub id: String,
@@ -62,7 +66,8 @@ pub struct StoredBookmark {
     pub deleted: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ReaderState {
     #[serde(default)]
@@ -75,26 +80,30 @@ pub struct ReaderState {
     pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StateGetRequest {
     pub book_hash: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StateGetResponse {
     pub state: Option<ReaderState>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StateSetRequest {
     pub book_hash: String,
     pub state: ReaderState,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSetResponse {
     pub saved_at: String,
@@ -283,14 +292,16 @@ pub fn reader_state_set(
 The frontend owns the clock (it knows when the reader is really on screen)
 and reports deltas; this side only accumulates them per local day. */
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct DayStat {
     pub day: String,
     pub seconds: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatsAddRequest {
     pub book_hash: String,
@@ -299,14 +310,16 @@ pub struct StatsAddRequest {
     pub seconds: u64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsAddResponse {
     /// Total for that book on that day after the update.
     pub day_seconds: u64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsGetResponse {
     /// Newest first.
@@ -432,7 +445,8 @@ pub fn reader_stats_add(
 
 /// 一条跨书聚合的批注:笔记页要知道「哪本书的哪句话」,所以标题的两个来源
 /// 都给出去 —— 文件名清洗规则属于前端(`cleanBookTitle`),Rust 不猜。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteEntry {
     pub id: String,
@@ -446,7 +460,8 @@ pub struct NoteEntry {
     pub updated_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesListResponse {
     pub notes: Vec<NoteEntry>,
@@ -495,7 +510,8 @@ pub fn list_notes(conn: &Connection) -> Result<Vec<NoteEntry>, AppError> {
 }
 
 /// 一本书累计读了多少(排行榜用)。标题两个来源都给,清洗是前端的事。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct BookReadingStat {
     pub book_hash: String,
@@ -504,7 +520,8 @@ pub struct BookReadingStat {
     pub seconds: u64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsBooksResponse {
     pub books: Vec<BookReadingStat>,
@@ -570,7 +587,8 @@ pub fn reader_notes_list(
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NoteUpdateRequest {
     pub note_id: String,
@@ -578,7 +596,8 @@ pub struct NoteUpdateRequest {
     pub note: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteUpdateResponse {
     pub entry: NoteEntry,

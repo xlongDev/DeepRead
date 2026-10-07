@@ -685,6 +685,7 @@ mod tests {
 // ---------- Backup / restore (spec §126) ----------
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 pub fn file_checksum(path: &Path) -> Result<String, AppError> {
     let mut file = std::fs::File::open(path).map_err(|err| {
@@ -1121,28 +1122,32 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), AppE
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct StorageBackupRequest {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct StorageBackupResponse {
     pub bytes: u64,
     pub checksum: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct StorageRestoreRequest {
     pub path: String,
     pub checksum: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct StorageRestoreResponse {
     pub restored: bool,
 }

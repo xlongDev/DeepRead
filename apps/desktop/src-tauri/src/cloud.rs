@@ -7,6 +7,7 @@
 //! it pulls before it may touch storage.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::ai::data_dir;
 use crate::error::{AppError, ErrorCode};
@@ -20,16 +21,18 @@ pub const CLOUD_BASE_PATH: &str = "Deepread";
 
 // ---------- Configuration ----------
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudConfigGetResponse {
     pub config: Option<CloudConfig>,
     pub device_id: String,
     pub device_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudConfig {
     pub endpoint: String,
     pub username: String,
@@ -116,16 +119,18 @@ pub fn cloud_config_get(
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CloudConfigSaveRequest {
     pub endpoint: String,
     pub username: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudConfigSaveResponse {
     pub config: CloudConfig,
 }
@@ -156,8 +161,9 @@ pub fn cloud_config_save(
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CloudConfigTestRequest {
     pub endpoint: String,
     pub username: String,
@@ -183,8 +189,9 @@ pub async fn cloud_config_test(
     Ok(CloudTestResponse { ok: true })
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudTestResponse {
     pub ok: bool,
 }
@@ -219,8 +226,9 @@ pub fn cloud_config_clear(
     Ok(CloudClearResponse { cleared: true })
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudClearResponse {
     pub cleared: bool,
 }
@@ -388,14 +396,16 @@ async fn mkcol_parents(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CloudWebdavGetRequest {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudWebdavGetResponse {
     pub body: Option<String>,
 }
@@ -429,15 +439,17 @@ pub async fn cloud_webdav_get(
     Ok(CloudWebdavGetResponse { body })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct CloudWebdavPutRequest {
     pub path: String,
     pub body: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudWebdavPutResponse {
     pub ok: bool,
 }
@@ -471,8 +483,9 @@ pub async fn cloud_webdav_put(
 
 // ---------- Whole-database backup / restore over WebDAV ----------
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudBackupResponse {
     pub remote_path: String,
     pub bytes: u64,
@@ -551,8 +564,9 @@ async fn webdav_put_bytes(
     Ok(())
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct CloudRestoreResponse {
     pub restored: bool,
 }

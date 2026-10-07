@@ -43,7 +43,8 @@ function sameRecord<T extends object>(local: T, remote: T): boolean {
 interface SyncRecord {
   readonly id: string
   readonly deleted?: boolean
-  readonly updatedAt?: string
+  /** wire 类型(Rust DTO)里 updatedAt 是 string | null —— null 视同缺失。 */
+  readonly updatedAt?: string | null
   readonly createdAt?: string
 }
 
@@ -200,6 +201,6 @@ function preferBook(a: LibraryBook, b: LibraryBook): LibraryBook {
   return a.addedAt <= b.addedAt ? a : b
 }
 
-function unionTags(a: LibraryBook, b: LibraryBook): readonly string[] {
+function unionTags(a: LibraryBook, b: LibraryBook): string[] {
   return [...new Set([...a.tags, ...b.tags])]
 }

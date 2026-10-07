@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 
@@ -143,21 +144,24 @@ fn file_delete(base: &Path, key: &str) -> Result<bool, AppError> {
     Ok(removed)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct SecretSetRequest {
     pub key: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct SecretDeleteRequest {
     pub key: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct SecretDeleteResponse {
     pub deleted: bool,
 }

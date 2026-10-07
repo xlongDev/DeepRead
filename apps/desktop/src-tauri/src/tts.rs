@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Digest;
+use ts_rs::TS;
 
 use crate::ai::{data_dir, provider_by_id};
 use crate::error::{AppError, ErrorCode};
@@ -130,18 +131,20 @@ pub fn cache_file_name(
     format!("{hex}.{TTS_FORMAT}")
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct TtsAudioRequest {
     pub config_id: String,
     pub text: String,
     pub voice: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct TtsAudioResponse {
     pub path: String,
     pub cached: bool,

@@ -149,7 +149,7 @@ export function LearningDrawer({
         buildFlashcardMessages(
           material.map((annotation) => ({
             excerpt: annotation.excerpt ?? '',
-            note: annotation.note,
+            note: annotation.note ?? undefined,
           })),
           bookTitle,
         ),

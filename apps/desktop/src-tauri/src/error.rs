@@ -6,6 +6,7 @@
 
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
+use ts_rs::TS;
 
 /// Wire-level error code catalog. Deliberately mirrors the full TypeScript
 /// catalog (`ErrorCodes` in `packages/shared/src/errors.ts`) — the sync test
@@ -13,8 +14,13 @@ use serde_json::{Map, Value};
 /// yet are kept for catalog completeness; `dead_code` is therefore allowed
 /// here on purpose and new commands must emit codes from this enum instead of
 /// inventing strings.
+///
+/// ADR-0008: this enum is also the *type source* — `cargo test` exports the
+/// SCREAMING_SNAKE union to `packages/shared/src/protocol/generated/`, and the
+/// TS catalog is compile-checked against it.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(export, rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     SystemInternal,
     SystemValidation,

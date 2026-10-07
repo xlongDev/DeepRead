@@ -1,7 +1,14 @@
 # IPC Protocol
 
-> 单一事实源:`packages/shared/src/protocol/`(TS 侧)与 `apps/desktop/src-tauri/src/`(Rust 镜像,测试锁定一致)。
-> Sprint 2 计划引入 Schema-first 代码生成(Rust 类型 → TS 类型),替代手工镜像。
+> 单一事实源:**Rust DTO**(ADR-0008)。`apps/desktop/src-tauri/src/` 的 wire 类型经 ts-rs 生成到 `packages/shared/src/protocol/generated/`(`cargo test` 刷新,CI 以 `git diff --exit-code` 门禁,生成物不入手改);TS 侧由 `protocol/commands.ts` / `events.ts` 重导出,zod 只承担运行时校验。
+> 手工镜像时代(Phase 0–B2)的双侧测试锁定已由编译期断言替代(见下「类型源与 codegen」)。
+
+## 类型源与 codegen(ADR-0008)
+
+1. **改协议的唯一动作**:改 Rust DTO → `cargo test`(刷新生成物)→ TS 侧按需调整 zod 校验器(`pnpm typecheck` 的编译期断言会点名漂移)。
+2. 生成物目录 `packages/shared/src/protocol/generated/` 整体入 git,任何手工编辑都会在下次生成时被覆盖。
+3. 语义约定:Rust `Option<T>` 带 `#[serde(default, skip_serializing_if = "Option::is_none")]` → TS `field?: T`(wire 省略字段);不带 → TS `field: T | null`(wire 显式 null)。zod 校验器按同一语义写(`.optional()` 对应前者,`.nullable()` 对应后者)。
+4. 错误码目录:类型源是 Rust `error.rs::ErrorCode`,TS `ErrorCodes` 通过 `WIRE_ERROR_CODES` 的 `satisfies` 断言与其锁定;`bookParseFailed` 是唯一的 TS 独有码(解析发生在前端内核)。
 
 ## 约定
 

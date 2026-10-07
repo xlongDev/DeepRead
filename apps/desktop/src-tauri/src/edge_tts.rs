@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 
@@ -99,8 +100,9 @@ fn request_id() -> String {
     hex.chars().take(32).collect()
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct EdgeVoice {
     pub short_name: String,
     pub friendly_name: String,
@@ -297,19 +299,21 @@ async fn synthesize(text: &str, voice: &str, lang: &str, rate: f64) -> Result<Ve
     Ok(audio)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
 pub struct EdgeTtsAudioRequest {
     pub text: String,
     pub voice: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct EdgeTtsAudioResponse {
     pub path: String,
     pub cached: bool,
@@ -386,8 +390,9 @@ pub async fn command_edge_tts_audio(
     edge_tts_audio(&base, request).await
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct EdgeVoicesResponse {
     pub voices: Vec<EdgeVoice>,
 }

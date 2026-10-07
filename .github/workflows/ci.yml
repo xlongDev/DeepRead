@@ -67,3 +67,8 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      # ADR-0008: ts-rs 在 cargo test 里刷新 protocol/generated/,生成物必须
+      # 与仓库一致 —— 过期即红(改了 Rust DTO 忘记重新生成/提交就会在这里挂)。
+      - name: Generated protocol types are up to date
+        run: git diff --exit-code packages/shared/src/protocol/generated/

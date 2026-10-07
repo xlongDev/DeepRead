@@ -8,6 +8,7 @@
  */
 
 import { jsonRecordFromUnknown, type JsonRecord } from './types'
+import type { ErrorCode as WireErrorCode } from './protocol/generated/ErrorCode'
 
 export const ERROR_PREFIXES = [
   'BOOK',
@@ -31,9 +32,10 @@ export type ErrorCode = `${ErrorPrefix}_${string}`
 /**
  * Codes that exist so far. The catalog grows with each domain that lands.
  *
- * 镜像规则:Rust `error.rs::ErrorCode` 的每个变体在这里都必须有同名码
- * (蛇形 → 驼峰);TS 独有的只有 `bookParseFailed` —— 解析发生在前端内核,
- * Rust 不会产生它。改任何一侧都要同步另一侧与双侧测试。
+ * 镜像规则(ADR-0008):Rust `error.rs::ErrorCode` 是类型源,经 ts-rs 生成
+ * `protocol/generated/ErrorCode.ts`;下面的 `WIRE_ERROR_CODES` 把 wire 目录的
+ * 每个码映射到本目录的条目 —— Rust 增删码时这里会是编译错误,不再靠人眼。
+ * TS 独有的只有 `bookParseFailed` —— 解析发生在前端内核,Rust 不会产生它。
  */
 export const ErrorCodes = {
   systemInternal: 'SYSTEM_INTERNAL',
@@ -51,6 +53,26 @@ export const ErrorCodes = {
   ttsProviderError: 'TTS_PROVIDER_ERROR',
   syncProviderError: 'SYNC_PROVIDER_ERROR',
 } as const satisfies Record<string, ErrorCode>
+
+/**
+ * Rust 错误码目录的完整覆盖检查(编译期):多一个、少一个、值对不上都红。
+ * B0.5 那两条错误码漂移就是这条断言要拦的 bug。
+ */
+export const WIRE_ERROR_CODES = {
+  SYSTEM_INTERNAL: ErrorCodes.systemInternal,
+  SYSTEM_VALIDATION: ErrorCodes.systemValidation,
+  SYSTEM_IPC_FAILED: ErrorCodes.systemIpcFailed,
+  SYSTEM_TIMEOUT: ErrorCodes.systemTimeout,
+  SYSTEM_RUNTIME_UNAVAILABLE: ErrorCodes.systemRuntimeUnavailable,
+  SECURITY_VALIDATION_FAILED: ErrorCodes.securityValidationFailed,
+  STORAGE_IO: ErrorCodes.storageIo,
+  STORAGE_CORRUPT: ErrorCodes.storageCorrupt,
+  BOOK_OPEN_FAILED: ErrorCodes.bookOpenFailed,
+  BOOK_UNSUPPORTED_FORMAT: ErrorCodes.bookUnsupportedFormat,
+  AI_PROVIDER_ERROR: ErrorCodes.aiProviderError,
+  TTS_PROVIDER_ERROR: ErrorCodes.ttsProviderError,
+  SYNC_PROVIDER_ERROR: ErrorCodes.syncProviderError,
+} as const satisfies Record<WireErrorCode, KnownErrorCode>
 
 export type KnownErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]
 

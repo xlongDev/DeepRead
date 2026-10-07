@@ -34,3 +34,4 @@ rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 quick-xml = { version = "0.41.0", default-features = false }
+ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
