@@ -65,6 +65,24 @@ describe('lookupWord', () => {
   it('returns empty for misses', () => {
     expect(lookupWord(index, dict, 'zzz', sequence)).toEqual([])
   })
+
+  it('binary search: shuffled 1000-entry index still finds all duplicate hits', () => {
+    const words: string[] = []
+    for (let i = 0; i < 1000; i++) words.push(`w${i}`)
+    words.push('dup', 'DUP', 'dup')
+    // 固定步长乱序(可复现),模拟不守规范排序的 .idx。
+    const shuffled = words.map((_, i) => words[(i * 7 + 3) % words.length]!)
+    const bigIndex = buildIndex(
+      makeIdx(shuffled.map((word) => ({ word, offset: 0, size: 0 }))),
+    )
+    const hits = lookupWord(bigIndex, new Uint8Array(0), 'dup', sequence)
+    expect(hits).toHaveLength(3)
+    expect(hits.map((hit) => hit.word.toLowerCase())).toEqual(['dup', 'dup', 'dup'])
+    // 大索引上精确与大小写不敏感路径仍然正确。
+    expect(lookupWord(bigIndex, new Uint8Array(0), 'w42', sequence)).toHaveLength(1)
+    expect(lookupWord(bigIndex, new Uint8Array(0), 'W42', sequence)).toHaveLength(1)
+    expect(lookupWord(bigIndex, new Uint8Array(0), 'nothing', sequence)).toEqual([])
+  })
 })
 
 describe('decodeFields', () => {

@@ -3,9 +3,9 @@
  *
  * Scope (Phase 2 MVP, honest limits):
  * - `.idx` raw or gzip/`.dz` compressed (inflated with DecompressionStream)
- * - lookup is exact match with ASCII-case-insensitive fallback (# ponytail:
- *   linear scan over decoded words is O(n) per query; switch to a sorted
- *   byte-compare binary search if large dictionaries feel slow)
+ * - lookup is exact match with ASCII-case-insensitive fallback, served by a
+ *   binary search over a per-index sorted view (B2.5; was a linear scan —
+ *   100k-word dictionaries paid O(n) per query)
  * - definitions follow `sametypesequence`: m/l/y → plain text, g/h/x → HTML
  *   (sanitize before injecting — see `sanitizeDefinitionHtml`)
  */
@@ -73,6 +73,49 @@ export function decodeFields(
   return fields
 }
 
+/**
+ * ASCII 大小写折叠:与 StarDict 规范的 g_ascii_strcasecmp 排序同型
+ * (非 ASCII 字节原样保留)。二分与排序用同一个键,语义才一致。
+ */
+function asciiFold(word: string): string {
+  let out = ''
+  for (let i = 0; i < word.length; i++) {
+    const code = word.charCodeAt(i)
+    out += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : (word[i] as string)
+  }
+  return out
+}
+
+/**
+ * 每份 .idx 只排一次:同一条目数组的排序视图缓存在 WeakMap 里
+ * (ReaderScreen 的词典缓存持有原数组,视图随其回收)。真书 .idx 按规范
+ * 本就有序,这里排序只是把"文件是否守规范"从正确性前提降级为性能细节。
+ */
+const sortedViewCache = new WeakMap<readonly DictIndexEntry[], readonly DictIndexEntry[]>()
+
+function sortedEntries(entries: readonly DictIndexEntry[]): readonly DictIndexEntry[] {
+  let sorted = sortedViewCache.get(entries)
+  if (sorted === undefined) {
+    const decorated = entries.map((entry) => ({ entry, key: asciiFold(entry.word) }))
+    decorated.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    sorted = decorated.map((decoratedEntry) => decoratedEntry.entry)
+    sortedViewCache.set(entries, sorted)
+  }
+  return sorted
+}
+
+/** 折叠序的下界:第一个 key ≥ 目标的位置。 */
+function lowerBound(sorted: readonly DictIndexEntry[], foldedTarget: string): number {
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (asciiFold(sorted[mid]!.word) < foldedTarget) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
 /** Case-insensitive exact lookup; falls back to byte-order equality. */
 export function lookupWord(
   entries: readonly DictIndexEntry[],
@@ -81,8 +124,14 @@ export function lookupWord(
   sequence: string | undefined,
 ): readonly DictLookupResult[] {
   const lowered = target.toLowerCase()
+  const sorted = sortedEntries(entries)
+  const foldedTarget = asciiFold(target)
   const results: DictLookupResult[] = []
-  for (const entry of entries) {
+  // 二分只负责把 O(n) 扫描收窄到折叠序上的等值区间;区间内仍用与线性
+  // 扫描同一判据(全小写相等或字节相等)过滤,匹配语义不变。
+  for (let i = lowerBound(sorted, foldedTarget); i < sorted.length; i++) {
+    const entry = sorted[i]!
+    if (asciiFold(entry.word) !== foldedTarget) break
     if (entry.word.toLowerCase() !== lowered && entry.word !== target) continue
     const raw = dict.subarray(entry.offset, entry.offset + entry.size)
     results.push({ word: entry.word, fields: decodeFields(raw, sequence) })
