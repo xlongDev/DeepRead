@@ -923,9 +923,8 @@ pub fn import_json_snapshot(
     json_path: &Path,
     books_dir: &Path,
 ) -> Result<usize, AppError> {
-    let text = std::fs::read_to_string(json_path).map_err(|err| {
-        AppError::new(ErrorCode::StorageIo, "读不到备份文件").with_cause(err)
-    })?;
+    let text = std::fs::read_to_string(json_path)
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "读不到备份文件").with_cause(err))?;
     let snapshot: WebSnapshot = serde_json::from_str(&text).map_err(|err| {
         AppError::new(
             ErrorCode::SystemValidation,
@@ -942,9 +941,8 @@ pub fn import_json_snapshot(
 
     // 字节先落盘。文件系统操作回滚不了,所以必须早于动数据库 —— 反过来的话,
     // 写文件失败会留下「书在库里、文件不在」的坏状态,点开就是错的。
-    std::fs::create_dir_all(books_dir).map_err(|err| {
-        AppError::new(ErrorCode::StorageIo, "建不了导入目录").with_cause(err)
-    })?;
+    std::fs::create_dir_all(books_dir)
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "建不了导入目录").with_cause(err))?;
     let mut paths: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for file in &snapshot.files {
         let bytes = {
@@ -1361,7 +1359,10 @@ mod backup_tests {
         })
     }
 
-    fn write_snapshot(tag: &str, hash: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    fn write_snapshot(
+        tag: &str,
+        hash: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
         let base = temp_dir(tag);
         let books_dir = base.join("imported-books");
         let json_path = base.join("backup.json");
@@ -1460,8 +1461,8 @@ mod backup_tests {
         // 结构不对(books 缺了必填的 format)。
         let broken = base.join("broken.json");
         std::fs::write(&broken, r#"{"version":1,"books":[{"hash":"a"}]}"#).unwrap();
-        let err = import_json_snapshot(&mut conn, &broken, &books_dir)
-            .expect_err("结构不对必须拒绝");
+        let err =
+            import_json_snapshot(&mut conn, &broken, &books_dir).expect_err("结构不对必须拒绝");
         assert_eq!(err.code.as_str(), "SYSTEM_VALIDATION");
 
         // 版本不认识。

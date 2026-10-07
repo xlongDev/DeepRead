@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use deepread_desktop_lib::library::{import_book, list_books};
 use deepread_desktop_lib::state::{
-    load_state, store_state, ReaderState, StoredAnnotation, StoredBookmark, StoredProgress,
+    ReaderState, StoredAnnotation, StoredBookmark, StoredProgress, load_state, store_state,
 };
 use deepread_desktop_lib::storage::{
     backup_to, file_checksum, open_db_with_recovery, restore_from,
@@ -120,8 +120,8 @@ fn a_corrupted_snapshot_is_refused_and_the_library_is_untouched() {
     bytes[last] ^= 0xff;
     std::fs::write(&backup_path, &bytes).unwrap();
 
-    let err = restore_from(&mut conn, &backup_path, &good_checksum)
-        .expect_err("损坏的快照必须被拒绝");
+    let err =
+        restore_from(&mut conn, &backup_path, &good_checksum).expect_err("损坏的快照必须被拒绝");
     assert_eq!(err.code.as_str(), "STORAGE_CORRUPT");
 
     // 现有数据一根毫毛都没少。
