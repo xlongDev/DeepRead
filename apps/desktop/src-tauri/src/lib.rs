@@ -161,7 +161,6 @@ pub fn run() {
             cloud::cloud_backup,
             cloud::cloud_restore,
             secrets::secret_set,
-            secrets::secret_get,
             secrets::secret_delete,
         ])
         .run(tauri::generate_context!())

@@ -16,6 +16,12 @@ export const EVENT = {
   appReady: 'app.ready',
 } as const
 
+/**
+ * 协议版本。语义:桌面 app 与前端同包发布、永远同步,单端协议不做跨版本
+ * 兼容 —— 因此移除命令(如 `secret.get`,ADR-0010)不递增;只有协议开始
+ * 跨版本共存(如移动端独立发版)才从这里开始管理。随 app.ready 广播,
+ * 供日志与调试对比。
+ */
 export const PROTOCOL_VERSION = 1
 
 export interface AppReadyPayload {

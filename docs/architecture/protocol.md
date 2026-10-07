@@ -117,7 +117,7 @@
 | `ai.cancel`                  | `{ taskId }` → `{ cancelled }`                                                                         | 原子旗标,流循环即时生效                        |
 | `ai.embed`                   | `{ taskId, configId, texts[] }` → `{ vectors[][] }`                                                    | POST `{base}/embeddings`,密钥服务端解析        |
 | `ai.index.get/set`           | 按书籍哈希存取 `{ chunks[label,text,vector], embeddingModel, createdAt }`                              | `ai-index/<hash>.json`,64MB 上限 + 损坏防护    |
-| `secret.set/get/delete`      | 钥匙串优先,无服务时降级 0600 文件                                                                      | 密钥永不回传 UI(仅 AI HTTP 客户端使用)         |
+| `secret.set/delete`          | 钥匙串优先,无服务时降级 0600 文件                                                                      | 密钥永不回传 UI(仅 AI HTTP 客户端使用);`secret.get` 已移除 —— webview 无任何读取明文密钥的命令面(ADR-0010) |
 
 错误码:`AI_PROVIDER_ERROR`(连接失败/上游非 2xx/响应不合法,多数可重试)、`STORAGE_IO/CORRUPT`。
 

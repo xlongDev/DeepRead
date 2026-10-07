@@ -150,18 +150,6 @@ pub struct SecretSetRequest {
     pub value: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SecretGetResponse {
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretGetRequest {
-    pub key: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretDeleteRequest {
@@ -187,17 +175,6 @@ pub fn secret_set(
     request: SecretSetRequest,
 ) -> Result<(), AppError> {
     set_secret(&store, &data_dir(&app)?, &request.key, &request.value)
-}
-
-#[tauri::command(rename = "secret.get")]
-pub fn secret_get(
-    app: tauri::AppHandle,
-    store: State<'_, SecretStore>,
-    request: SecretGetRequest,
-) -> Result<SecretGetResponse, AppError> {
-    Ok(SecretGetResponse {
-        value: get_secret(&store, &data_dir(&app)?, &request.key)?,
-    })
 }
 
 #[tauri::command(rename = "secret.delete")]

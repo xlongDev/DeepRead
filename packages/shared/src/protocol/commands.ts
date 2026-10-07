@@ -63,7 +63,6 @@ export const COMMAND = {
   cloudBackup: 'cloud.backup',
   cloudRestore: 'cloud.restore',
   secretSet: 'secret.set',
-  secretGet: 'secret.get',
   secretDelete: 'secret.delete',
 } as const
 
@@ -908,11 +907,7 @@ export interface CommandMap {
   }
   [COMMAND.secretSet]: {
     readonly request: { readonly key: string; readonly value: string }
-    readonly response: { readonly deleted: boolean }
-  }
-  [COMMAND.secretGet]: {
-    readonly request: { readonly key: string }
-    readonly response: { readonly value: string | null }
+    readonly response: null
   }
   [COMMAND.secretDelete]: {
     readonly request: { readonly key: string }
@@ -1184,8 +1179,7 @@ export const secretSetRequestSchema = z.object({
   key: z.string().min(4).max(128),
   value: z.string().max(4096),
 })
-export const secretGetRequestSchema = z.object({ key: z.string().min(4).max(128) })
-export const secretGetResponseSchema = z.object({ value: z.string().nullable() })
+export const secretSetResponseSchema = z.null()
 export const secretDeleteRequestSchema = z.object({ key: z.string().min(4).max(128) })
 export const secretDeleteResponseSchema = z.object({ deleted: z.boolean() })
 
@@ -1373,8 +1367,7 @@ export const responseValidators: {
   [COMMAND.aiArtifactSet]: aiArtifactSetResponseSchema,
   [COMMAND.storageBackup]: storageBackupResponseSchema,
   [COMMAND.storageRestore]: storageRestoreResponseSchema,
-  [COMMAND.secretSet]: secretDeleteResponseSchema,
-  [COMMAND.secretGet]: secretGetResponseSchema,
+  [COMMAND.secretSet]: secretSetResponseSchema,
   [COMMAND.secretDelete]: secretDeleteResponseSchema,
   [COMMAND.cardsList]: cardsListResponseSchema,
   [COMMAND.cardsAdd]: cardsAddResponseSchema,
@@ -1429,7 +1422,6 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.aiConfigSave]: aiConfigSaveRequestSchema,
   [COMMAND.aiConfigRemove]: aiConfigRemoveRequestSchema,
   [COMMAND.secretSet]: secretSetRequestSchema,
-  [COMMAND.secretGet]: secretGetRequestSchema,
   [COMMAND.secretDelete]: secretDeleteRequestSchema,
   [COMMAND.aiConfigList]: undefined,
   [COMMAND.cardsList]: cardsListRequestSchema,
