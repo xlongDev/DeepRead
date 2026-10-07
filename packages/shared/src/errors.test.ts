@@ -31,6 +31,32 @@ describe('AppError', () => {
   })
 })
 
+describe('ErrorCodes catalog', () => {
+  it('mirrors every Rust ErrorCode variant plus the kernel-side parse code', () => {
+    // Rust `error.rs::ErrorCode` 的 13 个变体逐一在此(bookParseFailed 只在
+    // 前端内核产生,Rust 没有它)。Rust 侧由 error.rs 的 wire-string 测试锁
+    // 字符串;这里锁目录成员,防手滑删改。改任一侧必须同步另一侧。
+    expect(Object.values(ErrorCodes).sort()).toEqual(
+      [
+        'SYSTEM_INTERNAL',
+        'SYSTEM_VALIDATION',
+        'SYSTEM_IPC_FAILED',
+        'SYSTEM_RUNTIME_UNAVAILABLE',
+        'SYSTEM_TIMEOUT',
+        'SECURITY_VALIDATION_FAILED',
+        'STORAGE_IO',
+        'STORAGE_CORRUPT',
+        'BOOK_OPEN_FAILED',
+        'BOOK_UNSUPPORTED_FORMAT',
+        'BOOK_PARSE_FAILED',
+        'AI_PROVIDER_ERROR',
+        'TTS_PROVIDER_ERROR',
+        'SYNC_PROVIDER_ERROR',
+      ].sort(),
+    )
+  })
+})
+
 describe('coerceErrorCode', () => {
   it('accepts well-formed codes', () => {
     expect(coerceErrorCode('SYNC_CONFLICT')).toBe('SYNC_CONFLICT')

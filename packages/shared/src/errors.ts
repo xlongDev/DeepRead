@@ -28,7 +28,13 @@ export type ErrorPrefix = (typeof ERROR_PREFIXES)[number]
 /** Error codes are `${PREFIX}_${REASON}`; the prefix is compile-time enforced. */
 export type ErrorCode = `${ErrorPrefix}_${string}`
 
-/** Codes that exist so far. The catalog grows with each domain that lands. */
+/**
+ * Codes that exist so far. The catalog grows with each domain that lands.
+ *
+ * 镜像规则:Rust `error.rs::ErrorCode` 的每个变体在这里都必须有同名码
+ * (蛇形 → 驼峰);TS 独有的只有 `bookParseFailed` —— 解析发生在前端内核,
+ * Rust 不会产生它。改任何一侧都要同步另一侧与双侧测试。
+ */
 export const ErrorCodes = {
   systemInternal: 'SYSTEM_INTERNAL',
   systemValidation: 'SYSTEM_VALIDATION',
@@ -36,9 +42,12 @@ export const ErrorCodes = {
   systemRuntimeUnavailable: 'SYSTEM_RUNTIME_UNAVAILABLE',
   systemTimeout: 'SYSTEM_TIMEOUT',
   securityValidationFailed: 'SECURITY_VALIDATION_FAILED',
-  bookUnsupportedFormat: 'BOOK_UNSUPPORTED_FORMAT',
+  storageIo: 'STORAGE_IO',
+  storageCorrupt: 'STORAGE_CORRUPT',
   bookOpenFailed: 'BOOK_OPEN_FAILED',
+  bookUnsupportedFormat: 'BOOK_UNSUPPORTED_FORMAT',
   bookParseFailed: 'BOOK_PARSE_FAILED',
+  aiProviderError: 'AI_PROVIDER_ERROR',
   ttsProviderError: 'TTS_PROVIDER_ERROR',
   syncProviderError: 'SYNC_PROVIDER_ERROR',
 } as const satisfies Record<string, ErrorCode>

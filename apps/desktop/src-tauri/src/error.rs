@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn error_codes_stay_in_sync_with_the_typescript_catalog() {
+    fn error_code_wire_strings_stay_stable() {
         let expected = [
             ("SYSTEM_INTERNAL", ErrorCode::SystemInternal),
             ("SYSTEM_VALIDATION", ErrorCode::SystemValidation),
@@ -168,6 +168,13 @@ mod tests {
                 "SECURITY_VALIDATION_FAILED",
                 ErrorCode::SecurityValidationFailed,
             ),
+            ("STORAGE_IO", ErrorCode::StorageIo),
+            ("STORAGE_CORRUPT", ErrorCode::StorageCorrupt),
+            ("BOOK_OPEN_FAILED", ErrorCode::BookOpenFailed),
+            ("BOOK_UNSUPPORTED_FORMAT", ErrorCode::BookUnsupportedFormat),
+            ("AI_PROVIDER_ERROR", ErrorCode::AiProviderError),
+            ("TTS_PROVIDER_ERROR", ErrorCode::TtsProviderError),
+            ("SYNC_PROVIDER_ERROR", ErrorCode::SyncProviderError),
         ];
         for (code, variant) in expected {
             assert_eq!(variant.as_str(), code);
