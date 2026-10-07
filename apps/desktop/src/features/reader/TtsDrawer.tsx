@@ -425,36 +425,39 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   )
 
   /** 系统引擎:整块 utterance + 估算时钟推进字符位置。 */
-  const speakSystemBlock = useCallback(async (block: Block): Promise<void> => {
-    if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
-    const current = settingsRef.current
-    const voice = voicesRef.current.find((item) => item.voiceURI === current.narratorSystem)
-    const chars = block.text.length
-    const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
-    let elapsed = 0
-    const step = 60
-    const clock = setInterval(() => {
-      if (stopFlagRef.current) return
-      elapsed += step
-      applyCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
-    }, step)
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const utterance = new SpeechSynthesisUtterance(block.text)
-        if (voice) utterance.voice = voice
-        utterance.rate = current.rate
-        utterance.onend = () => resolve()
-        utterance.onerror = (event) => {
-          if (event.error === 'interrupted' || event.error === 'canceled') resolve()
-          else reject(new Error(`系统语音合成失败(${event.error})`))
-        }
-        window.speechSynthesis.speak(utterance)
-      })
-    } finally {
-      clearInterval(clock)
-    }
-    applyCharPos(block.start + chars)
-  }, [applyCharPos])
+  const speakSystemBlock = useCallback(
+    async (block: Block): Promise<void> => {
+      if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
+      const current = settingsRef.current
+      const voice = voicesRef.current.find((item) => item.voiceURI === current.narratorSystem)
+      const chars = block.text.length
+      const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
+      let elapsed = 0
+      const step = 60
+      const clock = setInterval(() => {
+        if (stopFlagRef.current) return
+        elapsed += step
+        applyCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
+      }, step)
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const utterance = new SpeechSynthesisUtterance(block.text)
+          if (voice) utterance.voice = voice
+          utterance.rate = current.rate
+          utterance.onend = () => resolve()
+          utterance.onerror = (event) => {
+            if (event.error === 'interrupted' || event.error === 'canceled') resolve()
+            else reject(new Error(`系统语音合成失败(${event.error})`))
+          }
+          window.speechSynthesis.speak(utterance)
+        })
+      } finally {
+        clearInterval(clock)
+      }
+      applyCharPos(block.start + chars)
+    },
+    [applyCharPos],
+  )
 
   /** 从 startChar 起连播整章;章末按连读开关与定时模式决定去留。 */
   const run = useCallback(

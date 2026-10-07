@@ -139,9 +139,7 @@ function currentSentence(): string | null {
 }
 
 function sentenceTexts(): readonly string[] {
-  return [...document.querySelectorAll('.tts-sentence-item')].map(
-    (node) => node.textContent ?? '',
-  )
+  return [...document.querySelectorAll('.tts-sentence-item')].map((node) => node.textContent ?? '')
 }
 
 /** 点语速下拉的第 N 档(rate 选项 label 形如 "1.5×")。 */
@@ -186,10 +184,7 @@ describe('待机与播放', () => {
     await flush()
 
     expect(synthCalls()).toEqual([
-      [
-        'tts.edge.audio',
-        { text: SENTENCE_1, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-      ],
+      ['tts.edge.audio', { text: SENTENCE_1, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 }],
     ])
     expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
     expect(sentenceTexts()).toEqual([SENTENCE_1, SENTENCE_2])
@@ -252,10 +247,7 @@ describe('待机与播放', () => {
   })
 
   it('关掉「连读下一章」:章末停止而不是跳章', async () => {
-    localStorage.setItem(
-      'deepread.tts.settings',
-      JSON.stringify({ autoNext: false }),
-    )
+    localStorage.setItem('deepread.tts.settings', JSON.stringify({ autoNext: false }))
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
