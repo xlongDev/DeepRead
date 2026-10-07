@@ -90,6 +90,16 @@ if (!canCreateObjectURL()) {
   }
 }
 
+/**
+ * jsdom 同样没有 Element.scrollIntoView(TTS 句子列表切句时把当前句滚到居中,
+ * 内核目录跳转等也用它)。没有布局引擎,滚动了也没有意义,给个 no-op。
+ */
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = (): void => {
+    // jsdom 没有布局,无处可滚。
+  }
+}
+
 afterEach(() => {
   cleanup()
 })
