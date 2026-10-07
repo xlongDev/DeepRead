@@ -38,16 +38,19 @@
 | Errors   | `SYSTEM_INTERNAL`(预期不发生)                                       |
 | 用途     | 应用壳信息展示。                                                    |
 
-### `reader.state.get` / `reader.state.set`
+### `reader.state.get` / `reader.state.set` / `reader.state.getAll`(B3)
 
-|                |                                                                                                                   |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Request (get)  | `{ bookHash: string }`(小写 SHA-256 hex,前端 WebCrypto 计算)                                                      |
-| Response (get) | `{ state: { progress: { cfi, fraction } \| null, annotations: AnnotationRecord[], updatedAt: ISO8601 } \| null }` |
-| Request (set)  | `{ bookHash, state }`                                                                                             |
-| Response (set) | `{ savedAt: ISO8601 }`                                                                                            |
-| Errors         | `SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO`、`STORAGE_CORRUPT`                                                   |
-| 用途           | 按书籍文件哈希持久化阅读进度(CFI)与批注锚点;SQLite 落地前的真实 JSON 存储。                                       |
+|                   |                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Request (get)     | `{ bookHash: string }`(小写 SHA-256 hex,前端 WebCrypto 计算)                                                                      |
+| Response (get)    | `{ state: { progress: { cfi, fraction } \| null, annotations: AnnotationRecord[], updatedAt: ISO8601 } \| null }`                 |
+| Request (set)     | `{ bookHash, state }`                                                                                                             |
+| Response (set)    | `{ savedAt: ISO8601 }`                                                                                                            |
+| Request (getAll)  | `undefined`                                                                                                                       |
+| Response (getAll) | `{ states: { [bookHash: string]: ReaderStatePayload } }` —— **只含有状态的书占键**(没有进度/批注/书签的书不出现在 map 里)         |
+| Errors            | `SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO`、`STORAGE_CORRUPT`                                                                   |
+| 用途              | 按书籍文件哈希持久化阅读进度(CFI)与批注锚点;`getAll` 供同步引擎一次取全部本地状态。                                               |
+| 约定              | `getAll` 把 N 本书的 `reader.state.get` IPC 往返(N 次 → 1 次)收成一条命令(B3);**WebDAV put 侧保持逐书** —— 单请求过大会撞传输上限 |
 
 ### `reader.stats.add` / `reader.stats.get`(阅读时长)
 

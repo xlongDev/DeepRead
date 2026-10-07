@@ -29,6 +29,7 @@ import type { StateGetRequest as ReaderStateGetRequest } from './generated/State
 import type { StateGetResponse as ReaderStateGetResponse } from './generated/StateGetResponse'
 import type { StateSetRequest as ReaderStateSetRequest } from './generated/StateSetRequest'
 import type { StateSetResponse as ReaderStateSetResponse } from './generated/StateSetResponse'
+import type { ReaderStateGetAllResponse } from './generated/ReaderStateGetAllResponse'
 import type { StatsAddRequest as ReaderStatsAddRequest } from './generated/StatsAddRequest'
 import type { StatsAddResponse as ReaderStatsAddResponse } from './generated/StatsAddResponse'
 import type { StatsGetResponse as ReaderStatsGetResponse } from './generated/StatsGetResponse'
@@ -203,6 +204,7 @@ export type {
   ReaderNoteUpdateResponse,
   ReaderNotesListResponse,
   ReaderStateGetRequest,
+  ReaderStateGetAllResponse,
   ReaderStateGetResponse,
   ReaderStatePayload,
   ReaderStateSetRequest,
@@ -230,6 +232,7 @@ export const COMMAND = {
   appInfo: 'app.info',
   readerStateGet: 'reader.state.get',
   readerStateSet: 'reader.state.set',
+  readerStateGetAll: 'reader.state.getAll',
   libraryList: 'library.list',
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
@@ -294,6 +297,10 @@ export interface CommandMap {
   [COMMAND.readerStateSet]: {
     readonly request: ReaderStateSetRequest
     readonly response: ReaderStateSetResponse
+  }
+  [COMMAND.readerStateGetAll]: {
+    readonly request: undefined
+    readonly response: ReaderStateGetAllResponse
   }
   [COMMAND.libraryList]: { readonly request: undefined; readonly response: LibraryListResponse }
   [COMMAND.libraryImport]: {
@@ -523,6 +530,10 @@ export const readerStateSetRequestSchema = z.object({
   state: readerStatePayloadSchema,
 })
 export const readerStateSetResponseSchema = z.object({ savedAt: iso8601 })
+/** 批量同步(B3):一次拿全部书的本地状态;只含有状态的书占键。 */
+export const readerStateGetAllResponseSchema = z.object({
+  states: z.record(bookHash, readerStatePayloadSchema),
+})
 
 export const libraryListResponseSchema = z.object({ books: z.array(libraryBookSchema).max(10_000) })
 export const libraryImportRequestSchema = z.object({ path: z.string().min(1).max(4096) })
@@ -870,6 +881,7 @@ export const responseSchemas = {
   [COMMAND.systemPing]: systemPingResponseSchema,
   [COMMAND.appInfo]: appInfoSchema,
   [COMMAND.readerStateGet]: readerStateGetResponseSchema,
+  [COMMAND.readerStateGetAll]: readerStateGetAllResponseSchema,
   [COMMAND.readerStateSet]: readerStateSetResponseSchema,
   [COMMAND.libraryList]: libraryListResponseSchema,
   [COMMAND.libraryImport]: libraryImportResponseSchema,
@@ -929,6 +941,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.systemPing]: systemPingRequestSchema,
   [COMMAND.appInfo]: undefined,
   [COMMAND.readerStateGet]: readerStateGetRequestSchema,
+  [COMMAND.readerStateGetAll]: undefined,
   [COMMAND.readerStateSet]: readerStateSetRequestSchema,
   [COMMAND.libraryList]: undefined,
   [COMMAND.libraryImport]: libraryImportRequestSchema,

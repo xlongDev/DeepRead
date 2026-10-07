@@ -274,6 +274,59 @@ pub fn reader_state_get(
     })
 }
 
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderStateGetAllResponse {
+    /// `bookHash → state`;只含有状态的书 —— 没有进度/批注/书签的书不占键。
+    pub states: std::collections::HashMap<String, ReaderState>,
+}
+
+/// 跨书聚合全部阅读状态(B3 批量同步):一次 IPC 替代同步引擎对每本书的
+/// `reader.state.get`。三张表 UNION 出有状态的 hash,再逐个走 `load_state`
+/// —— 复用同一套校验与行装配,量级(个人书库)下足够快。
+pub fn load_all_states(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, ReaderState>, AppError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT DISTINCT book_hash FROM progress
+             UNION SELECT DISTINCT book_hash FROM annotations
+             UNION SELECT DISTINCT book_hash FROM bookmarks",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query state hashes").with_cause(err)
+        })?;
+    let hashes = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read state hashes").with_cause(err)
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read state hash").with_cause(err)
+        })?;
+    let mut states = std::collections::HashMap::with_capacity(hashes.len());
+    for hash in hashes {
+        if let Some(state) = load_state(conn, &hash)? {
+            states.insert(hash, state);
+        }
+    }
+    Ok(states)
+}
+
+#[tauri::command(rename = "reader.state.getAll")]
+pub fn reader_state_get_all(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<ReaderStateGetAllResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(ReaderStateGetAllResponse {
+        states: load_all_states(&conn)?,
+    })
+}
+
 #[tauri::command(rename = "reader.state.set")]
 pub fn reader_state_set(
     db: tauri::State<'_, crate::storage::Db>,
@@ -1026,6 +1079,32 @@ mod tests {
         conn.execute("DELETE FROM books WHERE hash = ?1", [hash.as_str()])
             .unwrap();
         assert_eq!(load_state(&conn, hash).unwrap(), None);
+    }
+
+    #[test]
+    fn get_all_returns_only_books_that_have_state() {
+        let conn = memory_db();
+        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        for hash in [&a, &b, &c] {
+            seed_book(&conn, hash);
+        }
+        store_state(&conn, &a, &sample()).unwrap();
+        // b 存过一个完全空的状态:读回来是 None,不该占 getAll 的一个键。
+        store_state(&conn, &b, &ReaderState::default()).unwrap();
+
+        let states = load_all_states(&conn).unwrap();
+        assert_eq!(states.len(), 1, "只含有状态的书");
+        assert!(states.contains_key(&a));
+
+        // wire 形状:顶层 states,键是 book hash,行内容 camelCase。
+        let response = ReaderStateGetAllResponse { states };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["states"][a.as_str()]["annotations"][0]["id"], "a1");
+        assert!(
+            json.get("states")
+                .map(|s| s.as_object().unwrap().len() == 1)
+                .unwrap()
+        );
     }
 
     #[test]

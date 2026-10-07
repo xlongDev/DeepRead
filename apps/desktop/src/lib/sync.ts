@@ -115,8 +115,11 @@ export async function runSync(): Promise<SyncReport> {
   ).length
 
   // 3. Per-book reading state merge (§51 annotations/bookmarks/progress).
+  // 一次 getAll 取全部本地状态(B3):N 本书从 N 次 state IPC 往返降到 1 次;
+  // WebDAV 侧保持逐书 —— 单请求过大会撞传输上限。
+  const allStates = (await invokeCommand('reader.state.getAll', undefined)).states
   for (const book of localLibrary.books as readonly LibraryBook[]) {
-    const localState = (await invokeCommand('reader.state.get', { bookHash: book.hash })).state
+    const localState = allStates[book.hash] ?? null
     const remoteState = await getJson(statePath(book.hash), readerStatePayloadSchema)
     if (localState === null && remoteState === null) continue
     const { state: merged, conflicts: bookConflicts } = mergeBookState(

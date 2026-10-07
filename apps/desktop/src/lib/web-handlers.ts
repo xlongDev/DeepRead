@@ -214,6 +214,14 @@ export const webHandlers: {
     return { savedAt: request.state.updatedAt }
   },
 
+  // 与 Rust 侧 reader.state.getAll 同一契约:只含有状态的书占键。
+  [COMMAND.readerStateGetAll]: async () => {
+    const rows = await listStoredStates()
+    const states: Record<string, ReaderStatePayload> = {}
+    for (const row of rows) states[row.hash] = row
+    return { states }
+  },
+
   [COMMAND.readerStatsAdd]: async (request) => ({
     daySeconds: await addStoredStat(request.day, request.bookHash, request.seconds),
   }),

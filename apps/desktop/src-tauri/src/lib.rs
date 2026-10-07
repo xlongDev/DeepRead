@@ -113,6 +113,7 @@ pub fn run() {
             commands::system::system_ping,
             commands::system::app_info,
             state::reader_state_get,
+            state::reader_state_get_all,
             state::reader_state_set,
             state::reader_stats_add,
             state::reader_stats_get,
