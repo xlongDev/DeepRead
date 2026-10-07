@@ -633,31 +633,75 @@ async fn newest_backup_path(
     let body = response.text().await.map_err(|err| {
         AppError::new(ErrorCode::SyncProviderError, "WebDAV 响应传输中断").with_cause(err)
     })?;
-    // Scan hrefs out of the multistatus XML — no XML parser needed for a
-    // flat folder of timestamped files.
-    let mut best: Option<(String, String)> = None;
-    for chunk in body.split("<d:href").chain(body.split("<D:href")) {
-        let Some(start) = chunk.find('>') else {
-            continue;
-        };
-        let Some(end) = chunk[start..].find('<') else {
-            continue;
-        };
-        let href = &chunk[start + 1..start + end];
-        let Some(name) = href.rsplit('/').next() else {
-            continue;
-        };
-        if name.starts_with("deepread-")
-            && name.ends_with(".db")
-            && best
-                .as_ref()
-                .is_none_or(|(_, best_name)| name > best_name.as_str())
-        {
-            best = Some((format!("backups/{name}"), name.to_string()));
+    newest_backup_path_from_xml(&body)
+        .ok_or_else(|| AppError::new(ErrorCode::SyncProviderError, "云端还没有任何备份"))
+}
+
+/// 从 multistatus XML 里选最新的 `backups/deepread-*.db`。
+/// 文件名即 RFC3339 时间戳,字典序 = 时间序。
+fn newest_backup_path_from_xml(body: &str) -> Option<String> {
+    propfind_hrefs(body)
+        .iter()
+        .filter_map(|href| href.rsplit('/').next())
+        .filter(|name| name.starts_with("deepread-") && name.ends_with(".db"))
+        .max()
+        .map(|name| format!("backups/{name}"))
+}
+
+/// 命名空间无关地提取所有 `<…href>` 元素的文本。
+///
+/// 过去是手写字符串扫描 `<d:href`/`<D:href>` —— 服务器用默认命名空间
+/// (`<href>`)或别的前缀(`<lp1:href>`,某些 Apache/Nginx 组合)时,
+/// 一条都扫不出来,备份恢复就成了"云端明明有备份却说没有"。
+/// quick-xml 按局部名匹配,前缀/默认命名空间一视同仁。
+fn propfind_hrefs(body: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(body);
+    let mut hrefs = Vec::new();
+    // 累积模型:Start(href) 开缓冲,Text/实体/CData 各自是同一段内容的一块
+    // (quick-xml ≥0.41 会把 `&amp;` 拆成独立事件),End 落账。
+    let mut current: Option<String> = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(tag)) => {
+                current = (tag.local_name().as_ref() == b"href").then(String::new);
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(buf), Ok(decoded)) = (current.as_mut(), text.xml10_content()) {
+                    buf.push_str(&decoded);
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                let name = String::from_utf8_lossy(reference.as_ref()).into_owned();
+                let decoded = quick_xml::escape::unescape(&format!("&{name};"))
+                    .map(|decoded| decoded.into_owned());
+                if let Some(buf) = current.as_mut() {
+                    buf.push_str(&decoded.unwrap_or_else(|_| format!("&{name};")));
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if let Some(buf) = current.as_mut() {
+                    buf.push_str(&String::from_utf8_lossy(text.as_ref()));
+                }
+            }
+            Ok(Event::End(_)) => {
+                if let Some(buf) = current.take() {
+                    hrefs.push(buf);
+                }
+            }
+            Ok(Event::Eof) => break,
+            // 残缺 XML 就此收手:收下还没落账的缓冲,拿已解析到的继续挑最新。
+            Err(_) => {
+                if let Some(buf) = current.take() {
+                    hrefs.push(buf);
+                }
+                break;
+            }
+            _ => {}
         }
     }
-    best.map(|(path, _)| path)
-        .ok_or_else(|| AppError::new(ErrorCode::SyncProviderError, "云端还没有任何备份"))
+    hrefs
 }
 
 async fn webdav_get_bytes(
@@ -732,5 +776,54 @@ mod tests {
         let b = random_token();
         assert_eq!(a.len(), 16);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn propfind_hrefs_match_any_namespace_prefix() {
+        // 大小写前缀 + 自带命名空间声明(老实现的主路径)。
+        let prefixed = r#"<d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/backups/deepread-2026-10-01T00-00-00Z.db</d:href><d:displayname>x</d:displayname></d:response><D:response><D:href>/dav/backups/deepread-2026-10-02T00-00-00Z.db</D:href></D:response></d:multistatus>"#;
+        assert_eq!(propfind_hrefs(prefixed).len(), 2);
+
+        // 默认命名空间:老实现一条都扫不出来,恢复备份随之失败。
+        let default_ns = r#"<multistatus xmlns="DAV:"><response><href>/dav/backups/deepread-2026-10-03T00-00-00Z.db</href></response></multistatus>"#;
+        assert_eq!(
+            propfind_hrefs(default_ns),
+            vec!["/dav/backups/deepread-2026-10-03T00-00-00Z.db"]
+        );
+
+        // 任意私有大写前缀(某些 Apache mod_dav 组合)。
+        let odd_prefix = r#"<lp1:multistatus xmlns:lp1="DAV:"><lp1:response><lp1:href>/dav/deepread-2026-10-04T00-00-00Z.db</lp1:href></lp1:response></lp1:multistatus>"#;
+        assert_eq!(propfind_hrefs(odd_prefix).len(), 1);
+    }
+
+    #[test]
+    fn propfind_href_text_is_unescaped_and_cdata_aware() {
+        let escaped = r#"<d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/a%20b&amp;c/deepread-x.db</d:href></d:response></d:multistatus>"#;
+        assert_eq!(propfind_hrefs(escaped), vec!["/dav/a%20b&c/deepread-x.db"]);
+    }
+
+    #[test]
+    fn newest_backup_picks_lexicographic_max_and_prefixes_path() {
+        let hrefs = [
+            "/dav/backups/deepread-2026-10-01T00-00-00Z.db".to_string(),
+            "/dav/backups/notes.txt".to_string(),
+            "/dav/backups/deepread-2026-10-02T00-00-00Z.db".to_string(),
+        ];
+        assert_eq!(
+            newest_backup_path_from_xml(&hrefs.join(" ")),
+            None,
+            "纯文本不是 XML,挑不出备份"
+        );
+        let xml = format!(
+            r#"<multistatus xmlns="DAV:"><response>{}</response></multistatus>"#,
+            hrefs
+                .iter()
+                .map(|href| format!("<href>{href}</href>"))
+                .collect::<String>()
+        );
+        assert_eq!(
+            newest_backup_path_from_xml(&xml),
+            Some("backups/deepread-2026-10-02T00-00-00Z.db".to_string())
+        );
     }
 }
