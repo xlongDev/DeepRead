@@ -84,6 +84,8 @@ pub fn run() {
                 log::warn!("failed to allow tts cache {}: {err}", tts_cache.display());
             }
             app.manage(storage::Db(std::sync::Mutex::new(conn)));
+            // TTS 缓存只增不减会慢慢吃满磁盘:启动 + 每 24h 按 mtime LRU 收敛。
+            tts::spawn_cache_pruner(app.handle().clone());
 
             let payload = events::AppReadyPayload {
                 started_at: timestamps::rfc3339_now(),

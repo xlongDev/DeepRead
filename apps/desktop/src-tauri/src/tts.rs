@@ -23,6 +23,85 @@ pub fn cache_dir(base: &Path) -> PathBuf {
     base.join("tts-cache")
 }
 
+/// 缓存默认上限 2GB。可在 `app_settings` 以 [`TTS_CACHE_LIMIT_KEY`] 覆盖
+/// (字节整数字符串;非法值/0 一律回默认)。设置面板的旋钮等 B3 的设置
+/// 协议一起透出,协议面不为一个数字单开命令。
+pub const TTS_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const TTS_CACHE_LIMIT_KEY: &str = "tts.cache.maxBytes";
+
+/// Pure helper: effective cap from an optional app_settings value.
+fn cache_limit(setting: Option<&str>) -> u64 {
+    setting
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(TTS_CACHE_MAX_BYTES)
+}
+
+/// mtime LRU:最旧的先删,直到目录总大小 ≤ `max_bytes`。返回删除的字节数。
+/// 每删一个记一条日志 —— "缓存怎么变小了" 必须有账可查。
+pub fn prune_cache(dir: &Path, max_bytes: u64) -> std::io::Result<u64> {
+    let mut entries: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        total += meta.len();
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        entries.push((modified, entry.path(), meta.len()));
+    }
+    if total <= max_bytes {
+        return Ok(0);
+    }
+    entries.sort_by_key(|(modified, _, _)| *modified);
+    let mut deleted = 0u64;
+    for (_, path, len) in entries {
+        if total <= max_bytes {
+            break;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                total = total.saturating_sub(len);
+                deleted += len;
+                log::info!("tts-cache: pruned {} ({len} bytes)", path.display());
+            }
+            Err(err) => log::warn!("tts-cache: failed to remove {}: {err}", path.display()),
+        }
+    }
+    Ok(deleted)
+}
+
+/// 当前生效的上限:best-effort 读 app_settings,读不到就回默认。
+fn cache_limit_from_db(conn: &rusqlite::Connection) -> u64 {
+    let stored = crate::storage::get_setting(conn, TTS_CACHE_LIMIT_KEY)
+        .ok()
+        .flatten();
+    cache_limit(stored.as_deref())
+}
+
+/// 启动即清一次,之后常驻会话每 24h 一次(interval 首个 tick 立即触发)。
+pub fn spawn_cache_pruner(app: tauri::AppHandle) {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            if let Ok(base) = data_dir(&app) {
+                let db = app.state::<crate::storage::Db>();
+                if let Ok(conn) = db.0.lock() {
+                    let limit = cache_limit_from_db(&conn);
+                    drop(conn);
+                    if let Err(err) = prune_cache(&cache_dir(&base), limit) {
+                        log::warn!("tts-cache: prune failed: {err}");
+                    }
+                }
+            }
+            ticker.tick().await;
+        }
+    });
+}
+
 /// Pure helper: the upstream speech endpoint for a configured base URL.
 pub fn speech_endpoint(base_url: &str) -> String {
     format!("{}/audio/speech", base_url.trim_end_matches('/'))
@@ -230,5 +309,34 @@ mod tests {
         assert_eq!(body["voice"], "alloy");
         assert_eq!(body["speed"], 1.2);
         assert_eq!(body["response_format"], "mp3");
+    }
+
+    #[test]
+    fn cache_limit_parses_setting_or_falls_back_to_default() {
+        assert_eq!(cache_limit(None), TTS_CACHE_MAX_BYTES);
+        assert_eq!(cache_limit(Some("5000")), 5000);
+        assert_eq!(cache_limit(Some("  5000 ")), 5000);
+        // 0 = "全删"是不该发生的误配,当没配处理。
+        assert_eq!(cache_limit(Some("0")), TTS_CACHE_MAX_BYTES);
+        assert_eq!(cache_limit(Some("abc")), TTS_CACHE_MAX_BYTES);
+    }
+
+    #[test]
+    fn prune_cache_drops_oldest_first_and_stops_when_under_cap() {
+        let dir = std::env::temp_dir().join(format!("deepread-tts-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // 间隔写保证 mtime 严格递增(排序才确定)。
+        for name in ["a", "b", "c"] {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            std::fs::write(dir.join(name), vec![0u8; 100]).expect("write cache file");
+        }
+        // 总 300,上限 200 → 只删最旧的一个,达标即停。
+        assert_eq!(prune_cache(&dir, 200).expect("prune"), 100);
+        assert!(!dir.join("a").exists());
+        assert!(dir.join("b").exists() && dir.join("c").exists());
+        // 已达标:再跑一次是空操作。
+        assert_eq!(prune_cache(&dir, 200).expect("prune again"), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
