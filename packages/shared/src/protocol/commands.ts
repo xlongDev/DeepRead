@@ -1090,7 +1090,7 @@ export const dictionaryRegisterResponseSchema = z.object({ dictionary: dictionar
 export const dictionaryRemoveRequestSchema = z.object({ id: z.string().min(8).max(64) })
 export const dictionaryRemoveResponseSchema = z.object({ removed: z.boolean() })
 
-const aiProviderConfigSchema = z.object({
+export const aiProviderConfigSchema = z.object({
   id: z.string().min(8).max(64),
   name: z.string().min(1).max(64),
   baseUrl: z.string().url().max(512),
@@ -1098,6 +1098,7 @@ const aiProviderConfigSchema = z.object({
   embeddingModel: z.string().min(1).max(128).optional(),
   ttsModel: z.string().min(1).max(128).optional(),
 })
+export type AiProviderConfigWire = z.output<typeof aiProviderConfigSchema>
 
 export const aiConfigListResponseSchema = z.object({
   providers: z.array(aiProviderConfigSchema).max(100),

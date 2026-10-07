@@ -24,8 +24,8 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
+import { downloadText } from '../../lib/download'
 import {
-  downloadText,
   exportSnapshot,
   importSnapshot,
   importStoredBook,

@@ -51,15 +51,26 @@ async function fetchAsFile(url: string, name: string, type: string): Promise<Fil
   }
 }
 
-async function openEpub(url: string): Promise<FoliateBook | null> {
+/**
+ * 取书 + 解 zip + 解析 EPUB,一次做完;取不到或解析失败都返回 null。
+ * openEpub 与 extractEpubCover 共用 —— 后者还要 loader 做文件名约定的封面兜底,
+ * 所以把两个结果一起带出来。
+ */
+async function loadEpub(
+  url: string,
+): Promise<{ loader: Awaited<ReturnType<typeof makeZipLoader>>; book: FoliateBook } | null> {
   const file = await fetchAsFile(url, 'book.epub', 'application/epub+zip')
   if (!file) return null
   try {
     const loader = await makeZipLoader(file)
-    return await new EPUB(loader).init()
+    return { loader, book: await new EPUB(loader).init() }
   } catch {
     return null
   }
+}
+
+async function openEpub(url: string): Promise<FoliateBook | null> {
+  return (await loadEpub(url))?.book ?? null
 }
 
 async function openMobi(url: string): Promise<FoliateBook | null> {
@@ -73,11 +84,10 @@ async function openMobi(url: string): Promise<FoliateBook | null> {
 }
 
 export async function extractEpubCover(url: string): Promise<string | null> {
-  const file = await fetchAsFile(url, 'book.epub', 'application/epub+zip')
-  if (!file) return null
+  const loaded = await loadEpub(url)
+  if (!loaded) return null
+  const { loader, book } = loaded
   try {
-    const loader = await makeZipLoader(file)
-    const book = await new EPUB(loader).init()
     const cover = await kernelCover(book)
     if (cover) return cover
     // Fallback: some EPUBs declare the cover only by file name convention.

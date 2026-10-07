@@ -225,7 +225,7 @@ export function LearningDrawer({
             // 跑,不在 render 里。规则无法静态区分「组件体内定义的函数会不会被
             // render 调用」,所以保守报错。`useCallback` 也救不了:它依赖
             // `answers` 这个 state,每次 render 都变,memo 没有意义。
-            // eslint-disable-next-line react/purity -- 见上,事件处理器而非 render
+            // oxlint-disable-next-line react/purity -- 见上,事件处理器而非 render
             dueAt: new Date().toISOString(),
           },
         ],

@@ -508,7 +508,7 @@ export class FoliateAdapter implements ReaderEngine {
     }
     if (pattern !== null && pattern.trim() !== '') {
       try {
-        new RegExp(pattern) // eslint-disable-line no-new -- validation only
+        new RegExp(pattern) // oxlint-disable-line no-new -- validation only
       } catch {
         throw new AppError(ErrorCodes.systemValidation, `无效的正则表达式:${pattern}`)
       }

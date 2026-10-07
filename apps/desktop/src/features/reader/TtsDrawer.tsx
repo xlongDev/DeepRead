@@ -188,6 +188,22 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   // 首挂标记:热切换 effect 用它跳过首次执行。
   const voiceSettingsProbe = useRef(false)
 
+  /** 拆音频:暂停、断 src(释放已解码缓冲)、丢引用 —— 各处 teardown 共用。 */
+  const releaseAudio = useCallback((): void => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.pause()
+    audio.removeAttribute('src')
+    audioRef.current = null
+  }, [])
+
+  /** 清睡眠定时器(有则清并置空)。 */
+  const clearTimer = useCallback((): void => {
+    if (!timerRef.current) return
+    clearTimeout(timerRef.current)
+    timerRef.current = null
+  }, [])
+
   useEffect(() => {
     settingsRef.current = settings
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
@@ -233,14 +249,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       window.removeEventListener('keydown', onKey)
       stopFlagRef.current = true
       window.speechSynthesis?.cancel()
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current.removeAttribute('src')
-        audioRef.current = null
-      }
-      if (timerRef.current) clearTimeout(timerRef.current)
+      releaseAudio()
+      clearTimer()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -273,20 +285,15 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const stop = useCallback((): void => {
     stopFlagRef.current = true
     sectionTokenRef.current += 1
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = null
+    clearTimer()
     window.speechSynthesis?.cancel()
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.removeAttribute('src')
-      audioRef.current = null
-    }
+    releaseAudio()
     setPhase('idle')
     setSentences([])
     sentencesRef.current = []
     setCharPos(0)
     charPosRef.current = 0
-  }, [])
+  }, [clearTimer, releaseAudio])
 
   useImperativeHandle(ref, () => ({ stop }), [stop])
 
@@ -489,14 +496,20 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           sentencesRef.current = []
           setCharPos(0)
           charPosRef.current = 0
-          if (timerRef.current) {
-            clearTimeout(timerRef.current)
-            timerRef.current = null
-          }
+          clearTimer()
         }
       }
     },
-    [getSectionText, jumpSection, armTimer, playBlockFile, speakSystemBlock, stop, bookLanguage],
+    [
+      getSectionText,
+      jumpSection,
+      armTimer,
+      playBlockFile,
+      speakSystemBlock,
+      stop,
+      bookLanguage,
+      clearTimer,
+    ],
   )
 
   const play = useCallback((): void => {
@@ -516,11 +529,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     audioRef.current?.pause()
     window.speechSynthesis?.pause()
     setPhase('paused')
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-  }, [])
+    clearTimer()
+  }, [clearTimer])
 
   const toggle = useCallback((): void => {
     if (phaseRef.current === 'playing') pause()
@@ -538,17 +548,13 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     sectionTokenRef.current += 1
     stopFlagRef.current = true
     window.speechSynthesis?.cancel()
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.removeAttribute('src')
-      audioRef.current = null
-    }
+    releaseAudio()
     const delay = setTimeout(() => {
       setVoiceSwitching(false)
       void run(at)
     }, 80)
     return () => clearTimeout(delay)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     settings.narratorEdge,
     settings.narratorCloud,
@@ -607,7 +613,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     return () => {
       onHighlight?.(null)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [sentenceIndex, sentences, phase, settings.highlightMode, settings.highlightColor])
 
   /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
@@ -624,18 +630,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       sectionTokenRef.current += 1
       stopFlagRef.current = true
       window.speechSynthesis?.cancel()
-      if (audio) {
-        audio.pause()
-        audio.removeAttribute('src')
-        audioRef.current = null
-      }
+      releaseAudio()
       setPhase('loading')
       setTimeout(() => {
         void run(Math.max(0, Math.min(target, totalChars > 0 ? totalChars - 1 : target)))
       }, 60)
       void list
     },
-    [run, totalChars],
+    [run, totalChars, releaseAudio],
   )
 
   const jumpSentences = useCallback(
@@ -1047,10 +1049,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                   timerMinutes: Number(minutes) || 30,
                 }))
                 if (kind === 'minutes' && phaseRef.current !== 'idle') armTimer()
-                if (kind !== 'minutes' && timerRef.current) {
-                  clearTimeout(timerRef.current)
-                  timerRef.current = null
-                }
+                if (kind !== 'minutes') clearTimer()
               }}
             >
               <span className="tts-card-value">{timerLabel}</span>

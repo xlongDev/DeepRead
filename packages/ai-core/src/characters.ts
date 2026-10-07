@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod'
-import type { InsightChapter } from './insights'
+import { extractJsonObject, type InsightChapter } from './insights'
 
 export type { InsightChapter }
 
@@ -60,10 +60,5 @@ export function buildCharactersMessages(
 
 /** Parse + validate characters from raw model output. */
 export function parseCharacters(text: string): CharactersPayload {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
-  const candidate = (fenced?.[1] ?? text).trim()
-  const start = candidate.indexOf('{')
-  const end = candidate.lastIndexOf('}')
-  if (start === -1 || end <= start) throw new Error('模型输出中没有找到 JSON 对象')
-  return charactersSchema.parse(JSON.parse(candidate.slice(start, end + 1)))
+  return charactersSchema.parse(extractJsonObject(text))
 }

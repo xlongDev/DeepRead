@@ -14,6 +14,7 @@ import {
   AppError,
   COMMAND,
   ErrorCodes,
+  normalizeTags,
   type BookReadingStat,
   type CommandMap,
   type CommandName,
@@ -23,6 +24,7 @@ import {
   type ReaderStatePayload,
   type ReadingFont,
 } from '@deepread/shared'
+import { base64ToImageBlob } from './blob'
 import {
   addStoredStat,
   deleteStoredBook,
@@ -47,9 +49,7 @@ import {
   type StoredFont,
 } from './web-store'
 
-/** 与 Rust 侧 `set_tags` / `note.update` 的上限保持一致,免得两端规则漂移。 */
-const MAX_TAGS = 20
-const MAX_TAG_LENGTH = 32
+/** 与 Rust 侧 `note.update` 的上限保持一致,免得两端规则漂移。 */
 const MAX_NOTE_LENGTH = 4000
 /** 排行榜是给人看的,不是全量导出(与 Rust 的 limit 20 对齐)。 */
 const MAX_TOP_BOOKS = 20
@@ -61,21 +61,9 @@ const MAX_CARDS_PER_ADD = 200
 const CARD_SOURCES: readonly string[] = ['highlight', 'quiz', 'mistake']
 
 function notFound(what: string): AppError {
-  // `systemValidation`:书 / 批注不存在,本质是调用方给了一个无效的 key。
-  // (Rust 侧有 STORAGE_IO,但 TS 的 ErrorCodes 目录里还没有,不为这个新增码。)
+  // `systemValidation`:书 / 批注不存在,本质是调用方给了一个无效的 key ——
+  // 就算目录里现在有 STORAGE_IO,这也仍然是校验错误,不是存储 IO。
   return new AppError(ErrorCodes.systemValidation, what, { retryable: false })
-}
-
-/** 与 Rust `set_tags` 同一套规范化:trim、丢空、去重、单标签与总量上限。 */
-function normalizeTags(tags: readonly string[]): readonly string[] {
-  const result: string[] = []
-  for (const raw of tags) {
-    const tag = raw.trim().slice(0, MAX_TAG_LENGTH)
-    if (tag === '' || result.includes(tag)) continue
-    result.push(tag)
-    if (result.length >= MAX_TAGS) break
-  }
-  return result
 }
 
 /** 进度是 states join 出来的,不落 books —— 两处存同一个事实迟早会不一致。 */
@@ -124,25 +112,6 @@ function fontRowToReadingFont(font: StoredFont): ReadingFont {
       return created
     })()
   return { id: font.id, name: font.name, fileName: font.fileName, path: url }
-}
-
-/** base64 → Blob。封面要能喂给 <img>,所以得嗅出 MIME —— 空 type 的 Blob 不渲染。 */
-function base64ToImageBlob(base64: string): Blob {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return new Blob([bytes], { type: sniffImageType(bytes) })
-}
-
-function sniffImageType(bytes: Uint8Array): string {
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg'
-  if (bytes[0] === 0x89 && bytes[1] === 0x50) return 'image/png'
-  if (bytes[0] === 0x47 && bytes[1] === 0x49) return 'image/gif'
-  // RIFF....WEBP
-  if (bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42) return 'image/webp'
-  return 'image/png'
 }
 
 function toNoteEntry(

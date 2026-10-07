@@ -21,6 +21,7 @@ import {
   type LibraryBook,
   type ReaderStatePayload,
 } from '@deepread/shared'
+import { base64ToBlob, blobToBase64 } from './blob'
 
 const DB_NAME = 'deepread-web'
 /**
@@ -405,47 +406,11 @@ export interface BackupSnapshot {
   readonly checksum: string
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      resolve(result.slice(result.indexOf(',') + 1)) // 去掉 "data:*;base64,"
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('读取失败'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-/** 反解:备份里没有 MIME,统一按二进制 Blob 还原(字节本身才是有用的)。 */
-export function base64ToBlob(base64: string): Blob {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return new Blob([bytes])
-}
-
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('')
-}
-
-/**
- * 浏览器端落盘的通用做法:`<a download>`。
- * 与 `notes-view.ts` 里导批注用的是同一招 —— 那边文件名写死了「批注」,
- * 这里要能指定,所以自己有一份。
- */
-export function downloadText(fileName: string, text: string, mime: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = fileName
-  anchor.click()
-  URL.revokeObjectURL(url)
 }
 
 /** 导出整个库为一份 JSON 文本(调用方负责落盘 / 下载)。 */

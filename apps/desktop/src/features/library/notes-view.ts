@@ -4,6 +4,7 @@
  */
 
 import type { NoteEntry } from '@deepread/shared'
+import { downloadBlob } from '../../lib/download'
 import { shelfTitle } from './shelf-view'
 
 export interface NoteGroup {
@@ -98,20 +99,12 @@ export function safeFileName(title: string): string {
   return cleaned === '' ? '批注' : cleaned
 }
 
-/**
- * 把 Markdown 落成 .md 下载。Blob + a[download] —— 浏览器预览用。
- *
- * ⚠️ 桌面端不要走这条:WebView 默认拦截 `<a download>`,用户点了什么都不会
- * 发生(这正是「导出图标没反应」的根因)。桌面端走 `saveNoteMarkdown`。
- */
+/** 把 Markdown 落成 .md 下载(浏览器预览用;桌面端走 `saveNoteMarkdown`)。 */
 export function downloadNoteMarkdown(title: string, markdown: string): void {
-  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${safeFileName(title)}-批注.md`
-  anchor.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(
+    `${safeFileName(title)}-批注.md`,
+    new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
+  )
 }
 
 /**

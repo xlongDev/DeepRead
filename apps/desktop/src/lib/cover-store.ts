@@ -12,6 +12,7 @@
 
 import { invokeCommand } from './ipc'
 import { convertFileSrc } from './book-import'
+import { blobToBase64 } from './blob'
 
 /** Cached cover as a usable image URL, or null when it still has to be extracted. */
 export async function readCachedCover(hash: string): Promise<string | null> {
@@ -24,18 +25,5 @@ export async function readCachedCover(hash: string): Promise<string | null> {
 /** Persist a freshly extracted cover (input is the object URL from extractCover). */
 export async function writeCachedCover(hash: string, objectUrl: string): Promise<void> {
   const blob = await fetch(objectUrl).then((response) => response.blob())
-  await invokeCommand('library.cover.put', { bookHash: hash, data: await toBase64(blob) })
-}
-
-function toBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      // Strip the "data:<type>;base64," prefix — Rust wants raw base64.
-      resolve(result.slice(result.indexOf(',') + 1))
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(blob)
-  })
+  await invokeCommand('library.cover.put', { bookHash: hash, data: await blobToBase64(blob) })
 }
