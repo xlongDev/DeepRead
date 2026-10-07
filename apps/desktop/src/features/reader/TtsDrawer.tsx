@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -134,6 +135,35 @@ export interface TtsDrawerHandle {
   readonly stop: () => void
 }
 
+/** 歌词页的一行。memo 化:600 句的长章里,切句只重画两行(current/past 翻转),
+ *  其余行 props 全等直接跳过 —— 60ms ticker 时代它们每帧都被重建。 */
+const SentenceItem = memo(function SentenceItem({
+  text,
+  start,
+  current,
+  past,
+  onSeek,
+}: {
+  readonly text: string
+  readonly start: number
+  readonly current: boolean
+  readonly past: boolean
+  readonly onSeek: (start: number) => void
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={`tts-sentence-item${current ? ' is-current' : ''}${past ? ' is-past' : ''}`}
+        onClick={() => onSeek(start)}
+        aria-current={current}
+      >
+        {text}
+      </button>
+    </li>
+  )
+})
+
 export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function TtsDrawer(
   {
     bookTitle,
@@ -187,6 +217,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const sectionTokenRef = useRef(0)
   // 首挂标记:热切换 effect 用它跳过首次执行。
   const voiceSettingsProbe = useRef(false)
+  // 60ms ticker 的直写出口:进度条/时钟绕过 React 更新(见 paintCharPos),
+  // React 状态 charPos 只在切句时提交,长章不再整抽屉重渲染。
+  const miniFillRef = useRef<HTMLSpanElement | null>(null)
+  const seekInputRef = useRef<HTMLInputElement | null>(null)
+  const elapsedClockRef = useRef<HTMLSpanElement | null>(null)
+  const remainingClockRef = useRef<HTMLSpanElement | null>(null)
+  /** 已提交进 state 的句下标:applyCharPos 用它判「跨句了没有」。 */
+  const committedSentenceRef = useRef(0)
 
   /** 拆音频:暂停、断 src(释放已解码缓冲)、丢引用 —— 各处 teardown 共用。 */
   const releaseAudio = useCallback((): void => {
@@ -204,6 +242,37 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     timerRef.current = null
   }, [])
 
+  /** 进度条与时钟的 DOM 直写:60ms 频率下绕开 React,布局抖动只有这几
+   *  个节点;React 重渲染面收窄到「切句」(见 applyCharPos)。出口随形态
+   *  只挂一套(迷你条 or 完整抽屉),null 检查兜住切换瞬间。 */
+  const paintCharPos = useCallback((pos: number): void => {
+    const list = sentencesRef.current
+    const total = sumChars(list)
+    const progress = total > 0 ? Math.min(1, pos / total) : 0
+    if (miniFillRef.current) miniFillRef.current.style.width = `${progress * 100}%`
+    if (seekInputRef.current) seekInputRef.current.value = String(Math.round(progress * 1000))
+    const cps = CHARS_PER_SECOND * settingsRef.current.rate
+    if (elapsedClockRef.current)
+      elapsedClockRef.current.textContent = formatClock(total > 0 ? pos / cps : 0)
+    if (remainingClockRef.current)
+      remainingClockRef.current.textContent = formatClock(total > 0 ? (total - pos) / cps : 0)
+  }, [])
+
+  /** charPos 的唯一写入口:ref 是真源(播放循环比渲染活得久),进度条直写,
+   *  state 只在跨句时提交一次 —— is-current、高亮广播、滚动居中都由它驱动。 */
+  const applyCharPos = useCallback(
+    (pos: number, force = false): void => {
+      charPosRef.current = pos
+      paintCharPos(pos)
+      const index = sentenceIndexAt(sentencesRef.current, pos)
+      if (force || index !== committedSentenceRef.current) {
+        committedSentenceRef.current = index
+        setCharPos(pos)
+      }
+    },
+    [paintCharPos],
+  )
+
   useEffect(() => {
     settingsRef.current = settings
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
@@ -215,9 +284,6 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   useEffect(() => {
     voicesRef.current = voices
   }, [voices])
-  useEffect(() => {
-    charPosRef.current = charPos
-  }, [charPos])
   useEffect(() => {
     setSectionTitle(sectionLabel)
   }, [sectionLabel])
@@ -291,9 +357,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     setPhase('idle')
     setSentences([])
     sentencesRef.current = []
-    setCharPos(0)
-    charPosRef.current = 0
-  }, [clearTimer, releaseAudio])
+    applyCharPos(0, true)
+  }, [clearTimer, releaseAudio, applyCharPos])
 
   useImperativeHandle(ref, () => ({ stop }), [stop])
 
@@ -329,7 +394,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           }
           playingRef.current = { block, duration: audio.duration || 0 }
           // 立即推一次,避免首个 ticker 之前是 0。
-          setCharPos(block.start + Math.round((seekRatio > 0 ? seekRatio : 0) * block.text.length))
+          applyCharPos(
+            block.start + Math.round((seekRatio > 0 ? seekRatio : 0) * block.text.length),
+            true,
+          )
         }
         audio.onloadedmetadata = () => applySeek()
         // metadata 在某些环境下不会触发,保底用 canplay。
@@ -351,9 +419,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         })
       })
       playingRef.current = null
-      setCharPos(block.start + block.text.length)
+      applyCharPos(block.start + block.text.length, true)
     },
-    [],
+    [applyCharPos],
   )
 
   /** 系统引擎:整块 utterance + 估算时钟推进字符位置。 */
@@ -368,7 +436,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     const clock = setInterval(() => {
       if (stopFlagRef.current) return
       elapsed += step
-      setCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
+      applyCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
     }, step)
     try {
       await new Promise<void>((resolve, reject) => {
@@ -385,8 +453,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     } finally {
       clearInterval(clock)
     }
-    setCharPos(block.start + chars)
-  }, [])
+    applyCharPos(block.start + chars)
+  }, [applyCharPos])
 
   /** 从 startChar 起连播整章;章末按连读开关与定时模式决定去留。 */
   const run = useCallback(
@@ -406,6 +474,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           previous = text
           const sentenceList = splitSentencesWithOffsets(text)
           sentencesRef.current = sentenceList
+          // 新一轮句子计划:提交判据作废,第一帧 applyCharPos 必须落 state,
+          // 否则 charPos state 还停留在上一章的位置,is-current 会标错行。
+          committedSentenceRef.current = -1
           setSentences(sentenceList)
           setPhase('playing')
           const blocks = splitChapterBlocks(text, sentenceList)
@@ -437,7 +508,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             if (stopFlagRef.current || sectionTokenRef.current !== token) return
             const block = blocks[cursor]!
             const seekRatio = blockSeekRatio(block, startChar)
-            setCharPos(Math.max(block.start, startChar))
+            applyCharPos(Math.max(block.start, startChar))
             if (settingsRef.current.engine === 'system') {
               await speakSystemBlock(block)
               cursor = locateBlock(blocks, block.start + block.text.length)
@@ -494,8 +565,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           setPhase('idle')
           setSentences([])
           sentencesRef.current = []
-          setCharPos(0)
-          charPosRef.current = 0
+          applyCharPos(0, true)
           clearTimer()
         }
       }
@@ -509,6 +579,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       stop,
       bookLanguage,
       clearTimer,
+      applyCharPos,
     ],
   )
 
@@ -528,9 +599,11 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     if (phaseRef.current !== 'playing') return
     audioRef.current?.pause()
     window.speechSynthesis?.pause()
+    // 强制提交精确位置:暂停后 ticker 停转,进度条/时钟只能靠 state 初值。
+    applyCharPos(charPosRef.current, true)
     setPhase('paused')
     clearTimer()
-  }, [clearTimer])
+  }, [clearTimer, applyCharPos])
 
   const toggle = useCallback((): void => {
     if (phaseRef.current === 'playing') pause()
@@ -569,7 +642,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
 
   /** 主动 ticker:每 60ms 用 audio.currentTime 推 charPos,
    *  比 ontimeupdate 的 ~250ms 浏览器默认频率快 4 倍,
-   *  句级高亮跟手更紧。playingRef 由 playBlockFile 设置/清除。 */
+   *  句级高亮跟手更紧。playingRef 由 playBlockFile 设置/清除。
+   *  tick 内不碰 React 状态:进度条/时钟走 paintCharPos 直写,
+   *  只有跨句时 applyCharPos 才提交一次 state。 */
   useEffect(() => {
     const tick = setInterval(() => {
       const playing = playingRef.current
@@ -577,13 +652,13 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       if (!playing || !audio || audio.paused) return
       if (audio.duration <= 0) return
       const ratio = audio.currentTime / audio.duration
-      setCharPos(
+      applyCharPos(
         playing.block.start +
           Math.min(playing.block.text.length, Math.round(ratio * playing.block.text.length)),
       )
     }, 60)
     return () => clearInterval(tick)
-  }, [])
+  }, [applyCharPos])
 
   const totalChars = useMemo(() => sumChars(sentences), [sentences])
 
@@ -639,6 +714,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     },
     [run, totalChars, releaseAudio],
   )
+
+  /** 句子行的 seek 走稳定引用:行已 memo 化,onClick 每渲染换新会整体失效。 */
+  const seekSentence = useCallback((start: number): void => seekToChar(start), [seekToChar])
 
   const jumpSentences = useCallback(
     (delta: number): void => {
@@ -731,6 +809,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           <span className="tts-mini-title">{bookTitle}</span>
           <span className="tts-mini-progress">
             <span
+              ref={miniFillRef}
               className="tts-mini-progress-fill"
               style={{ width: `${sentenceProgress * 100}%` }}
             />
@@ -895,18 +974,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             ) : (
               <ol className="tts-sentence-list" ref={sentenceListRef}>
                 {sentences.map((sentence, index) => (
-                  <li key={sentence.start}>
-                    <button
-                      type="button"
-                      className={`tts-sentence-item${index === sentenceIndex ? ' is-current' : ''}${
-                        index < sentenceIndex ? ' is-past' : ''
-                      }`}
-                      onClick={() => seekToChar(sentence.start)}
-                      aria-current={index === sentenceIndex}
-                    >
-                      {sentence.text}
-                    </button>
-                  </li>
+                  <SentenceItem
+                    key={sentence.start}
+                    text={sentence.text}
+                    start={sentence.start}
+                    current={index === sentenceIndex}
+                    past={index < sentenceIndex}
+                    onSeek={seekSentence}
+                  />
                 ))}
               </ol>
             )}
@@ -923,8 +998,11 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           </div>
 
           <div className="tts-progress">
-            <span className="tts-clock">{formatClock(elapsed)}</span>
+            <span ref={elapsedClockRef} className="tts-clock">
+              {formatClock(elapsed)}
+            </span>
             <input
+              ref={seekInputRef}
               type="range"
               className="tts-seek"
               min={0}
@@ -937,7 +1015,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 seekToChar(Math.round(fraction * totalChars))
               }}
             />
-            <span className="tts-clock">-{formatClock(remaining)}</span>
+            <span ref={remainingClockRef} className="tts-clock">
+              -{formatClock(remaining)}
+            </span>
           </div>
 
           <div className="tts-transport">

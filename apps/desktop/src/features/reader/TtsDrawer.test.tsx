@@ -276,6 +276,26 @@ describe('待机与播放', () => {
   })
 })
 
+describe('渲染优化(60ms ticker 不触发整抽屉重渲染)', () => {
+  it('句内推进:进度条与时钟经 DOM 直写更新,当前句不翻转', async () => {
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    const seek = screen.getByRole('slider', { name: '本章播放进度' }) as HTMLInputElement
+    const elapsed = document.querySelector('.tts-clock')!
+    expect(seek.value).toBe('0')
+
+    // 半块处仍在第一句内:React 状态此时不应提交,但进度条/时钟必须走直写前进。
+    FakeAudio.current.currentTime = 5
+    await advance(60)
+    expect(seek.value).not.toBe('0')
+    expect(elapsed.textContent).not.toBe('0:00')
+    expect(currentSentence()).toBe(SENTENCE_1)
+  })
+})
+
 describe('暂停与继续', () => {
   it('暂停拆不动合成进度;继续只 audio.play(),不重新合成', async () => {
     const props = makeProps()
