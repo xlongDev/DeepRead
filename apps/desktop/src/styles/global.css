@@ -5177,3 +5177,26 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
+
+/* ---- 长列表渲染优化(B1.2)----
+ * 目录树、书内搜索结果、TTS 句子列表、笔记卡片都是可达几百上千条的滚动
+ * 列表。content-visibility: auto 让视口外的条目跳过布局与绘制,首帧与滚动
+ * 都只付出可见部分的开销;contain-intrinsic-size 的 auto 前缀会记住条目
+ * 实际渲染过的尺寸,首估尺寸(无 auto 的那个值)只需近似,滚动条不跳。
+ * 零新依赖 —— 不引虚拟化库,不与 ADR-0001 冲突;实测不够再走 react-window 评估。 */
+
+.toc-item,
+.search-result {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 38px;
+}
+
+.tts-sentence-list li {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
+}
+
+.note-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
