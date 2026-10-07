@@ -34,6 +34,7 @@ import {
   StorageQuotaError,
 } from '../../lib/web-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
+import { mapWithConcurrency } from '../../lib/pool'
 import { loadNotes } from '../../lib/notes'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
@@ -78,6 +79,16 @@ const coverAttempted = new Set<string>()
 /** 元数据已处理过的书:格式不带元数据(txt/md/fb2/cbz)、或已经解析并回写完毕。 */
 const metaAttempted = new Set<string>()
 const META_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
+
+/** 这本书还欠元数据:判据是「还有字段空着」,用户手改过的字段不该被覆盖。 */
+function needsMetaFor(book: ShelfBook): boolean {
+  return (
+    book.displayName === null ||
+    book.author === null ||
+    book.publisher === null ||
+    book.language === null
+  )
+}
 
 /** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
@@ -357,6 +368,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   // No cancellation: a books refresh (e.g. progress hydration) cancels this
   // effect mid-flight, and dropping the in-flight cover would leave that book
   // coverless — the next run skips it via coverAttempted.
+  //
+  // B1.3 并发化:逐本串行 await 在百本书架上肉眼可见地慢。这里给一个小并发池
+  // (读文件/解 zip/渲染 PDF 首页都是本地 IO,无界并发只会造内存尖峰),元数据
+  // 与封面的结果各攒一张 patch 表,收口一次提交 —— 100 本书也只触发 O(1) 次
+  // setState,而不是每本两次。attempted 标记仍在首个 await 之前落位,两次
+  // 并发跑同一个 effect(books 变化触发)不会重复提取同一本。
   useEffect(() => {
     if (!libraryLoaded) return
     // Sync already-cached covers immediately: remounts render without flicker.
@@ -368,86 +385,106 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     if (cachedNow.size > 0) setCovers((current) => new Map([...current, ...cachedNow]))
 
     void (async () => {
-      for (const book of books) {
-        if (book.format === 'unknown') continue
-        // 浏览器模式从 IndexedDB 里的字节生成 object URL('' = 字节已不在库里)。
-        const bookUrl = isTauriRuntime()
-          ? convertFileSrc(book.path)
-          : await browserBookUrl(book.hash)
-        if (!isTauriRuntime() && bookUrl === '') continue
+      const metaPending = (book: ShelfBook): boolean =>
+        needsMetaFor(book) && !metaAttempted.has(book.hash)
+      const coverPending = (book: ShelfBook): boolean => !coverAttempted.has(book.hash)
+      // 只为还剩活儿的书取 URL:浏览器端这一步要把整本书从 IndexedDB 读出来。
+      const jobs = books.filter(
+        (book) => book.format !== 'unknown' && (metaPending(book) || coverPending(book)),
+      )
+      const urls = await mapWithConcurrency(jobs, 6, async (book) =>
+        isTauriRuntime() ? convertFileSrc(book.path) : await browserBookUrl(book.hash),
+      )
+
+      const metaPatches = new Map<string, ShelfBook>()
+      const coverPatches = new Map<string, string>()
+
+      await mapWithConcurrency(jobs, 6, async (book, index) => {
+        const bookUrl = urls[index] ?? ''
+        if (!isTauriRuntime() && bookUrl === '') return
 
         // 元数据每本只解析一次,解析完就回写 —— 书架才不会永远顶着下载站的
         // 文件名与空作者。判据是「还有字段空着」而不是「标题为空」:用户手改过
         // 标题的书,作者/出版社同样该被补上。
-        const needsMeta =
-          book.displayName === null ||
-          book.author === null ||
-          book.publisher === null ||
-          book.language === null
-        if (needsMeta && !metaAttempted.has(book.hash)) {
+        if (metaPending(book)) {
           if (!META_FORMATS.includes(book.format)) {
             metaAttempted.add(book.hash)
           } else {
             metaAttempted.add(book.hash)
-            const meta = await extractMetadata(
-              bookUrl,
-              book.format as Parameters<typeof extractMetadata>[1],
-            )
-            const patch = {
-              // 只填它还空着的字段:用户手填过的值不该被书里的元数据盖掉。
-              displayName: book.displayName ?? meta.title,
-              author: book.author ?? meta.author,
-              publisher: book.publisher ?? meta.publisher,
-              language: book.language ?? meta.language,
-            }
-            if (
-              patch.displayName === book.displayName &&
-              patch.author === book.author &&
-              patch.publisher === book.publisher &&
-              patch.language === book.language
-            ) {
-              // 书里什么都没有:下次进书架再试一遍(可能是文件当时不可读)。
-              metaAttempted.delete(book.hash)
-            } else if (isTauriRuntime()) {
-              try {
-                const response = await invokeCommand('library.info.set', {
-                  bookHash: book.hash,
-                  subtitle: book.subtitle,
-                  ...patch,
-                })
-                setBooks((current) =>
-                  current.map((item) => (item.hash === book.hash ? response.book : item)),
-                )
-              } catch {
-                metaAttempted.delete(book.hash)
-              }
-            } else {
-              setBooks((current) =>
-                current.map((item) => (item.hash === book.hash ? { ...item, ...patch } : item)),
+            try {
+              const meta = await extractMetadata(
+                bookUrl,
+                book.format as Parameters<typeof extractMetadata>[1],
               )
+              const patch = {
+                // 只填它还空着的字段:用户手填过的值不该被书里的元数据盖掉。
+                displayName: book.displayName ?? meta.title,
+                author: book.author ?? meta.author,
+                publisher: book.publisher ?? meta.publisher,
+                language: book.language ?? meta.language,
+              }
+              if (
+                patch.displayName === book.displayName &&
+                patch.author === book.author &&
+                patch.publisher === book.publisher &&
+                patch.language === book.language
+              ) {
+                // 书里什么都没有:下次进书架再试一遍(可能是文件当时不可读)。
+                metaAttempted.delete(book.hash)
+              } else if (isTauriRuntime()) {
+                try {
+                  const response = await invokeCommand('library.info.set', {
+                    bookHash: book.hash,
+                    subtitle: book.subtitle,
+                    ...patch,
+                  })
+                  metaPatches.set(book.hash, response.book)
+                } catch {
+                  metaAttempted.delete(book.hash)
+                }
+              } else {
+                metaPatches.set(book.hash, { ...book, ...patch })
+              }
+            } catch {
+              // 单本解析失败不拖垮整批;解除标记,下一轮书架重建会再试。
+              metaAttempted.delete(book.hash)
             }
           }
         }
 
-        if (coverAttempted.has(book.hash)) continue
-        if (coverCache.has(book.hash)) {
-          setCovers((current) => new Map(current).set(book.hash, coverCache.get(book.hash)!))
-          continue
+        if (coverAttempted.has(book.hash)) return
+        const cachedCover = coverCache.get(book.hash)
+        if (cachedCover) {
+          coverPatches.set(book.hash, cachedCover)
+          return
         }
         coverAttempted.add(book.hash)
-        // Already extracted in an earlier run? Then this is just a file read.
-        const cached = await readCachedCover(book.hash).catch(() => null)
-        const cover =
-          cached ?? (await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1]))
-        if (cover) {
-          coverCache.set(book.hash, cover)
-          setCovers((current) => new Map(current).set(book.hash, cover))
-          if (cached === null) void writeCachedCover(book.hash, cover).catch(() => {})
-        } else {
-          // Null is also what a transient failure returns; un-mark so the next
-          // shelf rebuild retries instead of caching the failure for the run.
+        try {
+          // Already extracted in an earlier run? Then this is just a file read.
+          const cached = await readCachedCover(book.hash).catch(() => null)
+          const cover =
+            cached ??
+            (await extractCover(bookUrl, book.format as Parameters<typeof extractCover>[1]))
+          if (cover) {
+            coverCache.set(book.hash, cover)
+            coverPatches.set(book.hash, cover)
+            if (cached === null) void writeCachedCover(book.hash, cover).catch(() => {})
+          } else {
+            // Null is also what a transient failure returns; un-mark so the next
+            // shelf rebuild retries instead of caching the failure for the run.
+            coverAttempted.delete(book.hash)
+          }
+        } catch {
+          // 同上:失败不缓存,下一轮书架重建再试。
           coverAttempted.delete(book.hash)
         }
+      })
+
+      if (metaPatches.size > 0) {
+        setBooks((current) => current.map((item) => metaPatches.get(item.hash) ?? item))
+      }
+      if (coverPatches.size > 0) {
+        setCovers((current) => new Map([...current, ...coverPatches]))
       }
     })()
   }, [books, libraryLoaded])

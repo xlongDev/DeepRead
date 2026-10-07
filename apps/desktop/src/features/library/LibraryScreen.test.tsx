@@ -21,6 +21,7 @@ import {
 import { LibraryScreen } from './LibraryScreen'
 import { invokeCommand } from '../../lib/ipc'
 import { readCachedCover } from '../../lib/cover-store'
+import { extractCover } from '@deepread/reader-adapter'
 import { open } from '@tauri-apps/plugin-dialog'
 
 vi.mock('../../lib/ipc', () => ({
@@ -1283,5 +1284,31 @@ describe('LibraryScreen 导入', () => {
     await renderLibrary()
     fireEvent.click(screen.getByLabelText('导入书籍'))
     await waitFor(() => expect(openMock).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('封面提取管线(B1.3 并发化)', () => {
+  /** 手动 resolve 的 Promise:把「第一本还没回来」这个条件握在测试手里。 */
+  function defer(): { promise: Promise<string>; resolve: (url: string) => void } {
+    let resolve!: (url: string) => void
+    const promise = new Promise<string>((done) => {
+      resolve = done
+    })
+    return { promise, resolve }
+  }
+
+  it('多本书的封面提取并发发起:第一本悬而未决时,后续调用已经发出', async () => {
+    // 第一本被门闩拦住;若实现退回逐本串行,第二本的调用永远等不到,本用例红。
+    const gate = defer()
+    const extractMock = vi.mocked(extractCover)
+    extractMock.mockImplementationOnce(() => gate.promise)
+
+    await renderLibrary(BOOKS)
+    await waitFor(() => expect(extractMock.mock.calls.length).toBeGreaterThan(1))
+
+    gate.resolve('blob:first-cover')
+    await waitFor(() => {
+      expect(document.querySelector('img[src="blob:first-cover"]')).not.toBeNull()
+    })
   })
 })
