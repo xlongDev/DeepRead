@@ -40,14 +40,15 @@ pub struct AiProviderConfig {
     pub tts_model: Option<String>,
 }
 
-fn load_providers(conn: &Connection) -> Vec<AiProviderConfig> {
-    let mut statement = match conn.prepare(
-        "SELECT id, name, base_url, model, embedding_model, tts_model FROM ai_providers ORDER BY rowid",
-    ) {
-        Ok(statement) => statement,
-        Err(_) => return Vec::new(),
-    };
-    statement
+fn load_providers(conn: &Connection) -> Result<Vec<AiProviderConfig>, AppError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, name, base_url, model, embedding_model, tts_model FROM ai_providers ORDER BY rowid",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to prepare provider query").with_cause(err)
+        })?;
+    let rows = statement
         .query_map([], |row| {
             Ok(AiProviderConfig {
                 id: row.get(0)?,
@@ -58,8 +59,12 @@ fn load_providers(conn: &Connection) -> Vec<AiProviderConfig> {
                 tts_model: row.get(5)?,
             })
         })
-        .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default()
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to query providers").with_cause(err)
+        })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to read provider row").with_cause(err)
+    })
 }
 
 fn upsert_provider(conn: &Connection, provider: &AiProviderConfig) -> Result<(), AppError> {
@@ -159,7 +164,7 @@ pub fn ai_config_list(
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
     Ok(AiConfigListResponse {
-        providers: load_providers(&conn),
+        providers: load_providers(&conn)?,
     })
 }
 
@@ -822,12 +827,12 @@ mod tests {
             embedding_model: None,
             tts_model: None,
         };
-        assert!(load_providers(&conn).is_empty());
+        assert!(load_providers(&conn).unwrap().is_empty());
         upsert_provider(&conn, &provider).unwrap();
         // re-upsert is a no-op duplicate
         upsert_provider(&conn, &provider).unwrap();
-        assert_eq!(load_providers(&conn), vec![provider.clone()]);
+        assert_eq!(load_providers(&conn).unwrap(), vec![provider.clone()]);
         assert!(remove_provider_row(&conn, &provider.id).unwrap());
-        assert!(load_providers(&conn).is_empty());
+        assert!(load_providers(&conn).unwrap().is_empty());
     }
 }

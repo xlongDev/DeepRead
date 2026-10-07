@@ -103,10 +103,13 @@ export function useAiProviders() {
       .then((response) => {
         setProviders(response?.providers ?? [])
         setActiveId((current) => current ?? response?.providers?.[0]?.id ?? null)
+        setError(null)
         setLoaded(true)
       })
-      .catch(() => {
-        // Config list is optional on first paint; the config form retries.
+      .catch((listError) => {
+        // 列表拉取失败不再静默成空列表:设置页要能看见「为什么没有 Provider」,
+        // 而不是把数据库错误伪装成「你还没配置过」。
+        setError(toAppError(listError).message)
         setLoaded(true)
       })
   }, [])
