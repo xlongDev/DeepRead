@@ -318,7 +318,7 @@ pub const MAX_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 /// Validate the artifact kind against the protocol enum.
 pub fn validate_artifact_kind(kind: &str) -> Result<(), AppError> {
     match kind {
-        "summary" | "outline" | "notes" | "characters" => Ok(()),
+        "summary" | "outline" | "notes" | "characters" | "timeline" | "concepts" => Ok(()),
         other => Err(
             AppError::new(ErrorCode::SystemValidation, "未知的 artifact 类型")
                 .with_context("kind", Value::String(other.to_string())),
@@ -840,6 +840,17 @@ mod tests {
         assert_eq!(load_artifact(&conn, hash, "notes").unwrap(), None);
         assert!(store_artifact(&conn, hash, "evil", &json!({}), "t").is_err());
         assert!(load_artifact(&conn, "../../evil", "summary").is_err());
+        // B7 graph kinds round-trip through the same validation.
+        store_artifact(&conn, hash, "timeline", &json!({"events": []}), "t").unwrap();
+        assert_eq!(
+            load_artifact(&conn, hash, "timeline").unwrap(),
+            Some(StoredArtifact {
+                payload: json!({"events": []}),
+                created_at: "t".into(),
+            })
+        );
+        store_artifact(&conn, hash, "concepts", &json!({"concepts": []}), "t").unwrap();
+        assert!(load_artifact(&conn, hash, "concepts").unwrap().is_some());
     }
 
     #[test]

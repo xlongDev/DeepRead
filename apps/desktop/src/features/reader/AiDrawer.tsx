@@ -3,19 +3,28 @@ import { PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
 import { toAppError, type AiIndexPayload } from '@deepread/shared'
 import {
   buildChatBody,
+  buildConceptsMessages,
   buildOutlineMessages,
   buildRagChunks,
   buildSummaryMessages,
+  buildTimelineMessages,
   buildRagMessages,
   chatEndpoint,
   citationLabels,
+  conceptsSchema,
   createSseParser,
   extractDelta,
+  INSIGHT_EXCERPT_CHARS,
+  INSIGHT_MAX_CHAPTERS,
   retrieve,
+  timelineSchema,
   type ChatMessage,
+  type ConceptsPayload,
+  type GraphSpec,
   type OutlineInsight,
   type RetrievedChunk,
   type SummaryInsight,
+  type TimelinePayload,
 } from '@deepread/ai-core'
 import {
   applyCorrections,
@@ -27,10 +36,12 @@ import {
   conversionRuleLabel,
   outlineInsightSchema,
   parseCharacters,
+  parseConcepts,
   parseConversions,
   parseCorrections,
   parseOutlineInsight,
   parseSummaryInsight,
+  parseTimeline,
   summaryInsightSchema,
   type AiCorrection,
   type CharactersPayload,
@@ -87,7 +98,10 @@ export function AiDrawer({
   const [outline, setOutline] = useState<OutlineInsight | null>(null)
   const [insightPhase, setInsightPhase] = useState<'idle' | 'streaming'>('idle')
   const [characters, setCharacters] = useState<CharactersPayload | null>(null)
-  const [graphOpen, setGraphOpen] = useState(false)
+  const [timeline, setTimeline] = useState<TimelinePayload | null>(null)
+  const [concepts, setConcepts] = useState<ConceptsPayload | null>(null)
+  /** 打开的图谱(null = 关着):三种洞察共用同一个视图。 */
+  const [graphSpec, setGraphSpec] = useState<GraphSpec | null>(null)
   const [aiCorrections, setAiCorrections] = useState<{
     proposals: readonly AiCorrection[]
     accepted: ReadonlySet<string>
@@ -173,7 +187,8 @@ export function AiDrawer({
   // Load persisted insights once per drawer open.
   useEffect(() => {
     let cancelled = false
-    for (const kind of ['summary', 'outline', 'characters'] as const) {
+    const kinds = ['summary', 'outline', 'characters', 'timeline', 'concepts'] as const
+    for (const kind of kinds) {
       const read = isTauriRuntime()
         ? invokeCommand('ai.artifact.get', { bookHash, kind }).then((response) =>
             response.payload === null
@@ -186,7 +201,9 @@ export function AiDrawer({
           if (cancelled || stored === null) return
           if (kind === 'summary') setSummary(summaryInsightSchema.parse(stored.payload))
           else if (kind === 'outline') setOutline(outlineInsightSchema.parse(stored.payload))
-          else setCharacters(charactersSchema.parse(stored.payload))
+          else if (kind === 'characters') setCharacters(charactersSchema.parse(stored.payload))
+          else if (kind === 'timeline') setTimeline(timelineSchema.parse(stored.payload))
+          else setConcepts(conceptsSchema.parse(stored.payload))
         })
         .catch(() => {
           // Corrupted/stale artifacts are ignored; regeneration overwrites.
@@ -246,16 +263,36 @@ export function AiDrawer({
     [activeId],
   )
 
+  // Persist an insight artifact: Tauri stores per book hash (Rust, covered by
+  // its tests); browser sessions keep it in memory for the drawer's lifetime.
+  const persistArtifact = useCallback(
+    async (kind: string, payload: Record<string, unknown>): Promise<void> => {
+      if (isTauriRuntime()) {
+        await invokeCommand('ai.artifact.set', { bookHash, kind, payload })
+      } else {
+        browserArtifactsRef.current.set(`${bookHash}-${kind}`, {
+          payload,
+          createdAt: new Date().toISOString(),
+        })
+      }
+    },
+    [bookHash],
+  )
+
   // Generate a structured insight via the streaming chat path; validates the
   // assembled JSON with zod before persisting (spec §118).
   const generateInsight = useCallback(
-    async (kind: 'summary' | 'outline'): Promise<void> => {
+    async (kind: 'summary' | 'outline' | 'timeline' | 'concepts'): Promise<void> => {
       if (insightPhase === 'streaming' || sections.length === 0) return
       const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
       const insightMessages =
         kind === 'summary'
           ? buildSummaryMessages(sections, title)
-          : buildOutlineMessages(sections, title)
+          : kind === 'outline'
+            ? buildOutlineMessages(sections, title)
+            : kind === 'timeline'
+              ? buildTimelineMessages(sections, title)
+              : buildConceptsMessages(sections, title)
       setInsightPhase('streaming')
       setError(null)
       let full = ''
@@ -293,20 +330,22 @@ export function AiDrawer({
           }
         }
         parser.end()
-        const insight = kind === 'summary' ? parseSummaryInsight(full) : parseOutlineInsight(full)
-        const payload = insight as unknown as Record<string, unknown>
-        if (isTauriRuntime()) {
-          await invokeCommand('ai.artifact.set', { bookHash, kind, payload })
-        } else {
-          browserArtifactsRef.current.set(`${bookHash}-${kind}`, {
-            payload,
-            createdAt: new Date().toISOString(),
-          })
-        }
         if (kind === 'summary') {
-          setSummary(insight as SummaryInsight)
+          const insight = parseSummaryInsight(full)
+          await persistArtifact(kind, insight as unknown as Record<string, unknown>)
+          setSummary(insight)
+        } else if (kind === 'outline') {
+          const insight = parseOutlineInsight(full)
+          await persistArtifact(kind, insight as unknown as Record<string, unknown>)
+          setOutline(insight)
+        } else if (kind === 'timeline') {
+          const insight = parseTimeline(full)
+          await persistArtifact(kind, insight as unknown as Record<string, unknown>)
+          setTimeline(insight)
         } else {
-          setOutline(insight as OutlineInsight)
+          const insight = parseConcepts(full)
+          await persistArtifact(kind, insight as unknown as Record<string, unknown>)
+          setConcepts(insight)
         }
       } catch (insightError) {
         setError(
@@ -318,7 +357,7 @@ export function AiDrawer({
         setInsightPhase('idle')
       }
     },
-    [activeId, bookHash, insightPhase, sections, title],
+    [activeId, insightPhase, persistArtifact, sections, title],
   )
 
   const runAiRepair = useCallback(async (): Promise<void> => {
@@ -420,26 +459,14 @@ export function AiDrawer({
     try {
       const full = await streamChatText(buildCharactersMessages(sections, title))
       const payload = parseCharacters(full)
-      const artifactPayload = payload as unknown as Record<string, unknown>
-      if (isTauriRuntime()) {
-        await invokeCommand('ai.artifact.set', {
-          bookHash,
-          kind: 'characters',
-          payload: artifactPayload,
-        })
-      } else {
-        browserArtifactsRef.current.set(`${bookHash}-characters`, {
-          payload: artifactPayload,
-          createdAt: new Date().toISOString(),
-        })
-      }
+      await persistArtifact('characters', payload as unknown as Record<string, unknown>)
       setCharacters(payload)
     } catch (charactersError) {
       setError(toAppError(charactersError).message)
     } finally {
       setInsightPhase('idle')
     }
-  }, [bookHash, insightPhase, sections, streamChatText, title])
+  }, [insightPhase, persistArtifact, sections, streamChatText, title])
 
   const send = useCallback(async (): Promise<void> => {
     const question = input.trim()
@@ -721,8 +748,35 @@ export function AiDrawer({
                     ? '生成大纲'
                     : '重新生成大纲'}
               </button>
+              <button
+                type="button"
+                onClick={() => void generateInsight('timeline')}
+                disabled={insightPhase === 'streaming'}
+              >
+                {insightPhase === 'streaming' && timeline === null
+                  ? '生成中…'
+                  : timeline === null
+                    ? '抽取时间线'
+                    : '重新抽取时间线'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void generateInsight('concepts')}
+                disabled={insightPhase === 'streaming'}
+              >
+                {insightPhase === 'streaming' && concepts === null
+                  ? '生成中…'
+                  : concepts === null
+                    ? '抽取概念'
+                    : '重新抽取概念'}
+              </button>
             </div>
           </div>
+          {/* 生成前就说清发送范围:模型只看得到前 N 章开头,不是全书。 */}
+          <p className="ai-privacy">
+            发送范围:前 {Math.min(sections.length, INSIGHT_MAX_CHAPTERS)} 章开头(每章最多{' '}
+            {INSIGHT_EXCERPT_CHARS} 字),并非全书内容。
+          </p>
           {summary !== null && (
             <div className="ai-insight">
               <p className="ai-insight-overview">{summary.overview}</p>
@@ -734,6 +788,36 @@ export function AiDrawer({
                 ))}
               </div>
               <p className="ai-privacy">{summary.coverage}</p>
+            </div>
+          )}
+          {outline !== null && (
+            <div className="ai-insight">
+              {outline.chapters.map((chapter) => (
+                <p key={chapter.title} className="ai-insight-outline">
+                  <strong>{chapter.title}</strong> {chapter.gist}
+                </p>
+              ))}
+            </div>
+          )}
+          {timeline !== null && (
+            <div className="ai-insight">
+              {timeline.events.map((event) => (
+                <p key={`${event.chapterRef}-${event.event}`} className="ai-insight-outline">
+                  <span className="ai-citation">{event.chapterRef}</span>{' '}
+                  <strong>{event.event}</strong>
+                  {event.descriptions.length > 0 && ` — ${event.descriptions.join(';')}`}
+                </p>
+              ))}
+            </div>
+          )}
+          {concepts !== null && (
+            <div className="ai-insight">
+              {concepts.concepts.map((concept) => (
+                <p key={concept.name} className="ai-insight-outline">
+                  <strong>{concept.name}</strong>
+                  <span className="ai-citation">概念</span> {concept.explanation}
+                </p>
+              ))}
             </div>
           )}
           {characters !== null && (
@@ -899,13 +983,39 @@ export function AiDrawer({
           </p>
         )}
 
-        {characters !== null && characters.characters.length > 0 && (
-          <div className="segmented">
-            <button type="button" onClick={() => setGraphOpen(true)}>
-              查看关系图
+        {/* 三种图谱共用一个视图,按已生成的洞察给出入口。 */}
+        <div className="segmented">
+          {characters !== null && characters.characters.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setGraphSpec({ kind: 'characters', payload: characters })}
+            >
+              角色关系图
             </button>
-          </div>
-        )}
+          )}
+          {timeline !== null && timeline.events.length > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setGraphSpec({
+                  kind: 'timeline',
+                  payload: timeline,
+                  chapterLabels: sections.map((section) => section.label),
+                })
+              }
+            >
+              事件时间线
+            </button>
+          )}
+          {concepts !== null && concepts.concepts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setGraphSpec({ kind: 'concepts', payload: concepts })}
+            >
+              概念关系图
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="ai-input-row">
@@ -945,9 +1055,7 @@ export function AiDrawer({
           </button>
         )}
       </div>
-      {graphOpen && characters !== null && (
-        <GraphView payload={characters} onClose={() => setGraphOpen(false)} />
-      )}
+      {graphSpec !== null && <GraphView spec={graphSpec} onClose={() => setGraphSpec(null)} />}
     </aside>
   )
 }

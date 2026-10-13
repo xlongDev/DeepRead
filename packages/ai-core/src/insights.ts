@@ -15,8 +15,13 @@ export interface InsightChapter {
   readonly text: string
 }
 
-const CHAPTER_EXCERPT_CHARS = 500
-const MAX_CHAPTERS = 12
+/**
+ * How much of the book the model ever sees: the first N chapter starts, each
+ * capped at M chars. Exported so the UI can state the send scope honestly
+ * before generating (spec §40: AI output must be auditable).
+ */
+export const INSIGHT_MAX_CHAPTERS = 12
+export const INSIGHT_EXCERPT_CHARS = 500
 
 /** Assemble the summary request: per-chapter excerpts + JSON output rule. */
 export function buildSummaryMessages(
@@ -24,14 +29,14 @@ export function buildSummaryMessages(
   title: string,
 ): readonly ChatMessage[] {
   const excerpt = chapters
-    .slice(0, MAX_CHAPTERS)
-    .map((chapter) => `【${chapter.label}】\n${chapter.text.slice(0, CHAPTER_EXCERPT_CHARS)}`)
+    .slice(0, INSIGHT_MAX_CHAPTERS)
+    .map((chapter) => `【${chapter.label}】\n${chapter.text.slice(0, INSIGHT_EXCERPT_CHARS)}`)
     .join('\n\n')
   return [
     {
       role: 'system',
       content: [
-        `你是读书助手。以下是《${title}》各章节的开头(共 ${Math.min(chapters.length, MAX_CHAPTERS)} 章,每章最多 ${CHAPTER_EXCERPT_CHARS} 字),并非全书内容。`,
+        `你是读书助手。以下是《${title}》各章节的开头(共 ${Math.min(chapters.length, INSIGHT_MAX_CHAPTERS)} 章,每章最多 ${INSIGHT_EXCERPT_CHARS} 字),并非全书内容。`,
         '请基于这些开头输出全书速览,严格按以下 JSON 结构返回,不要输出任何其他文字:',
         '{"overview": "三到五句的整体速览","themes": ["主题1", "主题2"],"coverage": "基于章节开头,未覆盖全部正文"}',
       ].join('\n'),
@@ -46,8 +51,8 @@ export function buildOutlineMessages(
   title: string,
 ): readonly ChatMessage[] {
   const excerpt = chapters
-    .slice(0, MAX_CHAPTERS)
-    .map((chapter) => `【${chapter.label}】\n${chapter.text.slice(0, CHAPTER_EXCERPT_CHARS)}`)
+    .slice(0, INSIGHT_MAX_CHAPTERS)
+    .map((chapter) => `【${chapter.label}】\n${chapter.text.slice(0, INSIGHT_EXCERPT_CHARS)}`)
     .join('\n\n')
   return [
     {

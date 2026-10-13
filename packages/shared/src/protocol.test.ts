@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { appErrorPayloadSchema } from './protocol/errors'
 import {
+  aiArtifactGetRequestSchema,
   appInfoSchema,
   COMMAND,
   librarySearchRequestSchema,
@@ -100,6 +101,19 @@ describe('librarySearchResponseSchema', () => {
       indexedBooks: 1,
     }
     expect(librarySearchResponseSchema.safeParse(bad).success).toBe(false)
+  })
+})
+
+describe('artifact kind schema (B7 graph kinds)', () => {
+  it('accepts all six kinds and rejects unknown ones', () => {
+    for (const kind of ['summary', 'outline', 'notes', 'characters', 'timeline', 'concepts']) {
+      expect(aiArtifactGetRequestSchema.safeParse({ bookHash: 'a'.repeat(64), kind }).success).toBe(
+        true,
+      )
+    }
+    expect(
+      aiArtifactGetRequestSchema.safeParse({ bookHash: 'a'.repeat(64), kind: 'graph' }).success,
+    ).toBe(false)
   })
 })
 

@@ -739,7 +739,14 @@ export const aiIndexGetResponseSchema = z.object({ index: aiIndexPayloadSchema.n
 export const aiIndexSetRequestSchema = z.object({ bookHash, index: aiIndexPayloadSchema })
 export const aiIndexSetResponseSchema = z.object({ savedAt: iso8601 })
 
-export const artifactKindSchema = z.enum(['summary', 'outline', 'notes', 'characters'])
+export const artifactKindSchema = z.enum([
+  'summary',
+  'outline',
+  'notes',
+  'characters',
+  'timeline',
+  'concepts',
+])
 export const aiArtifactGetRequestSchema = z.object({
   bookHash,
   kind: artifactKindSchema,

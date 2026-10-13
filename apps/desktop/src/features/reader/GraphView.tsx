@@ -1,25 +1,54 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { ArrowCounterClockwise, Download, X } from '@phosphor-icons/react'
 import {
-  buildCharacterGraph,
+  buildGraph,
   graphSvgString,
   layoutCircle,
-  type CharactersPayload,
+  layoutTimeline,
+  type GraphLayout,
+  type GraphSpec,
+  type TimelineLayout,
 } from '@deepread/ai-core'
 
 interface GraphViewProps {
-  readonly payload: CharactersPayload
+  readonly spec: GraphSpec
   readonly onClose: () => void
 }
 
-const BASE_VIEWBOX = { x: 0, y: 0, w: 1000, h: 1000 }
+/** Per-kind copy: the view is generic, only the words differ. */
+const VIEW_META = {
+  characters: {
+    title: '角色关系图',
+    empty: '还没有可绘图的角色,先抽取角色。',
+    file: 'characters-graph',
+    dangling: (count: number): string => `${count} 条关系指向未抽取到的角色,未绘制。`,
+  },
+  timeline: {
+    title: '事件时间线',
+    empty: '还没有可绘制的事件,先抽取时间线。',
+    file: 'timeline-graph',
+    dangling: (count: number): string =>
+      `${count} 个事件的章节不在目录里,按模型给出的顺序排在最后。`,
+  },
+  concepts: {
+    title: '概念关系图',
+    empty: '还没有可绘制的概念,先抽取概念。',
+    file: 'concepts-graph',
+    dangling: (count: number): string => `${count} 条关系指向未抽取到的概念,未绘制。`,
+  },
+} as const
 
-export function GraphView({ payload, onClose }: GraphViewProps) {
-  const [viewBox, setViewBox] = useState(BASE_VIEWBOX)
+export function GraphView({ spec, onClose }: GraphViewProps) {
+  const meta = VIEW_META[spec.kind]
+  const graph = useMemo(() => buildGraph(spec), [spec])
+  const layout = useMemo<GraphLayout | TimelineLayout>(
+    () => (spec.kind === 'timeline' ? layoutTimeline(graph) : layoutCircle(graph)),
+    [graph, spec.kind],
+  )
+  // ViewBox starts at the full layout; zoom/pan work from there for every kind.
+  const [viewBox, setViewBox] = useState(() => ({ x: 0, y: 0, w: layout.width, h: layout.height }))
   const dragRef = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
 
-  const graph = useMemo(() => buildCharacterGraph(payload), [payload])
-  const layout = useMemo(() => layoutCircle(graph), [graph])
   const svg = useMemo(
     () =>
       graphSvgString(graph, layout, {
@@ -36,7 +65,7 @@ export function GraphView({ payload, onClose }: GraphViewProps) {
     event.preventDefault()
     setViewBox((current) => {
       const factor = event.deltaY > 0 ? 1.2 : 1 / 1.2
-      const width = Math.min(4000, Math.max(160, current.w * factor))
+      const width = Math.min(8000, Math.max(160, current.w * factor))
       const height = width
       const ratioX = (event.clientX - 40) / (window.innerWidth - 80)
       const ratioY = (event.clientY - 40) / (window.innerHeight - 80)
@@ -73,22 +102,25 @@ export function GraphView({ payload, onClose }: GraphViewProps) {
     dragRef.current = null
   }, [])
 
-  const reset = useCallback(() => setViewBox(BASE_VIEWBOX), [])
+  const reset = useCallback(
+    () => setViewBox({ x: 0, y: 0, w: layout.width, h: layout.height }),
+    [layout.width, layout.height],
+  )
 
   const exportSvg = useCallback(() => {
     const blob = new Blob([svg], { type: 'image/svg+xml' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = 'characters-graph.svg'
+    anchor.download = `${meta.file}.svg`
     anchor.click()
     URL.revokeObjectURL(url)
-  }, [svg])
+  }, [svg, meta.file])
 
   return (
-    <section className="graph-overlay" aria-label="角色关系图">
+    <section className="graph-overlay" aria-label={meta.title}>
       <header className="graph-head">
-        <strong>角色关系图</strong>
+        <strong>{meta.title}</strong>
         <span className="graph-hint">滚轮缩放 · 拖拽平移</span>
         <div className="ai-head-actions">
           <button type="button" className="chrome-button" onClick={reset} title="重置视图">
@@ -103,7 +135,7 @@ export function GraphView({ payload, onClose }: GraphViewProps) {
         </div>
       </header>
       {graph.nodes.length === 0 ? (
-        <p className="lookup-empty">还没有可绘图的角色,先抽取角色。</p>
+        <p className="lookup-empty">{meta.empty}</p>
       ) : (
         <svg
           viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
@@ -113,13 +145,13 @@ export function GraphView({ payload, onClose }: GraphViewProps) {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           aria-roledescription="图示"
-          aria-label={`角色关系图:${graph.nodes.map((n) => n.name).join('、')}`}
+          aria-label={`${meta.title}:${graph.nodes.map((n) => n.name).join('、')}`}
         >
           <g dangerouslySetInnerHTML={{ __html: svg.replace(/^<svg[^>]*>|<\/svg>$/g, '') }} />
         </svg>
       )}
       {graph.dangling.length > 0 && (
-        <p className="graph-dangling">{graph.dangling.length} 条关系指向未抽取到的角色,未绘制。</p>
+        <p className="graph-dangling">{meta.dangling(graph.dangling.length)}</p>
       )}
     </section>
   )
