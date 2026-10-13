@@ -49,13 +49,6 @@ export function isChapterTitle(paragraph: string): boolean {
   return paragraph.length <= 44 && BUILT_IN_CHAPTER_PATTERN.test(paragraph)
 }
 
-/** Build a chapter-title matcher from an optional custom regex pattern. */
-export function chapterTitleMatcher(pattern?: string): (paragraph: string) => boolean {
-  if (!pattern) return isChapterTitle
-  const regex = new RegExp(pattern) // throws on invalid input — caller surfaces
-  return (paragraph) => paragraph.length <= 60 && regex.test(paragraph)
-}
-
 /** Split source text into chapter-labeled sections using a chapter matcher. */
 export function chapterSectionsWith(
   text: string,

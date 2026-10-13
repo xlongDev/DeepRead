@@ -708,6 +708,122 @@ pub fn reading_goal_set(
     })
 }
 
+/* ---------- Chapter rules ----------
+TXT 章节规则(spec §15)存在 `app_settings` KV(JSON 数组):备份走 VACUUM INTO
+全量快照天然带上,零迁移。Rust 侧只做形状校验(条数/字段/长度);正则能否编译、
+有无灾难性回溯风险由 ai-core 在 UI 保存前判定 —— pattern 只在 webview 里执行,
+Rust 编译它没有意义,也不该为这一点引 regex 依赖。 */
+
+/// `app_settings` key: JSON array of chapter rules.
+pub const CHAPTER_RULES_KEY: &str = "chapter.rules";
+
+const MAX_RULES_STORED: usize = 20;
+const MAX_PATTERN_CHARS: usize = 200;
+const MAX_NAME_CHARS: usize = 60;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChapterRule {
+    pub id: String,
+    pub name: String,
+    /// 正则源码;按整段(trim 后)匹配,只在 webview 执行。
+    pub pattern: String,
+    /// 越大越先认领一行;内置规则是 0。
+    pub priority: i32,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterRulesGetResponse {
+    pub rules: Vec<ChapterRule>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChapterRulesSetRequest {
+    pub rules: Vec<ChapterRule>,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterRulesSetResponse {
+    /// 落库后的生效规则(清洗过:形状非法的条目被剔除)。
+    pub rules: Vec<ChapterRule>,
+}
+
+/// 形状校验:字段非空、pattern 不超长。正则本身的合法性在 UI 侧(ai-core)判定。
+fn valid_rule_shape(rule: &ChapterRule) -> bool {
+    !rule.id.trim().is_empty()
+        && !rule.name.trim().is_empty()
+        && rule.name.chars().count() <= MAX_NAME_CHARS
+        && !rule.pattern.trim().is_empty()
+        && rule.pattern.chars().count() <= MAX_PATTERN_CHARS
+}
+
+/// 读规则:旧版本遗留的脏内容(不是数组/字段缺失/超长)一律按"没有规则"处理,
+/// 与 `load_reading_goal` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
+pub fn load_chapter_rules(conn: &Connection) -> Result<Vec<ChapterRule>, AppError> {
+    let Some(raw) = crate::storage::get_setting(conn, CHAPTER_RULES_KEY)? else {
+        return Ok(Vec::new());
+    };
+    let parsed: Vec<ChapterRule> = match serde_json::from_str(&raw) {
+        Ok(rules) => rules,
+        Err(_) => return Ok(Vec::new()),
+    };
+    Ok(parsed
+        .into_iter()
+        .filter(valid_rule_shape)
+        .take(MAX_RULES_STORED)
+        .collect())
+}
+
+pub fn save_chapter_rules(
+    conn: &Connection,
+    rules: &[ChapterRule],
+) -> Result<Vec<ChapterRule>, AppError> {
+    let cleaned: Vec<ChapterRule> = rules
+        .iter()
+        .filter(|rule| valid_rule_shape(rule))
+        .take(MAX_RULES_STORED)
+        .cloned()
+        .collect();
+    let json = serde_json::to_string(&cleaned).map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "serialize chapter rules").with_cause(err)
+    })?;
+    crate::storage::set_setting(conn, CHAPTER_RULES_KEY, &json)?;
+    Ok(cleaned)
+}
+
+#[tauri::command(rename = "chapter.rules.get")]
+pub fn chapter_rules_get(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<ChapterRulesGetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(ChapterRulesGetResponse {
+        rules: load_chapter_rules(&conn)?,
+    })
+}
+
+#[tauri::command(rename = "chapter.rules.set")]
+pub fn chapter_rules_set(
+    db: tauri::State<'_, crate::storage::Db>,
+    request: ChapterRulesSetRequest,
+) -> Result<ChapterRulesSetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(ChapterRulesSetResponse {
+        rules: save_chapter_rules(&conn, &request.rules)?,
+    })
+}
+
 #[tauri::command(rename = "reader.notes.list")]
 pub fn reader_notes_list(
     db: tauri::State<'_, crate::storage::Db>,
@@ -1234,5 +1350,46 @@ mod tests {
         assert_eq!(load_reading_goal(&conn).unwrap(), 0);
         crate::storage::set_setting(&conn, READING_GOAL_KEY, "99999").unwrap();
         assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+    }
+
+    fn sample_rule(id: &str, priority: i32) -> ChapterRule {
+        ChapterRule {
+            id: id.into(),
+            name: format!("规则{id}"),
+            pattern: "^第.+卷".into(),
+            priority,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn chapter_rules_round_trip_and_filter_dirty_entries() {
+        let conn = memory_db();
+        assert!(load_chapter_rules(&conn).unwrap().is_empty());
+        let rules = vec![sample_rule("a", 10), sample_rule("b", 0)];
+        assert_eq!(save_chapter_rules(&conn, &rules).unwrap(), rules);
+        assert_eq!(load_chapter_rules(&conn).unwrap(), rules);
+    }
+
+    #[test]
+    fn chapter_rules_drop_shape_invalid_entries_on_write() {
+        let conn = memory_db();
+        let mut too_long = sample_rule("long", 1);
+        too_long.pattern = "x".repeat(MAX_PATTERN_CHARS + 1);
+        let mut no_name = sample_rule("nameless", 1);
+        no_name.name = "  ".into();
+        let kept = save_chapter_rules(&conn, &[sample_rule("keep", 1), too_long, no_name]).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "keep");
+    }
+
+    #[test]
+    fn chapter_rules_read_falls_back_to_empty_on_garbage() {
+        let conn = memory_db();
+        // 旧版本遗留的脏内容按"没有规则"读,与 reading goal 同规矩。
+        crate::storage::set_setting(&conn, CHAPTER_RULES_KEY, "not json").unwrap();
+        assert!(load_chapter_rules(&conn).unwrap().is_empty());
+        crate::storage::set_setting(&conn, CHAPTER_RULES_KEY, "{\"rules\":[]}").unwrap();
+        assert!(load_chapter_rules(&conn).unwrap().is_empty());
     }
 }

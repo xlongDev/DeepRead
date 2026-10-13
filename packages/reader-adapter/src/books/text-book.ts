@@ -11,7 +11,7 @@
 import type { FoliateBook, FoliateSection, FoliateTocItem } from 'foliate-js/view.js'
 
 import { byteLength } from './bytes'
-import { chapterTitleMatcher, isChapterTitle } from '@deepread/ai-core'
+import { chapterMatcherFromRules, isChapterTitle, type ChapterRule } from '@deepread/ai-core'
 
 const PARAGRAPHS_PER_SECTION = 400
 
@@ -90,7 +90,7 @@ export function chapterSections(text: string): { label: string; text: string }[]
 export function buildTextBook(
   text: string,
   title: string,
-  options?: { chapterPattern?: string },
+  options?: { chapterRules?: readonly ChapterRule[] },
 ): FoliateBook {
   const paragraphs = splitParagraphs(text)
 
@@ -99,7 +99,9 @@ export function buildTextBook(
   // the bounded chunk so huge flat files never create one giant iframe.
   type Block = { text: string; chapter: boolean; dialogue: boolean }
   const sections: { blocks: Block[]; chapterTitle?: string }[] = [{ blocks: [] }]
-  const isTitle = chapterTitleMatcher(options?.chapterPattern)
+  const isTitle = options?.chapterRules
+    ? chapterMatcherFromRules(options.chapterRules)
+    : isChapterTitle
   for (const paragraph of paragraphs) {
     if (isTitle(paragraph)) {
       sections.push({
@@ -157,4 +159,4 @@ export function buildTextBook(
   }
 }
 
-export { isChapterTitle, chapterTitleMatcher } from '@deepread/ai-core'
+export { isChapterTitle } from '@deepread/ai-core'

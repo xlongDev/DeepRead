@@ -9,6 +9,7 @@
  */
 
 import { vi } from 'vitest'
+import type { ChapterRule } from '@deepread/ai-core'
 import type {
   Annotation,
   BookCharStats,
@@ -84,7 +85,7 @@ export class FakeFoliateAdapter {
   readonly createAnnotation = vi.fn<(annotation: Annotation) => Promise<void>>()
   readonly removeAnnotation = vi.fn<(annotationId: string) => Promise<void>>()
   readonly replaceSource = vi.fn<(text: string) => Promise<void>>()
-  readonly rebuildChapters = vi.fn<(pattern: string | null) => Promise<number>>()
+  readonly rebuildChapters = vi.fn<(rules: readonly ChapterRule[] | null) => Promise<number>>()
 
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}, options?: FakeFoliateOptions) {
     this.host = host

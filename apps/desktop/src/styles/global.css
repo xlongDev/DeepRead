@@ -3700,11 +3700,113 @@ dialog.modal-panel {
   border-radius: var(--radius-full);
 }
 
-.rebuild-form {
+/* ---------- Chapter rules (TXT, spec §15) ---------- */
+
+.chapter-rules {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
   width: 100%;
+}
+
+.chapter-rule-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 64px auto auto;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.chapter-rule-row .ai-input {
+  min-width: 0;
+}
+
+.chapter-rule-priority {
+  width: 64px;
+  padding: var(--space-xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chapter-rule-enabled {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.chapter-rule-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+.chapter-rule-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-xs);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.chapter-rule-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.chapter-rule-candidate code {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.chapter-rule-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-xs);
+}
+
+.chapter-rule-stat {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.chapter-rule-sample {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: var(--space-xs);
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
+
+.chapter-rule-sample p {
+  margin: 0 0 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.chapter-rule-sample p.is-hit {
+  color: var(--color-text-primary);
+}
+
+.chapter-rule-claim {
+  color: var(--color-accent);
 }
 
 /* ---------- Sync drawer (WebDAV) ---------- */

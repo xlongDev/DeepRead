@@ -16,6 +16,7 @@ import {
   ErrorCodes,
   normalizeTags,
   type BookReadingStat,
+  type ChapterRule,
   type CommandMap,
   type CommandName,
   type LearningCard,
@@ -62,7 +63,30 @@ const MAX_CARDS_PER_ADD = 200
 const CARD_SOURCES: readonly string[] = ['highlight', 'quiz', 'mistake']
 /** 浏览器端的每日阅读目标(桌面端在 app_settings KV,见 storage/kv.rs)。 */
 const GOAL_STORAGE_KEY = 'deepread.reading.goal'
+const CHAPTER_RULES_STORAGE_KEY = 'deepread.chapter.rules'
 const MAX_GOAL_MINUTES = 1440
+
+/** 读出生效规则:脏值/旧格式一律按"没有规则",与 Rust 读路径同一规矩。 */
+function storedChapterRules(): ChapterRule[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(CHAPTER_RULES_STORAGE_KEY) ?? 'null')
+    if (parsed === null || typeof parsed !== 'object') return []
+    const rules = (parsed as Record<string, unknown>)['rules']
+    if (!Array.isArray(rules)) return []
+    return rules.filter(
+      (rule): rule is ChapterRule =>
+        typeof rule === 'object' &&
+        rule !== null &&
+        typeof (rule as ChapterRule).id === 'string' &&
+        typeof (rule as ChapterRule).name === 'string' &&
+        typeof (rule as ChapterRule).pattern === 'string' &&
+        typeof (rule as ChapterRule).priority === 'number' &&
+        typeof (rule as ChapterRule).enabled === 'boolean',
+    )
+  } catch {
+    return []
+  }
+}
 
 /** 读出生效目标:脏值/旧格式一律按"没有目标",与 Rust 读路径同一规矩。 */
 function storedGoalMinutes(): number {
@@ -287,6 +311,24 @@ export const webHandlers: {
     const minutes = Math.min(Math.max(Math.trunc(request.dailyMinutes), 0), 1440)
     localStorage.setItem(GOAL_STORAGE_KEY, JSON.stringify({ dailyMinutes: minutes }))
     return { dailyMinutes: minutes }
+  },
+
+  // 章节规则(§15):浏览器端同样只做形状过滤,脏值按"没有规则"读。
+  [COMMAND.chapterRulesGet]: async () => ({ rules: storedChapterRules() }),
+
+  [COMMAND.chapterRulesSet]: async (request) => {
+    const rules = request.rules
+      .filter(
+        (rule) =>
+          rule.id.trim() !== '' &&
+          rule.name.trim() !== '' &&
+          rule.pattern.trim() !== '' &&
+          rule.pattern.length <= 200 &&
+          rule.name.length <= 60,
+      )
+      .slice(0, 20)
+    localStorage.setItem(CHAPTER_RULES_STORAGE_KEY, JSON.stringify({ rules }))
+    return { rules }
   },
 
   [COMMAND.readerNotesList]: async () => {

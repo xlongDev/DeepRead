@@ -17,6 +17,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppInfo } from '@deepread/shared'
+import type { ChapterRule } from '@deepread/ai-core'
 import type { OpenedBook } from '../../lib/book-import'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import {
@@ -676,6 +677,79 @@ describe('跨书搜索正文命中定位(sectionLabel)', () => {
     const positions = latestAdapter().goTo.mock.calls.map((call) => call[0])
     expect(positions).toContainEqual({ cfi: 'epubcfi(/6/99!)', progress: 0.9 })
     expect(positions.some((target) => 'href' in target)).toBe(false)
+  })
+})
+
+describe('TXT 章节规则', () => {
+  const TXT_BOOK: OpenedBook = { ...BOOK, format: 'txt', name: '夜航书.txt' }
+  const SOURCE = '第一卷 风\n\n正文一。\n\n第二卷 雪\n\n正文二。\n\n第三章 灯'
+
+  /** 打开 TXT 书的目录面板 → 展开章节规则面板。 */
+  async function openRulesPanel(): Promise<HTMLElement> {
+    FakeFoliateAdapter.nextOptions = { sourceText: SOURCE, sections: ['第一卷 风'] }
+    render(<ReaderScreen book={TXT_BOOK} onBack={vi.fn()} />)
+    await waitFor(() => {
+      expect(document.querySelector('.reader-opening')).toBeNull()
+    })
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    const toc = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(within(toc).getByText('自定义'))
+    return await within(toc).findByLabelText('规则预览')
+  }
+
+  beforeEach(() => {
+    invokeMock.mockImplementation(((command: string, request?: unknown): Promise<unknown> => {
+      if (command === 'chapter.rules.get') return Promise.resolve({ rules: [] })
+      // 真后端会把清洗后的规则回给调用方,这里原样回声。
+      if (command === 'chapter.rules.set') {
+        return Promise.resolve({ rules: (request as { rules: readonly ChapterRule[] }).rules })
+      }
+      return Promise.resolve(respond(command))
+    }) as never)
+  })
+
+  it('预览按样本行统计命中,内置规则始终兜底', async () => {
+    const preview = await openRulesPanel()
+    // 内置规则命中「第一卷 风」… 等;样本来自书开头,不是猜的。
+    expect(within(preview).getByText(/内置规则.*命中 \d+ 行/)).toBeInTheDocument()
+    expect(within(preview).getByText('第一卷 风')).toBeInTheDocument()
+  })
+
+  it('非法正则挡住保存,修好才放行', async () => {
+    const preview = await openRulesPanel()
+    const toc = screen.getByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(within(toc).getByText('新增规则'))
+    const rows = within(toc).getAllByPlaceholderText(/正则/)
+    fireEvent.change(rows[0]!, { target: { value: '第(章' } })
+    expect(await within(toc).findByText('不是合法的正则表达式。')).toBeInTheDocument()
+    expect(within(toc).getByText(/有 1 条规则不合法/)).toBeInTheDocument()
+    const save = within(toc).getByText('保存并重建') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    // 预览仍渲染得出内容:坏规则只报自己的错,不影响其它规则。
+    expect(within(preview).getByText(/内置规则.*命中/)).toBeInTheDocument()
+  })
+
+  it('保存前强制预览:命中行带规则名,保存后落库并重建章节', async () => {
+    const preview = await openRulesPanel()
+    const toc = screen.getByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(within(toc).getByText('新增规则'))
+    fireEvent.change(within(toc).getByPlaceholderText(/规则名/), { target: { value: '第 N 卷' } })
+    fireEvent.change(within(toc).getAllByPlaceholderText(/正则/)[0]!, {
+      target: { value: '^第.+卷' },
+    })
+    // 高亮行带 [规则名] 前缀:用户看得见哪条规则认领了哪一行。
+    expect(within(preview).getAllByText(/\[第 N 卷\]/).length).toBe(2)
+    expect(within(preview).getByText(/第 N 卷.*命中 2 行/)).toBeInTheDocument()
+
+    fireEvent.click(within(toc).getByText('保存并重建'))
+    await waitFor(() => expect(latestAdapter().rebuildChapters).toHaveBeenCalled())
+    const saved = invokeMock.mock.calls.find(
+      ([command]) => command === 'chapter.rules.set',
+    )?.[1] as {
+      rules: readonly { name: string; pattern: string; enabled: boolean }[]
+    }
+    expect(saved.rules).toHaveLength(1)
+    expect(saved.rules[0]).toMatchObject({ name: '第 N 卷', pattern: '^第.+卷', enabled: true })
   })
 })
 

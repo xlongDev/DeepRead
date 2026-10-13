@@ -57,10 +57,14 @@ import type { RepairChange } from '@deepread/reader-adapter'
 import {
   createSseParser,
   extractDelta,
+  buildChapterRuleMessages,
   buildTranslateMessages,
+  parseChapterRuleCandidates,
   parseTranslation,
   streamTranslationView,
   TRANSLATE_MAX_CHARS,
+  type ChapterRule,
+  type ChapterRuleCandidate,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import {
@@ -96,6 +100,7 @@ import { readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
+import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 import type { OpenedBook } from '../../lib/book-import'
@@ -311,10 +316,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   /** 目标语言的实际取值:没手动选过时,中文书译英、其余译中。 */
   const effectiveTranslateTarget =
     translateTarget ?? (bookLanguage?.toLowerCase().startsWith('zh') ? 'English' : '中文')
-  const [rebuildPattern, setRebuildPattern] = useState(
-    () => localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '',
-  )
   const [panelProblem, setPanelProblem] = useState<string | null>(null)
+  /** 旧版 per-book 自定义正则(B7.2 之前的实现):给规则面板做一键导入用。 */
+  const legacyChapterPattern =
+    typeof localStorage === 'undefined'
+      ? ''
+      : (localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '')
   const dictCacheRef = useRef(
     new Map<string, { entries: ReturnType<typeof buildIndex>; dict: Uint8Array }>(),
   )
@@ -1356,21 +1363,65 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     })
   }
 
-  const applyRebuild = async (): Promise<void> => {
-    const adapter = adapterRef.current
-    if (!adapter) return
-    try {
-      const count = await adapter.rebuildChapters(
-        rebuildPattern.trim() === '' ? null : rebuildPattern.trim(),
+  /**
+   * 章节规则样本行:书开头 60 个非空行。预览与 AI 推断都在它上面跑 ——
+   * 模型/用户都只看得到开头,与洞察区"基于章节开头"同一口径。
+   * 打开面板的这一次点击里取(ref 只能在 render 外读)。
+   */
+  const [chapterSampleLines, setChapterSampleLines] = useState<readonly string[]>([])
+  const toggleRebuildPanel = useCallback((): void => {
+    setRebuildOpen((open) => {
+      if (open) return false
+      const source = adapterRef.current?.getSourceText() ?? ''
+      setChapterSampleLines(
+        source
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line !== '')
+          .slice(0, 60),
       )
-      localStorage.setItem(`deepread.chapterPattern.${book.hash}`, rebuildPattern.trim())
+      return true
+    })
+  }, [])
+
+  /** AI 推断章节规则候选:与翻译同一条流式通路,输出交面板走强制预览。 */
+  const inferChapterCandidates = useCallback(async (): Promise<readonly ChapterRuleCandidate[]> => {
+    const provider = aiProviders[0]
+    if (provider === undefined) return []
+    const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+    let full = ''
+    const parser = createSseParser((data) => {
+      const delta = extractDelta(data)
+      if (delta.type === 'delta') full += delta.text
+    })
+    await invokeStreamingCommand(
+      'ai.chat',
+      {
+        taskId,
+        configId: provider.id,
+        messages: [...buildChapterRuleMessages(chapterSampleLines, book.name)],
+      },
+      (event) => {
+        if (event.type === 'chunk') parser.push(event.data)
+      },
+    )
+    parser.end()
+    return parseChapterRuleCandidates(full)
+  }, [aiProviders, book.name, chapterSampleLines])
+
+  /** 保存并生效:重建章节 + 刷新目录;旧版 per-book 正则至此被规则接管。 */
+  const applyChapterRules = useCallback(
+    async (rules: readonly ChapterRule[]): Promise<void> => {
+      const adapter = adapterRef.current
+      if (!adapter) return
+      const count = await adapter.rebuildChapters(rules)
       setToc(await adapter.getTableOfContents())
-      setRebuildOpen(false)
+      // 规则已落库成为唯一事实来源,旧键再留着只会造成"改了两处"的错觉。
+      localStorage.removeItem(`deepread.chapterPattern.${book.hash}`)
       setNotice({ text: `章节重建完成:共 ${count} 节。`, danger: false })
-    } catch (rebuildError) {
-      setNotice({ text: toAppError(rebuildError).message, danger: true })
-    }
-  }
+    },
+    [book.hash],
+  )
 
   /** Jump to the fraction the slider was released on (once per scrub). */
   const commitScrub = (): void => {
@@ -2003,32 +2054,22 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
                       </div>
                     </div>
                     <div className="settings-row repair-row">
-                      <span className="settings-label">章节重建</span>
+                      <span className="settings-label">章节规则</span>
                       <div className="segmented">
-                        <button type="button" onClick={() => setRebuildOpen((open) => !open)}>
+                        <button type="button" onClick={toggleRebuildPanel}>
                           {rebuildOpen ? '收起' : '自定义'}
                         </button>
                       </div>
                     </div>
                     {rebuildOpen && (
-                      <div className="rebuild-form">
-                        <input
-                          className="ai-input"
-                          placeholder="正则,如 第\s*\d+\s*章(留空用内置规则)"
-                          value={rebuildPattern}
-                          onChange={(event) => setRebuildPattern(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') void applyRebuild()
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="reader-error-button"
-                          onClick={() => void applyRebuild()}
-                        >
-                          重建
-                        </button>
-                      </div>
+                      <ChapterRulesPanel
+                        sampleLines={chapterSampleLines}
+                        onInferCandidates={
+                          aiProviders[0] === undefined ? null : inferChapterCandidates
+                        }
+                        onApply={applyChapterRules}
+                        legacyPattern={legacyChapterPattern}
+                      />
                     )}
                   </>
                 )}

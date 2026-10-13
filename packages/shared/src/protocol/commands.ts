@@ -37,6 +37,10 @@ import type { StatsBooksResponse as ReaderStatsBooksResponse } from './generated
 import type { ReadingGoalGetResponse } from './generated/ReadingGoalGetResponse'
 import type { ReadingGoalSetRequest } from './generated/ReadingGoalSetRequest'
 import type { ReadingGoalSetResponse } from './generated/ReadingGoalSetResponse'
+import type { ChapterRule } from './generated/ChapterRule'
+import type { ChapterRulesGetResponse } from './generated/ChapterRulesGetResponse'
+import type { ChapterRulesSetRequest } from './generated/ChapterRulesSetRequest'
+import type { ChapterRulesSetResponse } from './generated/ChapterRulesSetResponse'
 import type { NotesListResponse as ReaderNotesListResponse } from './generated/NotesListResponse'
 import type { NoteUpdateRequest as ReaderNoteUpdateRequest } from './generated/NoteUpdateRequest'
 import type { NoteUpdateResponse as ReaderNoteUpdateResponse } from './generated/NoteUpdateResponse'
@@ -225,6 +229,10 @@ export type {
   ReadingGoalGetResponse,
   ReadingGoalSetRequest,
   ReadingGoalSetResponse,
+  ChapterRule,
+  ChapterRulesGetResponse,
+  ChapterRulesSetRequest,
+  ChapterRulesSetResponse,
   ReadingFont,
   SecretDeleteRequest,
   SecretDeleteResponse,
@@ -256,6 +264,8 @@ export const COMMAND = {
   readerStatsBooks: 'reader.stats.books',
   readingGoalGet: 'reading.goal.get',
   readingGoalSet: 'reading.goal.set',
+  chapterRulesGet: 'chapter.rules.get',
+  chapterRulesSet: 'chapter.rules.set',
   readerNotesList: 'reader.notes.list',
   readerNoteUpdate: 'reader.note.update',
   libraryCoverGet: 'library.cover.get',
@@ -357,6 +367,14 @@ export interface CommandMap {
   [COMMAND.readingGoalSet]: {
     readonly request: ReadingGoalSetRequest
     readonly response: ReadingGoalSetResponse
+  }
+  [COMMAND.chapterRulesGet]: {
+    readonly request: undefined
+    readonly response: ChapterRulesGetResponse
+  }
+  [COMMAND.chapterRulesSet]: {
+    readonly request: ChapterRulesSetRequest
+    readonly response: ChapterRulesSetResponse
   }
   [COMMAND.readerNotesList]: {
     readonly request: undefined
@@ -620,6 +638,23 @@ export const readingGoalSetRequestSchema = z.object({
 })
 export const readingGoalSetResponseSchema = z.object({
   dailyMinutes: z.number().int().min(0).max(1440),
+})
+/** 章节规则(spec §15):与 Rust `state::ChapterRule` 对齐;pattern 上限 200 字符。 */
+export const chapterRuleSchema = z.object({
+  id: z.string().min(1).max(128),
+  name: z.string().min(1).max(60),
+  pattern: z.string().min(1).max(200),
+  priority: z.number().int().min(-1000).max(1000),
+  enabled: z.boolean(),
+})
+export const chapterRulesGetResponseSchema = z.object({
+  rules: z.array(chapterRuleSchema).max(20),
+})
+export const chapterRulesSetRequestSchema = z.object({
+  rules: z.array(chapterRuleSchema).max(20),
+})
+export const chapterRulesSetResponseSchema = z.object({
+  rules: z.array(chapterRuleSchema).max(20),
 })
 const noteEntrySchema = z.object({
   id: z.string().min(1).max(128),
@@ -952,6 +987,8 @@ export const responseSchemas = {
   [COMMAND.readerStatsBooks]: readerStatsBooksResponseSchema,
   [COMMAND.readingGoalGet]: readingGoalGetResponseSchema,
   [COMMAND.readingGoalSet]: readingGoalSetResponseSchema,
+  [COMMAND.chapterRulesGet]: chapterRulesGetResponseSchema,
+  [COMMAND.chapterRulesSet]: chapterRulesSetResponseSchema,
   [COMMAND.readerNotesList]: readerNotesListResponseSchema,
   [COMMAND.readerNoteUpdate]: readerNoteUpdateResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
@@ -1015,6 +1052,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.readerStatsBooks]: undefined,
   [COMMAND.readingGoalGet]: undefined,
   [COMMAND.readingGoalSet]: readingGoalSetRequestSchema,
+  [COMMAND.chapterRulesGet]: undefined,
+  [COMMAND.chapterRulesSet]: chapterRulesSetRequestSchema,
   [COMMAND.readerNotesList]: undefined,
   [COMMAND.readerNoteUpdate]: readerNoteUpdateRequestSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,

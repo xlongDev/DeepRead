@@ -120,6 +120,8 @@ pub fn run() {
             state::reader_stats_books,
             state::reading_goal_get,
             state::reading_goal_set,
+            state::chapter_rules_get,
+            state::chapter_rules_set,
             state::reader_notes_list,
             state::reader_note_update,
             library::library_list,

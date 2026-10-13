@@ -4,6 +4,10 @@ import { appErrorPayloadSchema } from './protocol/errors'
 import {
   aiArtifactGetRequestSchema,
   appInfoSchema,
+  chapterRuleSchema,
+  chapterRulesGetResponseSchema,
+  chapterRulesSetRequestSchema,
+  chapterRulesSetResponseSchema,
   COMMAND,
   librarySearchRequestSchema,
   librarySearchResponseSchema,
@@ -129,6 +133,30 @@ describe('reading goal schemas', () => {
     expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 1441 }).success).toBe(false)
     expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: -1 }).success).toBe(false)
     expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 1.5 }).success).toBe(false)
+  })
+})
+
+describe('chapter rule schemas (B7.2)', () => {
+  const rule = {
+    id: 'r1',
+    name: '第N卷',
+    pattern: '^第.+卷',
+    priority: 10,
+    enabled: true,
+  }
+
+  it('round-trips a rule list through get/set schemas', () => {
+    expect(chapterRulesGetResponseSchema.parse({ rules: [rule] })).toEqual({ rules: [rule] })
+    expect(chapterRulesSetRequestSchema.parse({ rules: [rule] })).toEqual({ rules: [rule] })
+    expect(chapterRulesSetResponseSchema.parse({ rules: [] })).toEqual({ rules: [] })
+  })
+
+  it('rejects rules with an empty pattern or oversized fields', () => {
+    expect(chapterRuleSchema.safeParse({ ...rule, pattern: '' }).success).toBe(false)
+    expect(chapterRuleSchema.safeParse({ ...rule, pattern: 'x'.repeat(201) }).success).toBe(false)
+    expect(chapterRuleSchema.safeParse({ ...rule, name: '' }).success).toBe(false)
+    expect(chapterRuleSchema.safeParse({ ...rule, priority: 1.5 }).success).toBe(false)
+    expect(chapterRuleSchema.safeParse({ ...rule, enabled: 'yes' }).success).toBe(false)
   })
 })
 

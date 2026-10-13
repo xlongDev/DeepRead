@@ -11,6 +11,7 @@
  */
 
 import { AppError, ErrorCodes, toAppError } from '@deepread/shared'
+import type { ChapterRule } from '@deepread/ai-core'
 import {
   countChars,
   countCjkChars,
@@ -296,7 +297,8 @@ export class FoliateAdapter implements ReaderEngine {
   #tapTimer: ReturnType<typeof setTimeout> | undefined
   #destroyed = false
   #adapterBuiltText: { format: 'txt' | 'md'; title: string; text: string } | null = null
-  #chapterPattern: string | undefined
+  /** 用户章节规则(空 = 只用内置规则);rebuildChapters 时整体替换。 */
+  #chapterRules: readonly ChapterRule[] = []
 
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.#host = host
@@ -437,7 +439,7 @@ export class FoliateAdapter implements ReaderEngine {
           this.#adapterBuiltText = { format: 'txt', title: titleFromName(file.name), text }
           await this.#requireView().open(
             buildTextBook(text, titleFromName(file.name), {
-              chapterPattern: this.#chapterPattern,
+              chapterRules: this.#chapterRules,
             }),
           )
           break
@@ -497,27 +499,20 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
-   * Chapter reconstruction (spec §15): rebuild a TXT book's sections with a
-   * user-supplied chapter-title regex. Pass null to return to the built-in
-   * rule. Returns the resulting section count.
+   * Chapter reconstruction (spec §15): rebuild a TXT book's sections with the
+   * user's chapter rules (merged with the built-in rule inside ai-core). Pass
+   * null to return to the built-in rule only. Returns the section count.
    */
-  async rebuildChapters(pattern: string | null): Promise<number> {
+  async rebuildChapters(rules: readonly ChapterRule[] | null): Promise<number> {
     const built = this.#adapterBuiltText
     if (!built || built.format !== 'txt') {
       throw new AppError(ErrorCodes.systemValidation, '章节重建目前仅支持 TXT 书籍。')
     }
-    if (pattern !== null && pattern.trim() !== '') {
-      try {
-        new RegExp(pattern) // oxlint-disable-line no-new -- validation only
-      } catch {
-        throw new AppError(ErrorCodes.systemValidation, `无效的正则表达式:${pattern}`)
-      }
-    }
-    this.#chapterPattern = pattern === null ? undefined : pattern.trim()
+    this.#chapterRules = rules ?? []
     const view = this.#requireView()
     await view.open(
       buildTextBook(built.text, built.title, {
-        chapterPattern: this.#chapterPattern,
+        chapterRules: this.#chapterRules,
       }),
     )
     this.#applyStyles()

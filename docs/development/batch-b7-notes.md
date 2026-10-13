@@ -1,6 +1,8 @@
-# B7.1 图谱家族:时间线 + 概念(2026-10-13)
+# B7 图谱家族 + TXT 章节规则(2026-10-13/14)
 
-对应 `docs/plan-v0.3.md` §7.1 前半(§7.2 TXT 章节规则未做)。
+对应 `docs/plan-v0.3.md` §7.1、§7.2。B7.1 见下,B7.2 见文末。
+
+## B7.1 图谱家族:时间线 + 概念
 
 ## 做了什么
 
@@ -49,3 +51,50 @@ reader-core 24 / design-system 8),`cargo test` 213 passed,fmt/clippy/check 干�
 ## 未验证
 
 真书上时间线/概念图的观感与"章节不在目录"的降级排版需桌面版会话确认(本机无 GUI 自动化)。
+
+---
+
+## B7.2 TXT 章节规则
+
+### 做了什么
+
+- **ai-core `chapter-rules.ts`(纯逻辑 + 单测)**:`ChapterRule{id,name,pattern,priority,enabled}`;
+  `BUILT_IN_CHAPTER_RULE`(复用 `rag.ts` 的内置正则,priority 0 作兜底);
+  `validateChapterPattern`(空/超 200 字/编译失败/**嵌套无界量词**四道闸);
+  `mergeChapterRules`(内置 + 用户规则按 priority 降序,稳定的同优先级保持列表序);
+  `chapterMatcherFromRules` / `matchChapterRule`(给 adapter 分节用);
+  `previewChapterRules`(每行只被第一条命中的规则认领,逐规则命中数 + 非法原因)。
+- **AI 推断**:`buildChapterRuleMessages`(取样本前 40 行推断 `{name,pattern,priority}`,上限 5 条)
+  - `parseChapterRuleCandidates`;候选是**草稿**,必须过同一套预览与校验才能保存。
+- **协议 + 存储**(走 codegen 管线):Rust `chapter.rules.get/set` 落 `app_settings`
+  KV(键 `chapter.rules`,JSON 数组,随备份 VACUUM INTO 走,零迁移),Rust 只做形状校验
+  (条数 ≤20、字段非空、pattern ≤200 字);TS `chapterRuleSchema` 与之对齐;浏览器端分流
+  localStorage。`lib/chapter-rules.ts` 里带一个**线型/逻辑型互为子类型的编译期断言**。
+- **adapter**:`buildTextBook` 的 `chapterPattern` 换成 `chapterRules`(走 merge + matcher);
+  `FoliateAdapter.rebuildChapters(rules)` 全量替换 `#chapterRules`,`null` = 只用内置规则。
+  顺手删掉已成死代码的 `chapterTitleMatcher`(单正则入口)。
+- **UI** `ChapterRulesPanel`:增删改(名/正则/优先级/启用)、**预览常驻**(逐规则命中数 +
+  样本行高亮 + `[规则名]` 认领标记 + 共命中行数)、**任一规则非法则保存按钮禁用**、
+  AI 候选以草稿出现需点「采用」、旧版 per-book 正则可一键导入(不静默丢弃)。
+  ReaderScreen 在面板打开那次点击里取 60 行样本(ref 不能在 render 读)。
+
+### 偏差与取舍
+
+- **Rust 不编译用户正则**:pattern 只在 webview 执行,Rust 编译它没有意义,
+  也不值得为这一点引 `regex` 依赖;正则合法性/回溯风险全部在 ai-core 判定。
+- **嵌套量词检查是启发式**,且只拒"内外皆无界"的形状(`(a+)+` 拒、`(?:x{0,30})?` 放行)。
+  宁可误拒少数安全写法,也不要一个卡死 UI 的正则;JS 没有正则超时,这是唯一防线。
+- 计划写的"增删改排序"里的**排序**用 priority 数字输入框实现(合并顺序 = 优先级降序,
+  预览按合并后顺序列出),没有另做上下移动按钮 —— priority 就是模型里的排序字段。
+- 旧版 per-book `localStorage` 键:`applyChapterRules` 保存成功后才删除,面板打开期间
+  显示"导入为规则"入口。
+
+### 门禁
+
+`pnpm verify` 全绿(desktop 255 / shared 83 / ai-core 102 / reader-adapter 52 /
+reader-core 24 / design-system 8),`cargo test` 220 passed,fmt/clippy/check 干净,
+4 个 ts-rs 生成物入 git。
+
+### 未验证
+
+真书(人名章节不规则的网文 TXT)上用自定义规则完成分节,需桌面版会话确认(本机无 GUI 自动化)。
