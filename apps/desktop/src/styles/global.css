@@ -1770,6 +1770,16 @@ button:disabled {
 /* 设置与云同步沉到底部:它们是全局入口,不属于「我的分组」或某个标签。
    发丝线通栏:抵消侧栏左右内边距,再把内边距补回来对齐文字 —— 否则线的
    两端悬在半空,和侧栏边框接不上。 */
+/* 侧栏今日阅读摘要:一行小字,贴着底部操作区,像状态栏一样"在那儿"。
+   不设目标时只报今日时长;统计没取到时整行不渲染(JS 侧控制)。 */
+.lib-sidebar-goal {
+  margin: 0 0 var(--space-sm);
+  padding: 0 10px;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
 .lib-sidebar-foot {
   display: grid;
   gap: 2px;
@@ -3012,6 +3022,27 @@ button:disabled {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   line-height: var(--line-height-body);
+}
+
+/* 设置 → 阅读:目标输入 + 保存/清除。输入框收窄到只放得下四位数,
+   按钮跟在右边 —— 一个数字不需要一整行。 */
+.settings-goal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.settings-goal-row input {
+  width: 110px;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .ai-drawer-body {
@@ -5490,6 +5521,72 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
+}
+
+/* 达标日的小旗:柱子上方一个实心点。不改柱高语义 —— 柱子仍然是时长,
+   点只是"这一天够了"的记号。 */
+.stats-bar-flag {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  flex-shrink: 0;
+}
+
+/* ---- 每日目标环(B6.2)---- */
+.stats-goal-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.stats-goal-ring-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.stats-goal-ring {
+  width: 100%;
+  height: 100%;
+}
+
+.stats-goal-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-border) 70%, transparent);
+  stroke-width: 10;
+}
+
+.stats-goal-fill {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--duration-slow) var(--ease-emphasized);
+}
+
+.stats-goal-percent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-goal-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.stats-goal-line {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- 长列表渲染优化(B1.2)----

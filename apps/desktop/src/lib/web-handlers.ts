@@ -60,6 +60,22 @@ const MAX_NOTES = 2000
 const MAX_CARDS_PER_ADD = 200
 /** 与 Rust `CARD_SOURCES` 一致。 */
 const CARD_SOURCES: readonly string[] = ['highlight', 'quiz', 'mistake']
+/** 浏览器端的每日阅读目标(桌面端在 app_settings KV,见 storage/kv.rs)。 */
+const GOAL_STORAGE_KEY = 'deepread.reading.goal'
+const MAX_GOAL_MINUTES = 1440
+
+/** 读出生效目标:脏值/旧格式一律按"没有目标",与 Rust 读路径同一规矩。 */
+function storedGoalMinutes(): number {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(GOAL_STORAGE_KEY) ?? 'null')
+    if (parsed === null || typeof parsed !== 'object') return 0
+    const minutes = (parsed as Record<string, unknown>)['dailyMinutes']
+    if (typeof minutes !== 'number' || !Number.isInteger(minutes)) return 0
+    return minutes > 0 && minutes <= MAX_GOAL_MINUTES ? minutes : 0
+  } catch {
+    return 0
+  }
+}
 
 function notFound(what: string): AppError {
   // `systemValidation`:书 / 批注不存在,本质是调用方给了一个无效的 key ——
@@ -261,6 +277,16 @@ export const webHandlers: {
       .sort((a, b) => b.seconds - a.seconds)
       .slice(0, MAX_TOP_BOOKS)
     return { books: result }
+  },
+
+  // 每日阅读目标:桌面端在 app_settings KV(随备份走),浏览器端没有 KV 表,
+  // 用 localStorage 存同一个事实。0 = 没有目标,与 Rust 同一约定。
+  [COMMAND.readingGoalGet]: async () => ({ dailyMinutes: storedGoalMinutes() }),
+
+  [COMMAND.readingGoalSet]: async (request) => {
+    const minutes = Math.min(Math.max(Math.trunc(request.dailyMinutes), 0), 1440)
+    localStorage.setItem(GOAL_STORAGE_KEY, JSON.stringify({ dailyMinutes: minutes }))
+    return { dailyMinutes: minutes }
   },
 
   [COMMAND.readerNotesList]: async () => {

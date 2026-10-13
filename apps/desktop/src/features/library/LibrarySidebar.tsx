@@ -57,6 +57,11 @@ export interface LibrarySidebarProps {
   readonly shelfCount: number
   /** 没加载过就是 null:与其显示一个猜的数字,不如不显示。 */
   readonly notesCount: number | null
+  /**
+   * 今日阅读时长 vs 每日目标的一行摘要(统计与目标都取到才有值)。
+   * null = 还没取到,不显示 —— 侧栏不摆猜出来的数字。
+   */
+  readonly goalLine: string | null
   readonly smartFilter: SmartFilter
   readonly onSmartFilter: (filter: SmartFilter) => void
   readonly smartCounts: Readonly<Record<SmartFilter, number>>
@@ -76,6 +81,7 @@ export function LibrarySidebar({
   onView,
   shelfCount,
   notesCount,
+  goalLine,
   smartFilter,
   onSmartFilter,
   smartCounts,
@@ -202,6 +208,10 @@ export function LibrarySidebar({
           </div>
         </>
       )}
+
+      {/* 今日阅读摘要:贴着底部操作区上方,像状态栏一样"在那儿"而不抢注意力。
+          没有目标时只报今日时长;统计没取到就整行不显示。 */}
+      {goalLine !== null && <p className="lib-sidebar-goal">{goalLine}</p>}
 
       <div className="lib-sidebar-foot">
         <button type="button" className="lib-sidebar-item" onClick={onOpenSync}>

@@ -7,6 +7,8 @@ import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   dailySeries,
+  goalReached,
+  localDayKey,
   toAppError,
   type AppInfo,
   type BookReadingStat,
@@ -35,6 +37,7 @@ import {
   StorageQuotaError,
 } from '../../lib/web-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
+import { loadReadingGoal, saveReadingGoal } from '../../lib/reading-goal'
 import { mapWithConcurrency } from '../../lib/pool'
 import { loadNotes } from '../../lib/notes'
 import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
@@ -52,6 +55,7 @@ import {
   BULK_CONFIRM,
   FAVORITE_TAG,
   formatBytes,
+  formatStatDuration,
   isFinished,
   isReading,
   matchesSmartFilter,
@@ -112,8 +116,8 @@ function withViewTransition(apply: () => void): void {
   })
 }
 
-/** 设置弹窗的三个分区。顺序即左右位置,切换动画的方向由它推出来。 */
-const SETTINGS_TABS = ['appearance', 'ai', 'data'] as const
+/** 设置弹窗的分区。顺序即左右位置,切换动画的方向由它推出来。 */
+const SETTINGS_TABS = ['appearance', 'reading', 'ai', 'data'] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 
 interface LibraryScreenProps {
@@ -303,9 +307,44 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setSettingsTab(next)
   }
 
+  /**
+   * 保存每日目标。入参显式给值(默认取草稿)——「清除」按钮不能靠先
+   * setState 再读 state:那次读取拿到的是旧草稿,存回去的还是老目标。
+   * 草稿可能是空串/小数/越界值:0(清除)与 1…1440 放行,其余给一句明确的话,
+   * 不猜用户想干什么。
+   */
+  const commitGoal = async (minutesText: string = goalDraft): Promise<void> => {
+    const trimmed = minutesText.trim()
+    const minutes = trimmed === '' ? 0 : Number(trimmed)
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
+      setGoalError('请输入 0 到 1440 之间的整数(0 = 不设目标)。')
+      return
+    }
+    setGoalBusy(true)
+    setGoalError(null)
+    try {
+      const saved = await saveReadingGoal(minutes)
+      setGoalMinutes(saved)
+      setGoalDraft(String(saved))
+    } catch (error) {
+      setGoalError(toAppError(error).message)
+    } finally {
+      setGoalBusy(false)
+    }
+  }
+
   const [stats, setStats] = useState<ReadingStats | null>(null)
   /** 每本书累计读了多少(排行榜)。 */
   const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
+  /**
+   * 每日阅读目标(分钟);0 = 没有目标。挂载即取:侧栏的一行摘要要用它,
+   * 不能等用户进统计页才加载。设置弹窗里改,两边(统计环/侧栏)即时跟进。
+   */
+  const [goalMinutes, setGoalMinutes] = useState(0)
+  /** 设置弹窗里的目标输入草稿(字符串:输入框中间态可以是空的/非法的)。 */
+  const [goalDraft, setGoalDraft] = useState('0')
+  const [goalBusy, setGoalBusy] = useState(false)
+  const [goalError, setGoalError] = useState<string | null>(null)
   const [notes, setNotes] = useState<readonly NoteEntry[]>([])
   const [notesLoaded, setNotesLoaded] = useState(false)
   const [notesError, setNotesError] = useState<string | null>(null)
@@ -926,6 +965,26 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     }
   }, [view])
 
+  // 挂载即取统计与每日目标:侧栏那行「今日 vs 目标」常驻可见,不能等用户
+  // 进统计页才加载。统计页进入时上面的 effect 会再取最新的 —— 侧栏摘要允许
+  // 旧一分钟,目标环不允许。
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([loadReadingStats(), loadReadingGoal()])
+      .then(([loaded, goal]) => {
+        if (cancelled) return
+        setStats(loaded)
+        setGoalMinutes(goal)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setGoalMinutes(0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // 挂载时也取一次批注:书架卡片的「导出批注」图标与侧栏的笔记计数都靠它,
   // 不能等到进笔记页才有数(笔记页进入时下面的 effect 会再刷新一遍)。
   useEffect(() => {
@@ -972,6 +1031,18 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const statsSeries = dailySeries(stats?.days ?? [], 7)
   // 柱高按当日峰值归一;全零时给个地板值,免得除零。
   const statsPeak = Math.max(60, ...statsSeries.map((entry) => entry.seconds))
+
+  /** 今日(本地日)已读秒数。stats 未取到时是 0。 */
+  const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
+  /** 侧栏摘要行:没取到统计就不显示(宁可不显示,不显示一个猜的 0)。 */
+  const goalLine =
+    stats === null
+      ? null
+      : goalMinutes > 0
+        ? `今日 ${formatStatDuration(todaySeconds)} / 目标 ${formatStatDuration(goalMinutes * 60)}${
+            goalReached(todaySeconds, goalMinutes) ? ' · 已达成' : ''
+          }`
+        : `今日已读 ${formatStatDuration(todaySeconds)}`
 
   const allTags = useMemo(
     () => [...new Set(books.flatMap((book) => book.tags))].sort((a, b) => a.localeCompare(b, 'zh')),
@@ -1338,6 +1409,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         onView={changeView}
         shelfCount={books.length}
         notesCount={notesLoaded ? notes.length : null}
+        goalLine={goalLine}
         smartFilter={smartFilter}
         onSmartFilter={setSmartFilter}
         smartCounts={smartCounts}
@@ -1345,7 +1417,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
         activeTag={tagFilter}
         onTag={(tag) => setTagFilter(tag)}
         onOpenSync={() => setSyncOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          // 开弹窗时把当前目标铺进输入框:草稿跟着已保存值走,不另立一份缓存。
+          setGoalDraft(String(goalMinutes))
+          setGoalError(null)
+          setSettingsOpen(true)
+        }}
         onToggleSidebar={() => setSidebarOpen((isOpen) => !isOpen)}
         sidebarOpen={sidebarOpen}
       />
@@ -1512,6 +1589,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             series={statsSeries}
             peak={statsPeak}
             finishedCount={finishedCount}
+            goalMinutes={goalMinutes}
             topBooks={topBooks}
             onOpenBook={(bookHash) => openShelfBook(bookHash)}
           />
@@ -1600,6 +1678,15 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
               </button>
               <button
                 type="button"
+                className={settingsTab === 'reading' ? 'is-active' : ''}
+                onClick={() => changeSettingsTab('reading')}
+                role="tab"
+                aria-selected={settingsTab === 'reading'}
+              >
+                阅读
+              </button>
+              <button
+                type="button"
                 className={settingsTab === 'ai' ? 'is-active' : ''}
                 onClick={() => changeSettingsTab('ai')}
                 role="tab"
@@ -1668,6 +1755,51 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                     </p>
                   </section>
                 </>
+              )}
+
+              {settingsTab === 'reading' && (
+                <section className="modal-section">
+                  <p className="modal-section-label">每日阅读目标(分钟)</p>
+                  <div className="settings-goal-row">
+                    <input
+                      type="number"
+                      min={0}
+                      max={1440}
+                      step={5}
+                      value={goalDraft}
+                      onChange={(event) => setGoalDraft(event.target.value)}
+                      onBlur={() => void commitGoal()}
+                      aria-label="每日阅读目标(分钟)"
+                    />
+                    <button
+                      type="button"
+                      className="chrome-button"
+                      onClick={() => void commitGoal()}
+                      disabled={goalBusy || goalDraft === String(goalMinutes)}
+                    >
+                      保存
+                    </button>
+                    {goalMinutes > 0 && (
+                      <button
+                        type="button"
+                        className="chrome-button"
+                        onClick={() => void commitGoal('0')}
+                        disabled={goalBusy}
+                      >
+                        清除
+                      </button>
+                    )}
+                  </div>
+                  <p className="ai-privacy">
+                    统计页会出现今日完成度环,侧栏显示「今日时长 / 目标」。填 0 或点清除 =
+                    不设目标。桌面端随备份一起保存。
+                  </p>
+                  {goalError !== null && (
+                    <p className="library-error" role="alert">
+                      {goalError}
+                    </p>
+                  )}
+                </section>
               )}
 
               {settingsTab === 'ai' && (

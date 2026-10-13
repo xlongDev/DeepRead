@@ -6,6 +6,8 @@ import {
   COMMAND,
   librarySearchRequestSchema,
   librarySearchResponseSchema,
+  readingGoalGetResponseSchema,
+  readingGoalSetRequestSchema,
   requestValidators,
   responseSchemas,
   responseValidators,
@@ -98,6 +100,21 @@ describe('librarySearchResponseSchema', () => {
       indexedBooks: 1,
     }
     expect(librarySearchResponseSchema.safeParse(bad).success).toBe(false)
+  })
+})
+
+describe('reading goal schemas', () => {
+  it('get response carries minutes; 0 = no goal', () => {
+    expect(readingGoalGetResponseSchema.parse({ dailyMinutes: 45 })).toEqual({ dailyMinutes: 45 })
+    expect(readingGoalGetResponseSchema.parse({ dailyMinutes: 0 })).toEqual({ dailyMinutes: 0 })
+  })
+
+  it('set request accepts 0…1440 and rejects beyond', () => {
+    expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 30 }).success).toBe(true)
+    expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 0 }).success).toBe(true)
+    expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 1441 }).success).toBe(false)
+    expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: -1 }).success).toBe(false)
+    expect(readingGoalSetRequestSchema.safeParse({ dailyMinutes: 1.5 }).success).toBe(false)
   })
 })
 

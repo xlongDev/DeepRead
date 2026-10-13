@@ -628,6 +628,86 @@ pub fn reader_stats_books(
     })
 }
 
+/* ---------- Reading goal ----------
+每日阅读目标(分钟)存在 `app_settings` KV 里:备份走 VACUUM INTO 全量快照,
+天然带上它,不需要为这一个数字新开表。0 = 没有目标(UI 据此不画目标环)。 */
+
+/// `app_settings` key: daily reading goal in minutes.
+pub const READING_GOAL_KEY: &str = "reading.goal.dailyMinutes";
+
+/// 上限 24h:再大就不是"每日目标"而是自罚;0 合法 = 清除目标。
+const MAX_GOAL_MINUTES: u32 = 24 * 60;
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingGoalGetResponse {
+    /// 0 = 没有设置目标。
+    pub daily_minutes: u32,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadingGoalSetRequest {
+    pub daily_minutes: u32,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingGoalSetResponse {
+    /// 落库后的生效值(清洗过:越界/非法一律回 0)。
+    pub daily_minutes: u32,
+}
+
+/// 读出生效目标:存进去的值可能是旧版本遗留的非法内容,一律按"没有目标"处理,
+/// 与 `tts.rs::cache_limit` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
+pub fn load_reading_goal(conn: &Connection) -> Result<u32, AppError> {
+    Ok(crate::storage::get_setting(conn, READING_GOAL_KEY)?
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|minutes| *minutes > 0 && *minutes <= MAX_GOAL_MINUTES)
+        .unwrap_or(0))
+}
+
+pub fn save_reading_goal(conn: &Connection, minutes: u32) -> Result<u32, AppError> {
+    if minutes > MAX_GOAL_MINUTES {
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "daily goal must be between 0 and 1440 minutes",
+        )
+        .with_context("field", "dailyMinutes"));
+    }
+    // 0 也落库(而不是删行):读路径统一过滤,少一条 DELETE 的错处理路径。
+    crate::storage::set_setting(conn, READING_GOAL_KEY, &minutes.to_string())?;
+    Ok(minutes)
+}
+
+#[tauri::command(rename = "reading.goal.get")]
+pub fn reading_goal_get(
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<ReadingGoalGetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(ReadingGoalGetResponse {
+        daily_minutes: load_reading_goal(&conn)?,
+    })
+}
+
+#[tauri::command(rename = "reading.goal.set")]
+pub fn reading_goal_set(
+    db: tauri::State<'_, crate::storage::Db>,
+    request: ReadingGoalSetRequest,
+) -> Result<ReadingGoalSetResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    Ok(ReadingGoalSetResponse {
+        daily_minutes: save_reading_goal(&conn, request.daily_minutes)?,
+    })
+}
+
 #[tauri::command(rename = "reader.notes.list")]
 pub fn reader_notes_list(
     db: tauri::State<'_, crate::storage::Db>,
@@ -1125,5 +1205,34 @@ mod tests {
         let legacy: ReaderState =
             serde_json::from_str(r#"{"updatedAt":"2026-01-01T00:00:00Z"}"#).unwrap();
         assert!(legacy.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn reading_goal_defaults_to_zero_and_round_trips() {
+        let conn = memory_db();
+        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+        assert_eq!(save_reading_goal(&conn, 45).unwrap(), 45);
+        assert_eq!(load_reading_goal(&conn).unwrap(), 45);
+    }
+
+    #[test]
+    fn reading_goal_zero_means_no_goal() {
+        let conn = memory_db();
+        save_reading_goal(&conn, 45).unwrap();
+        save_reading_goal(&conn, 0).unwrap();
+        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn reading_goal_rejects_absurd_and_garbage_values() {
+        let conn = memory_db();
+        // 上限之外(25h)是校验错误,不是静默截断。
+        let err = save_reading_goal(&conn, MAX_GOAL_MINUTES + 1).unwrap_err();
+        assert_eq!(err.code, ErrorCode::SystemValidation);
+        // 旧版本遗留的非法值按"没有目标"读,不让统计环画出一个怪东西。
+        crate::storage::set_setting(&conn, READING_GOAL_KEY, "abc").unwrap();
+        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+        crate::storage::set_setting(&conn, READING_GOAL_KEY, "99999").unwrap();
+        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
     }
 }

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { STREAK_MIN_SECONDS, dailySeries, localDayKey, readingStreak, recentDayKeys } from './stats'
+import {
+  STREAK_MIN_SECONDS,
+  dailySeries,
+  goalDays,
+  goalRatio,
+  goalReached,
+  localDayKey,
+  readingStreak,
+  recentDayKeys,
+} from './stats'
 
 const today = new Date(2026, 8, 28, 22, 0, 0) // 2026-09-28 local
 
@@ -45,5 +54,37 @@ describe('dailySeries', () => {
     const series = dailySeries([{ day: '2026-09-26', seconds: 300 }], 3, today)
     expect(series.map((entry) => entry.seconds)).toEqual([300, 0, 0])
     expect(series.map((entry) => entry.day)).toEqual(['2026-09-26', '2026-09-27', '2026-09-28'])
+  })
+})
+
+describe('reading goal', () => {
+  const day = (offset: number, seconds: number) => {
+    const date = new Date(today)
+    date.setDate(date.getDate() - offset)
+    return { day: localDayKey(date), seconds }
+  }
+
+  it('goalRatio is null without a goal — no fake 0% ring', () => {
+    expect(goalRatio(1800, 0)).toBeNull()
+    expect(goalRatio(0, 30)).toBe(0)
+    expect(goalRatio(15 * 60, 30)).toBeCloseTo(0.5)
+    // 超额也是合法比值:环画满,文案照实说。
+    expect(goalRatio(45 * 60, 30)).toBeCloseTo(1.5)
+  })
+
+  it('goalReached needs the full minutes, not "any reading"', () => {
+    expect(goalReached(29 * 60 + 59, 30)).toBe(false)
+    expect(goalReached(30 * 60, 30)).toBe(true)
+    expect(goalReached(30 * 60, 0)).toBe(false)
+  })
+
+  it('goalDays counts the last N days meeting the goal, gaps excluded', () => {
+    const days = [day(0, 30 * 60), day(1, 30 * 60), day(2, 20 * 60), day(7, 60 * 60)]
+    // 窗口是最近 7 天(09-22…09-28):达标的只有今天与昨天;20 分那天不够,
+    // 第 7 天前(09-21)在窗口外,读得再久也不算。
+    expect(goalDays(days, 30, 7, today)).toBe(2)
+    expect(goalDays(days, 0, 7, today)).toBe(0)
+    // 3 天窗口(09-26…09-28):今天与昨天达标,20 分那天不够。
+    expect(goalDays(days, 30, 3, today)).toBe(2)
   })
 })

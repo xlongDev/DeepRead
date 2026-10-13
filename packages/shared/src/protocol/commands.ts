@@ -34,6 +34,9 @@ import type { StatsAddRequest as ReaderStatsAddRequest } from './generated/Stats
 import type { StatsAddResponse as ReaderStatsAddResponse } from './generated/StatsAddResponse'
 import type { StatsGetResponse as ReaderStatsGetResponse } from './generated/StatsGetResponse'
 import type { StatsBooksResponse as ReaderStatsBooksResponse } from './generated/StatsBooksResponse'
+import type { ReadingGoalGetResponse } from './generated/ReadingGoalGetResponse'
+import type { ReadingGoalSetRequest } from './generated/ReadingGoalSetRequest'
+import type { ReadingGoalSetResponse } from './generated/ReadingGoalSetResponse'
 import type { NotesListResponse as ReaderNotesListResponse } from './generated/NotesListResponse'
 import type { NoteUpdateRequest as ReaderNoteUpdateRequest } from './generated/NoteUpdateRequest'
 import type { NoteUpdateResponse as ReaderNoteUpdateResponse } from './generated/NoteUpdateResponse'
@@ -219,6 +222,9 @@ export type {
   ReaderStatsAddResponse,
   ReaderStatsBooksResponse,
   ReaderStatsGetResponse,
+  ReadingGoalGetResponse,
+  ReadingGoalSetRequest,
+  ReadingGoalSetResponse,
   ReadingFont,
   SecretDeleteRequest,
   SecretDeleteResponse,
@@ -248,6 +254,8 @@ export const COMMAND = {
   readerStatsAdd: 'reader.stats.add',
   readerStatsGet: 'reader.stats.get',
   readerStatsBooks: 'reader.stats.books',
+  readingGoalGet: 'reading.goal.get',
+  readingGoalSet: 'reading.goal.set',
   readerNotesList: 'reader.notes.list',
   readerNoteUpdate: 'reader.note.update',
   libraryCoverGet: 'library.cover.get',
@@ -341,6 +349,14 @@ export interface CommandMap {
   [COMMAND.readerStatsBooks]: {
     readonly request: undefined
     readonly response: ReaderStatsBooksResponse
+  }
+  [COMMAND.readingGoalGet]: {
+    readonly request: undefined
+    readonly response: ReadingGoalGetResponse
+  }
+  [COMMAND.readingGoalSet]: {
+    readonly request: ReadingGoalSetRequest
+    readonly response: ReadingGoalSetResponse
   }
   [COMMAND.readerNotesList]: {
     readonly request: undefined
@@ -594,6 +610,16 @@ const bookReadingStatSchema = z.object({
 })
 export const readerStatsBooksResponseSchema = z.object({
   books: z.array(bookReadingStatSchema).max(20),
+})
+/** 每日阅读目标(分钟);0 = 没有目标。上限 24h,与 Rust `MAX_GOAL_MINUTES` 对齐。 */
+export const readingGoalGetResponseSchema = z.object({
+  dailyMinutes: z.number().int().min(0).max(1440),
+})
+export const readingGoalSetRequestSchema = z.object({
+  dailyMinutes: z.number().int().min(0).max(1440),
+})
+export const readingGoalSetResponseSchema = z.object({
+  dailyMinutes: z.number().int().min(0).max(1440),
 })
 const noteEntrySchema = z.object({
   id: z.string().min(1).max(128),
@@ -917,6 +943,8 @@ export const responseSchemas = {
   [COMMAND.readerStatsAdd]: readerStatsAddResponseSchema,
   [COMMAND.readerStatsGet]: readerStatsGetResponseSchema,
   [COMMAND.readerStatsBooks]: readerStatsBooksResponseSchema,
+  [COMMAND.readingGoalGet]: readingGoalGetResponseSchema,
+  [COMMAND.readingGoalSet]: readingGoalSetResponseSchema,
   [COMMAND.readerNotesList]: readerNotesListResponseSchema,
   [COMMAND.readerNoteUpdate]: readerNoteUpdateResponseSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
@@ -978,6 +1006,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.readerStatsAdd]: readerStatsAddRequestSchema,
   [COMMAND.readerStatsGet]: undefined,
   [COMMAND.readerStatsBooks]: undefined,
+  [COMMAND.readingGoalGet]: undefined,
+  [COMMAND.readingGoalSet]: readingGoalSetRequestSchema,
   [COMMAND.readerNotesList]: undefined,
   [COMMAND.readerNoteUpdate]: readerNoteUpdateRequestSchema,
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,

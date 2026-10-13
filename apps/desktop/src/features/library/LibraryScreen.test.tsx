@@ -212,6 +212,12 @@ function mockBackend(books: readonly LibraryBook[], notes: readonly NoteEntry[] 
     if (command === 'library.list') return Promise.resolve({ books: [...books] })
     if (command === 'library.search')
       return Promise.resolve({ books: [], hits: [], indexedBooks: 0 })
+    // 阅读目标:默认没有;set 回显落库值(与 Rust/web 两侧同一契约)。
+    if (command === 'reading.goal.get') return Promise.resolve({ dailyMinutes: 0 })
+    if (command === 'reading.goal.set') {
+      const { dailyMinutes } = request as { dailyMinutes: number }
+      return Promise.resolve({ dailyMinutes })
+    }
     if (command === 'reader.stats.get') return Promise.resolve(STATS)
     if (command === 'reader.stats.books') return Promise.resolve({ books: [...TOP_BOOKS] })
     if (command === 'reader.notes.list') return Promise.resolve({ notes: [...notes] })
@@ -696,6 +702,107 @@ describe('LibraryScreen 跨书搜索(library.search)', () => {
     // 全部三本书回到架上(每本的书名在封面与标题各出现一次)。
     expect(screen.getAllByText('夜航书').length).toBeGreaterThan(0)
     expect(screen.getAllByText('化雪的季节').length).toBeGreaterThan(0)
+  })
+})
+
+describe('LibraryScreen 阅读目标', () => {
+  it('没设目标时侧栏只报今日时长', async () => {
+    await renderLibrary()
+    const sidebar = screen.getByRole('complementary', { name: '主导航' })
+    // STATS:今天 600 秒。没有目标就不拿"目标"吓人。
+    await waitFor(() => expect(within(sidebar).getByText('今日已读 10 分')).toBeInTheDocument())
+  })
+
+  it('设置里保存目标后,侧栏摘要与统计页目标环一起更新', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton('设置'))
+    fireEvent.click(screen.getByRole('tab', { name: '阅读' }))
+
+    fireEvent.change(screen.getByLabelText('每日阅读目标(分钟)'), { target: { value: '20' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('reading.goal.set', { dailyMinutes: 20 }),
+    )
+
+    // 侧栏摘要换成带目标的形式(今日 10 分 / 目标 20 分,未达成)。
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('complementary', { name: '主导航' })).getByText(
+          '今日 10 分 / 目标 20 分',
+        ),
+      ).toBeInTheDocument(),
+    )
+
+    // 统计页:今日 600s / 目标 1200s = 50%,环与达标天数都在。
+    fireEvent.click(sidebarButton('统计'))
+    const page = await screen.findByLabelText('阅读统计')
+    expect(within(page).getByText('50%')).toBeInTheDocument()
+    expect(within(page).getByText('本周达标 0 / 7 天')).toBeInTheDocument()
+    // 没有一天达标 → 柱子上方没有小旗。
+    expect(page.querySelectorAll('.stats-bar-flag').length).toBe(0)
+  })
+
+  it('目标设得比今天读得少时,统计环画满并标记已达成', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton('设置'))
+    fireEvent.click(screen.getByRole('tab', { name: '阅读' }))
+    fireEvent.change(screen.getByLabelText('每日阅读目标(分钟)'), { target: { value: '5' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('reading.goal.set', { dailyMinutes: 5 }),
+    )
+
+    // 今天 10 分 > 目标 5 分:侧栏写明已达成。
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('complementary', { name: '主导航' })).getByText(
+          '今日 10 分 / 目标 5 分 · 已达成',
+        ),
+      ).toBeInTheDocument(),
+    )
+
+    // 统计页:比值 2 → 环画满(100%),百分比照实显示 200%,今天那根柱子带达标小旗。
+    fireEvent.click(sidebarButton('统计'))
+    const page = await screen.findByLabelText('阅读统计')
+    expect(within(page).getByText('200%')).toBeInTheDocument()
+    expect(within(page).getByText('本周达标 1 / 7 天')).toBeInTheDocument()
+    expect(page.querySelectorAll('.stats-bar-flag').length).toBe(1)
+  })
+
+  it('清除目标后摘要回到只报今日时长,统计页提示去设置', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton('设置'))
+    fireEvent.click(screen.getByRole('tab', { name: '阅读' }))
+    fireEvent.change(screen.getByLabelText('每日阅读目标(分钟)'), { target: { value: '20' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('reading.goal.set', { dailyMinutes: 20 }),
+    )
+
+    fireEvent.click(screen.getByText('清除'))
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('reading.goal.set', { dailyMinutes: 0 }),
+    )
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('complementary', { name: '主导航' })).getByText('今日已读 10 分'),
+      ).toBeInTheDocument(),
+    )
+
+    fireEvent.click(sidebarButton('统计'))
+    const page = await screen.findByLabelText('阅读统计')
+    expect(within(page).getByText(/还没有设置每日目标/)).toBeInTheDocument()
+    expect(page.querySelector('.stats-goal-ring')).toBeNull()
+  })
+
+  it('非法目标值给出明确错误,不发 IPC', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton('设置'))
+    fireEvent.click(screen.getByRole('tab', { name: '阅读' }))
+    fireEvent.change(screen.getByLabelText('每日阅读目标(分钟)'), { target: { value: '9999' } })
+    fireEvent.click(screen.getByText('保存'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/0 到 1440 之间的整数/)
+    expect(invokeCommandMock).not.toHaveBeenCalledWith('reading.goal.set', expect.anything())
   })
 })
 

@@ -62,3 +62,41 @@ export function dailySeries(
     label: `${Number(key.slice(8, 10))}`,
   }))
 }
+
+/* ---------- Reading goal ----------
+目标本身只是「每天多少分钟」;推导全部放这里,统计环 / 侧栏摘要 / 达标天数
+三处共用同一套规则,不各写一遍。 */
+
+/** 0 = 没有目标。 */
+export const NO_GOAL_MINUTES = 0
+
+/**
+ * 今日目标完成度(可超过 1)。没有目标时返回 null —— 调用方据此不画环、
+ * 不显示百分比,而不是画一个 0% 的环冒充"差了全部"。
+ */
+export function goalRatio(todaySeconds: number, goalMinutes: number): number | null {
+  if (goalMinutes <= NO_GOAL_MINUTES) return null
+  return todaySeconds / (goalMinutes * 60)
+}
+
+/** 今日是否达标。没有目标时永远 false(无从谈起)。 */
+export function goalReached(todaySeconds: number, goalMinutes: number): boolean {
+  const ratio = goalRatio(todaySeconds, goalMinutes)
+  return ratio !== null && ratio >= 1
+}
+
+/**
+ * 最近 `count` 天(含今天)里达标的天数。判定与 streak 同一个思路:
+ * 读够了目标分钟才算,随手翻两页不算。
+ */
+export function goalDays(
+  days: readonly DayStat[],
+  goalMinutes: number,
+  count = 7,
+  today: Date = new Date(),
+): number {
+  if (goalMinutes <= NO_GOAL_MINUTES) return 0
+  const threshold = goalMinutes * 60
+  const byDay = new Map(days.map((entry) => [entry.day, entry.seconds]))
+  return recentDayKeys(count, today).filter((key) => (byDay.get(key) ?? 0) >= threshold).length
+}

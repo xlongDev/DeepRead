@@ -118,6 +118,29 @@
 | 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)                                                                   |
 | 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除)                                                         |
 
+### `library.search`(跨书搜索,B6.1)
+
+|           |                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Request   | `{ query: string }`(1…200 字符)                                                                                                                              |
+| Response  | `{ books: LibraryBook[], hits: LibrarySearchHit[], indexedBooks: number }`                                                                                   |
+| hits 字段 | `{ bookHash, displayName: string \| null, fileName, label, excerpt }` —— `label` 是命中章节(RAG chunk 的 label),`excerpt` 是命中处 ±60 字符上下文            |
+| Errors    | `SYSTEM_VALIDATION`(query 为空/超长)、`STORAGE_IO`                                                                                                           |
+| 约定      | 两层:① `books` 表 LIKE(题名/副题/作者/文件名/标签,`%`/`_` 已按字面转义,ASCII 大小写不敏感);② `ai_index.chunks` JSON 子串匹配,**只搜已建索引的书**,上限 30 条 |
+| 约定      | 正文命中按 `bookHash + label` 开书,前端在目录里定位(没有 CFI 可给);`indexedBooks` 让 UI 诚实标注"基于已建 AI 索引的 N 本书"                                  |
+| 约定      | 浏览器端只有书目层(`hits: []`、`indexedBooks: 0`)—— AI 索引本来就只有桌面版;demo 书架走前端本地过滤                                                          |
+
+### `reading.goal.get` / `reading.goal.set`(每日阅读目标,B6.2)
+
+|        |                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| get    | Request `undefined`;Response `{ dailyMinutes: number }`,**0 = 没有目标**                                                    |
+| set    | Request `{ dailyMinutes: number }`(0…1440);Response `{ dailyMinutes }`(落库后的生效值)                                      |
+| Errors | `SYSTEM_VALIDATION`(>1440、非整数由 serde 拒收)、`STORAGE_IO`                                                               |
+| 约定   | 桌面端存 `app_settings` KV(键 `reading.goal.dailyMinutes`),随 VACUUM INTO 备份快照一起走,零迁移;浏览器端分流到 localStorage |
+| 约定   | 读路径统一过滤非法/越界/过期值为 0 —— 设置项永远有一份干净的默认值可回,与 `tts.cache.maxBytes` 同一条规矩                   |
+| 约定   | 推导(完成度环 / 本周达标天数 / 侧栏摘要)全部在前端 `@deepread/shared/stats`,数据仍来自现有 `reading_stats`,不新增表         |
+
 ### `ai.*` 与 `secret.*`(Phase 3)
 
 | 命令                         | 请求 → 响应                                                                                            | 说明                                                                                                       |
