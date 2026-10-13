@@ -2625,6 +2625,178 @@ button:disabled {
   left: auto;
 }
 
+.selection-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.selection-toolbar button:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* ---------- Highlights & annotation notes ---------- */
+
+.highlight-swatch {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.selection-toolbar .highlight-swatch {
+  margin: 6px;
+}
+
+.highlight-swatch:hover {
+  transform: scale(1.12);
+}
+
+.highlight-swatch.is-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+
+.highlight-palette {
+  display: flex;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.note-editor-float {
+  top: 60px;
+  right: 12px;
+  left: auto;
+}
+
+.note-editor-quote {
+  margin: 0 0 var(--space-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.note-input {
+  width: 100%;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  resize: vertical;
+}
+
+.note-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.note-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.note-editor-actions .btn {
+  padding: 6px var(--space-md);
+  font-size: var(--font-size-sm);
+}
+
+.reader-toc-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.reader-toc-tabs button {
+  padding: 6px var(--space-md);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.reader-toc-tabs button.is-active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.annotation-scope {
+  margin-bottom: var(--space-sm);
+}
+
+.annotation-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: 2px 0;
+}
+
+.annotation-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 12px;
+  border-radius: var(--radius-full);
+}
+
+.annotation-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.annotation-item {
+  display: block;
+  width: 100%;
+  padding: 8px var(--space-sm);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.annotation-item:hover {
+  background: var(--color-accent-soft);
+}
+
+.annotation-excerpt {
+  display: block;
+}
+
+.annotation-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+}
+
+.annotation-actions {
+  display: flex;
+  gap: 2px;
+}
+
 /* ---------- Dictionary lookup card ---------- */
 
 .lookup-card {
@@ -5088,6 +5260,12 @@ html[data-turn-style='fade']::view-transition-new(book-page) {
   .tts-mini-btn {
     width: 42px;
     height: 42px;
+  }
+
+  /* 触摸时色点要够大才点得准 —— 28px 是这道工具栏里最小的可点面积。 */
+  .highlight-swatch {
+    width: 28px;
+    height: 28px;
   }
 
   .reader-slider {

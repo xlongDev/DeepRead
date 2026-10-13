@@ -359,6 +359,225 @@ describe('阅读动作接到内核', () => {
   })
 })
 
+const SELECTION = {
+  cfi: 'epubcfi(/6/4!/4/2)',
+  text: '被划的那一句。',
+  rect: { top: 140, left: 80, height: 20 },
+} as const
+
+describe('批注:多色划线 / 笔记 / 列表面板', () => {
+  /** 划选正文 → 工具栏出现。 */
+  async function selectText(adapter: FakeFoliateAdapter): Promise<HTMLElement> {
+    adapter.emitSelection({ ...SELECTION })
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('选区工具栏没出现')
+      return node
+    })
+    return toolbar
+  }
+
+  /** 侧栏切到批注页签。 */
+  function openAnnotationsTab(): HTMLElement {
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    fireEvent.click(screen.getByText(/^批注/))
+    return document.querySelector<HTMLElement>('.reader-toc') as HTMLElement
+  }
+
+  it('选区工具栏给五色划线,点哪个色就按哪个色交给内核', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    const swatches = [...toolbar.querySelectorAll('button[aria-label$="划线"]')]
+    expect(swatches).toHaveLength(5)
+
+    fireEvent.click(within(toolbar).getByLabelText('蓝色划线'))
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
+    expect(adapter.createAnnotation.mock.calls[0]?.[0]).toMatchObject({
+      color: '#86b6f0',
+      selectedText: SELECTION.text,
+      range: { start: { cfi: SELECTION.cfi } },
+    })
+  })
+
+  it('写笔记保存后新建一条带 note 的划线', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('写笔记'))
+    const textarea = await screen.findByLabelText('笔记内容')
+    fireEvent.change(textarea, { target: { value: '这句要抄下来' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
+    expect(adapter.createAnnotation.mock.calls[0]?.[0]).toMatchObject({ note: '这句要抄下来' })
+  })
+
+  it('笔记留空保存 = 只要划线,不带 note', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+    fireEvent.click(within(toolbar).getByTitle('写笔记'))
+    await screen.findByLabelText('笔记内容')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
+    // 领域模型的 note 是该字段的"没有"态(undefined),存下来就是纯划线。
+    expect(adapter.createAnnotation.mock.calls[0]?.[0]?.note).toBeUndefined()
+  })
+
+  it('批注页签列出摘录与笔记,点条目按 CFI 回到原文', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state: {
+            progress: null,
+            annotations: [
+              {
+                id: 'a1',
+                cfi: 'epubcfi(/6/4!/4/2)',
+                color: '#86c98a',
+                excerpt: '第一章被划的那句',
+                note: '第一章的想法',
+                updatedAt: '2026-10-12T00:00:00Z',
+              },
+            ],
+            bookmarks: [],
+            updatedAt: '2026-10-12T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+    const { adapter } = await renderReader()
+
+    const panel = openAnnotationsTab()
+    expect(within(panel as HTMLElement).getByText('第一章被划的那句')).toBeInTheDocument()
+    expect(within(panel as HTMLElement).getByText('第一章的想法')).toBeInTheDocument()
+
+    fireEvent.click(within(panel as HTMLElement).getByTitle('跳到原文'))
+    await waitFor(() =>
+      expect(adapter.goTo).toHaveBeenCalledWith({ cfi: 'epubcfi(/6/4!/4/2)', progress: 0 }),
+    )
+  })
+
+  it('列表里改笔记:新文案进 state.set,清空的 note 真的删掉', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state: {
+            progress: null,
+            annotations: [
+              {
+                id: 'a1',
+                cfi: 'epubcfi(/6/4!/4/2)',
+                color: '#f5d76e',
+                excerpt: '摘录',
+                note: '旧笔记',
+                updatedAt: '2026-10-12T00:00:00Z',
+              },
+            ],
+            bookmarks: [],
+            updatedAt: '2026-10-12T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+    await renderReader()
+    const panel = openAnnotationsTab()
+
+    fireEvent.click(within(panel).getByTitle('写笔记'))
+    fireEvent.change(await screen.findByLabelText('笔记内容'), {
+      target: { value: '新笔记' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(within(panel).getByText('新笔记')).toBeInTheDocument())
+
+    // 清空再保存 → 只剩划线。
+    fireEvent.click(within(panel).getByTitle('写笔记'))
+    fireEvent.change(await screen.findByLabelText('笔记内容'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.queryByLabelText('笔记内容')).not.toBeInTheDocument())
+    expect(within(panel).queryByText('旧笔记')).not.toBeInTheDocument()
+  })
+
+  it('「本章」只留当前那一节的批注,读不出章节时按全书给', async () => {
+    const annotation = (id: string, cfi: string, excerpt: string) => ({
+      id,
+      cfi,
+      color: '#f5d76e',
+      excerpt,
+      updatedAt: '2026-10-12T00:00:00Z',
+    })
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state: {
+            progress: null,
+            annotations: [
+              annotation('a1', 'epubcfi(/6/4!/4/2)', '第一章的划线'),
+              annotation('a2', 'epubcfi(/6/6!/4/8)', '第二章的划线'),
+            ],
+            bookmarks: [],
+            updatedAt: '2026-10-12T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+    const { adapter } = await renderReader()
+
+    adapter.emitRelocate({
+      cfi: 'epubcfi(/6/4!/4/2)',
+      fraction: 0.1,
+      tocLabel: undefined,
+      location: undefined,
+      sectionIndex: 0,
+    })
+    const panel = openAnnotationsTab()
+    await waitFor(() => expect(within(panel).getByText('第一章的划线')).toBeInTheDocument())
+
+    fireEvent.click(within(panel).getByText('本章'))
+    await waitFor(() => expect(within(panel).queryByText('第二章的划线')).not.toBeInTheDocument())
+    expect(within(panel).getByText('第一章的划线')).toBeInTheDocument()
+
+    fireEvent.click(within(panel).getByText('全书'))
+    expect(within(panel).getByText('第二章的划线')).toBeInTheDocument()
+  })
+
+  it('列表删除划线:调内核 removeAnnotation 并留下墓碑', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state: {
+            progress: null,
+            annotations: [
+              {
+                id: 'a1',
+                cfi: 'epubcfi(/6/4!/4/2)',
+                color: '#f5d76e',
+                excerpt: '摘录',
+                updatedAt: '2026-10-12T00:00:00Z',
+              },
+            ],
+            bookmarks: [],
+            updatedAt: '2026-10-12T00:00:00Z',
+          },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+    const { adapter } = await renderReader()
+    const panel = openAnnotationsTab()
+
+    fireEvent.click(within(panel).getByTitle('删除划线'))
+    await waitFor(() => expect(adapter.removeAnnotation).toHaveBeenCalledWith('a1'))
+    await waitFor(() =>
+      expect(within(panel).getByText('还没有批注 —— 在正文里划选即可。')).toBeInTheDocument(),
+    )
+  })
+})
+
 describe('ReaderScreen 从笔记页跳回原文', () => {
   it('带 CFI 打开时落在那条批注上,而不是上次读到的位置', async () => {
     invokeMock.mockImplementation((command) => {

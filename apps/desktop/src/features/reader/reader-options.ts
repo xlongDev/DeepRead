@@ -23,6 +23,24 @@ export const READER_THEMES: readonly { readonly label: string; readonly theme: R
 ]
 
 export const HIGHLIGHT_COLOR = '#f5d76e'
+
+/**
+ * 划线色板(五档)。
+ * 色值直接交给内核铺 SVG 背景(见 `reader-adapter` 的 draw-annotation 处理),
+ * 内核统一按 0.3 不透明度绘制 —— 所以这里存的是"原色",上纸后被压成淡彩。
+ * 五档亮度刻意对齐(多色划线要在同一页上并存而不打架):高饱和色压出来会
+ * 一边重一边轻,不好做区分。
+ */
+export const HIGHLIGHT_PALETTE: readonly {
+  readonly label: string
+  readonly color: string
+}[] = [
+  { label: '黄色', color: HIGHLIGHT_COLOR },
+  { label: '绿色', color: '#86c98a' },
+  { label: '蓝色', color: '#86b6f0' },
+  { label: '粉色', color: '#f0a0b8' },
+  { label: '紫色', color: '#c0a8e8' },
+]
 export const FONT_SIZES = [14, 16, 18, 20] as const
 
 // undefined means 原书排版 (the book's own typography wins)
