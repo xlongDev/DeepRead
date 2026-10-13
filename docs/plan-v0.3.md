@@ -21,7 +21,7 @@
 
 核心批次 B0-B8 合计 ≈ 21-28 人日。B1/B2/B4 相互独立,B3 之后的批次(除 B5)都走 codegen 管线。
 
-> **进度(2026-10-13)**:B0 ✅ · B1 ✅ · B2 ✅ · B3 ✅ · **B4 ✅**(多色划线 / 划线即笔记 / 批注列表面板,小结见 `docs/development/batch-b4-notes.md`)· B5-B9 未开始。
+> **进度(2026-10-13)**:B0 ✅ · B1 ✅ · B2 ✅ · B3 ✅ · B4 ✅ · **B5 ✅**(多角色听书 UI / 划选翻译 / 繁简提案,小结见 `docs/development/batch-b5-notes.md`)· B6-B9 未开始。
 > B3 小结见 `docs/development/batch-b3-notes.md`。
 
 依赖关系:

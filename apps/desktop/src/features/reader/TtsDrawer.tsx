@@ -28,15 +28,17 @@ import { invokeCommand } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import {
   blockSeekRatio,
+  buildSpeakerPlan,
   CHARS_PER_SECOND,
   formatClock,
   locateBlock,
   sentenceIndexAt,
-  splitChapterBlocks,
   totalChars as sumChars,
   voicesForLanguage,
   type Block,
   type Sentence,
+  type SpeakerBlock,
+  type SpeakerRole,
 } from './tts-plan'
 
 type Engine = 'edge' | 'system' | 'cloud'
@@ -78,6 +80,47 @@ interface TtsSettings {
   /** 正文 TTS 高亮粒度:'word' 留作下一轮接入,目前等价于 'sentence'。 */
   highlightMode: HighlightMode
   highlightColor: string
+  /**
+   * 角色 → 音色,按引擎分存:三个引擎的音色 id 互不通用(Edge 是 shortName、
+   * 系统是 voiceURI、云端是服务商的 voice 字段)。没配的角色回退叙述者音色。
+   */
+  speakerVoices: Record<string, Partial<Record<Engine, string>>>
+}
+
+/**
+ * `speakerVoices` 是用户可写的字典,直接摊平 localStorage 里的旧值/手改脏值
+ * 会在渲染时炸掉 —— 只保留字符串,其余字段沿用原样合并。
+ */
+function sanitizeSettings(value: TtsSettings): TtsSettings {
+  const voices: Record<string, Partial<Record<Engine, string>>> = {}
+  const raw: unknown = value.speakerVoices
+  if (raw !== null && typeof raw === 'object') {
+    for (const [speaker, perEngine] of Object.entries(raw as Record<string, unknown>)) {
+      const entry: Partial<Record<Engine, string>> = {}
+      if (perEngine !== null && typeof perEngine === 'object') {
+        const source = perEngine as Record<string, unknown>
+        for (const engine of ['edge', 'system', 'cloud'] as const) {
+          const id = source[engine]
+          if (typeof id === 'string' && id !== '') entry[engine] = id
+        }
+      }
+      voices[speaker] = entry
+    }
+  }
+  return { ...value, speakerVoices: voices }
+}
+
+/** 该说话人在当前引擎下的音色;没单独配过就用叙述者的。 */
+export function voiceForSpeaker(
+  settings: TtsSettings,
+  speaker: string,
+  engine: Engine,
+): string | undefined {
+  const own = settings.speakerVoices[speaker]?.[engine]
+  if (own !== undefined && own !== '') return own
+  if (engine === 'edge') return settings.narratorEdge
+  if (engine === 'cloud') return settings.narratorCloud
+  return settings.narratorSystem
 }
 
 const DEFAULT_SETTINGS: TtsSettings = {
@@ -90,6 +133,7 @@ const DEFAULT_SETTINGS: TtsSettings = {
   narratorCloud: 'alloy',
   highlightMode: 'sentence',
   highlightColor: HIGHLIGHT_PRESETS[0].color,
+  speakerVoices: {},
 }
 
 interface TtsDrawerProps {
@@ -166,6 +210,7 @@ const SentenceItem = memo(function SentenceItem({
 
 export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function TtsDrawer(
   {
+    bookHash,
     bookTitle,
     bookLanguage,
     coverUrl,
@@ -185,13 +230,19 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     try {
       const stored = localStorage.getItem(SETTINGS_KEY)
       return stored
-        ? { ...DEFAULT_SETTINGS, ...(JSON.parse(stored) as Partial<TtsSettings>) }
+        ? sanitizeSettings({ ...DEFAULT_SETTINGS, ...(JSON.parse(stored) as Partial<TtsSettings>) })
         : DEFAULT_SETTINGS
     } catch {
       return DEFAULT_SETTINGS
     }
   })
   const [view, setView] = useState<'player' | 'voices'>('player')
+  /** 语音面板的两栏:叙述者 / 角色。没有角色时只显示叙述者。 */
+  const [voiceTab, setVoiceTab] = useState<'narrator' | 'roles'>('narrator')
+  /** 本章的角色(名 + 出现段数);空 = 这章没认领到任何角色。 */
+  const [roles, setRoles] = useState<readonly SpeakerRole[]>([])
+  /** 角色名来源:AI 角色图谱 artifact。没跑过抽取就没有角色 —— 不假装有。 */
+  const [knownNames, setKnownNames] = useState<readonly string[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
   const [sentences, setSentences] = useState<readonly Sentence[]>([])
   const [charPos, setCharPos] = useState(0)
@@ -213,6 +264,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const sentencesRef = useRef<readonly Sentence[]>([])
   const charPosRef = useRef(0)
   const voicesRef = useRef(voices)
+  const knownNamesRef = useRef<readonly string[]>([])
   const activeIdRef = useRef<string | null>(null)
   const sectionTokenRef = useRef(0)
   // 首挂标记:热切换 effect 用它跳过首次执行。
@@ -285,6 +337,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     voicesRef.current = voices
   }, [voices])
   useEffect(() => {
+    knownNamesRef.current = knownNames
+  }, [knownNames])
+  useEffect(() => {
     setSectionTitle(sectionLabel)
   }, [sectionLabel])
 
@@ -305,6 +360,24 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         // 云端引擎是可选项;选中时才暴露错误。
       })
   }, [])
+
+  /** 角色名 = AI 角色图谱已抽出的名字;没抽过就是 0 个角色,全书走叙述者。 */
+  useEffect(() => {
+    invokeCommand('ai.artifact.get', { bookHash, kind: 'characters' })
+      .then((response) => {
+        const payload = response?.payload as { characters?: unknown } | null | undefined
+        const list = payload?.characters
+        if (!Array.isArray(list)) return
+        setKnownNames(
+          list
+            .map((item) => (item as { name?: unknown }).name)
+            .filter((name): name is string => typeof name === 'string' && name.length > 0),
+        )
+      })
+      .catch(() => {
+        // 没抽取过角色图谱就走单音色 —— 不是错误,不打扰用户。
+      })
+  }, [bookHash])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -426,10 +499,11 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
 
   /** 系统引擎:整块 utterance + 估算时钟推进字符位置。 */
   const speakSystemBlock = useCallback(
-    async (block: Block): Promise<void> => {
+    async (block: SpeakerBlock): Promise<void> => {
       if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
       const current = settingsRef.current
-      const voice = voicesRef.current.find((item) => item.voiceURI === current.narratorSystem)
+      const wanted = voiceForSpeaker(current, block.speaker, 'system')
+      const voice = voicesRef.current.find((item) => item.voiceURI === wanted)
       const chars = block.text.length
       const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
       let elapsed = 0
@@ -482,24 +556,32 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           committedSentenceRef.current = -1
           setSentences(sentenceList)
           setPhase('playing')
-          const blocks = splitChapterBlocks(text, sentenceList)
+          // 按说话人分块:一块只属于一个说话人,音色才有意义。
+          const plan = buildSpeakerPlan(text, knownNamesRef.current)
+          setRoles(plan.roles)
+          const blocks = plan.blocks
           // 流水线:块 N 播放时后台合成块 N+1(readest 的 preload 思路)。
           // 缓存命中时预取立即返回,重听零等待。
-          type Fetch = Promise<{ block: Block; path: string } | null>
-          const fetchBlock = async (block: Block): Promise<{ block: Block; path: string }> => {
+          type Fetch = Promise<{ block: SpeakerBlock; path: string } | null>
+          const fetchBlock = async (
+            block: SpeakerBlock,
+          ): Promise<{ block: SpeakerBlock; path: string }> => {
             const current = settingsRef.current
+            // 缓存 key 含 voice(Rust 侧 tts::cache_file_name),换角色音色
+            // 走新缓存条目,旧的不失效 —— 重听仍是零等待。
+            const voice = voiceForSpeaker(current, block.speaker, current.engine)
             const response =
               current.engine === 'edge'
                 ? await invokeCommand('tts.edge.audio', {
                     text: block.text,
-                    voice: current.narratorEdge,
+                    voice: voice ?? '',
                     lang: bookLanguage,
                     rate: current.rate,
                   })
                 : await invokeCommand('tts.audio', {
                     configId: activeIdRef.current ?? '',
                     text: block.text,
-                    voice: current.narratorCloud,
+                    voice: voice ?? '',
                     speed: current.rate,
                   })
             return { block, path: response.path }
@@ -637,6 +719,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     settings.narratorSystem,
     settings.rate,
     settings.engine,
+    // 角色音色变了同样要按当前位置续播:缓存按音色分开,重合成只发生在新块。
+    settings.speakerVoices,
   ])
 
   useEffect(() => {
@@ -863,73 +947,168 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 ? `${systemVoiceOptions.length} 种语音`
                 : `${providers.length} 个服务`}
           </p>
-          <div className="tts-voice-list">
-            {settings.engine === 'edge' &&
-              edgeVoiceOptions.map((voice) => (
-                <button
-                  key={voice.shortName}
-                  type="button"
-                  className={`tts-voice-item${settings.narratorEdge === voice.shortName ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setSettings((current) => ({ ...current, narratorEdge: voice.shortName }))
-                    setView('player')
-                  }}
-                >
-                  <span className="tts-voice-name">{voice.shortName.replace(/Neural$/, '')}</span>
-                  <span className="tts-voice-locale">{voice.locale}</span>
-                  {settings.narratorEdge === voice.shortName && (
-                    <Check size={15} weight="bold" aria-hidden />
-                  )}
-                </button>
-              ))}
-            {settings.engine === 'system' && (
+          {roles.length > 0 && (
+            <div className="tts-engine-row" aria-label="音色归属">
               <button
                 type="button"
-                className={`tts-voice-item${!settings.narratorSystem ? ' is-active' : ''}`}
-                onClick={() => {
-                  setSettings((current) => ({ ...current, narratorSystem: undefined }))
-                  setView('player')
-                }}
+                className={`segmented-button${voiceTab === 'narrator' ? ' is-active' : ''}`}
+                onClick={() => setVoiceTab('narrator')}
+                aria-pressed={voiceTab === 'narrator'}
               >
-                <span className="tts-voice-name">默认</span>
-                {!settings.narratorSystem && <Check size={15} weight="bold" aria-hidden />}
+                叙述者
               </button>
-            )}
-            {settings.engine === 'system' &&
-              systemVoiceOptions.map((voice) => (
-                <button
-                  key={voice.voiceURI}
-                  type="button"
-                  className={`tts-voice-item${settings.narratorSystem === voice.voiceURI ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setSettings((current) => ({ ...current, narratorSystem: voice.voiceURI }))
-                    setView('player')
-                  }}
-                >
-                  <span className="tts-voice-name">{voice.name}</span>
-                  <span className="tts-voice-locale">{voice.lang}</span>
-                  {settings.narratorSystem === voice.voiceURI && (
-                    <Check size={15} weight="bold" aria-hidden />
-                  )}
-                </button>
-              ))}
-            {settings.engine === 'cloud' &&
-              providers.map((provider) => (
-                <button
-                  key={provider.id}
-                  type="button"
-                  className={`tts-voice-item${activeId === provider.id ? ' is-active' : ''}`}
-                  onClick={() => {
-                    setView('player')
-                  }}
-                >
-                  <span className="tts-voice-name">
-                    {provider.name} · {provider.ttsModel ?? '未配置 TTS 模型'}
+              <button
+                type="button"
+                className={`segmented-button${voiceTab === 'roles' ? ' is-active' : ''}`}
+                onClick={() => setVoiceTab('roles')}
+                aria-pressed={voiceTab === 'roles'}
+              >
+                角色 {roles.length}
+              </button>
+            </div>
+          )}
+          {roles.length > 0 && voiceTab === 'roles' ? (
+            <div className="tts-voice-list">
+              {roles.map((role) => (
+                <div key={role.name} className="tts-role-row">
+                  <span className="tts-role-name">
+                    {role.name}
+                    <span className="tts-role-count">{role.count} 段</span>
                   </span>
-                  {activeId === provider.id && <Check size={15} weight="bold" aria-hidden />}
-                </button>
+                  {settings.engine === 'cloud' ? (
+                    <input
+                      className="tts-role-input"
+                      value={settings.speakerVoices[role.name]?.cloud ?? ''}
+                      placeholder={`同叙述者(${settings.narratorCloud})`}
+                      aria-label={`${role.name} 的云端音色`}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          speakerVoices: {
+                            ...current.speakerVoices,
+                            [role.name]: {
+                              ...current.speakerVoices[role.name],
+                              cloud: event.target.value,
+                            },
+                          },
+                        }))
+                      }
+                    />
+                  ) : (
+                    <DropdownMenu
+                      className="tts-role-dropdown"
+                      ariaLabel={`${role.name} 的音色`}
+                      value={voiceForSpeaker(settings, role.name, settings.engine) ?? ''}
+                      options={
+                        settings.engine === 'edge'
+                          ? edgeVoiceOptions.map((voice) => ({
+                              value: voice.shortName,
+                              label: voice.shortName.replace(/Neural$/, ''),
+                            }))
+                          : [
+                              { value: '', label: '默认' },
+                              ...systemVoiceOptions.map((voice) => ({
+                                value: voice.voiceURI,
+                                label: voice.name,
+                              })),
+                            ]
+                      }
+                      onChange={(value) =>
+                        setSettings((current) => ({
+                          ...current,
+                          speakerVoices: {
+                            ...current.speakerVoices,
+                            [role.name]: {
+                              ...current.speakerVoices[role.name],
+                              [current.engine]: value,
+                            },
+                          },
+                        }))
+                      }
+                    >
+                      <span className="tts-card-value">
+                        {(voiceForSpeaker(settings, role.name, settings.engine) ?? '默认').slice(
+                          0,
+                          14,
+                        )}
+                      </span>
+                    </DropdownMenu>
+                  )}
+                </div>
               ))}
-          </div>
+              <p className="tts-voices-sub">
+                角色音色对本章生效;换音色会重新合成(缓存按音色分开存,重听不重新计费)。
+              </p>
+            </div>
+          ) : (
+            <div className="tts-voice-list">
+              {settings.engine === 'edge' &&
+                edgeVoiceOptions.map((voice) => (
+                  <button
+                    key={voice.shortName}
+                    type="button"
+                    className={`tts-voice-item${settings.narratorEdge === voice.shortName ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setSettings((current) => ({ ...current, narratorEdge: voice.shortName }))
+                      setView('player')
+                    }}
+                  >
+                    <span className="tts-voice-name">{voice.shortName.replace(/Neural$/, '')}</span>
+                    <span className="tts-voice-locale">{voice.locale}</span>
+                    {settings.narratorEdge === voice.shortName && (
+                      <Check size={15} weight="bold" aria-hidden />
+                    )}
+                  </button>
+                ))}
+              {settings.engine === 'system' && (
+                <button
+                  type="button"
+                  className={`tts-voice-item${!settings.narratorSystem ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setSettings((current) => ({ ...current, narratorSystem: undefined }))
+                    setView('player')
+                  }}
+                >
+                  <span className="tts-voice-name">默认</span>
+                  {!settings.narratorSystem && <Check size={15} weight="bold" aria-hidden />}
+                </button>
+              )}
+              {settings.engine === 'system' &&
+                systemVoiceOptions.map((voice) => (
+                  <button
+                    key={voice.voiceURI}
+                    type="button"
+                    className={`tts-voice-item${settings.narratorSystem === voice.voiceURI ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setSettings((current) => ({ ...current, narratorSystem: voice.voiceURI }))
+                      setView('player')
+                    }}
+                  >
+                    <span className="tts-voice-name">{voice.name}</span>
+                    <span className="tts-voice-locale">{voice.lang}</span>
+                    {settings.narratorSystem === voice.voiceURI && (
+                      <Check size={15} weight="bold" aria-hidden />
+                    )}
+                  </button>
+                ))}
+              {settings.engine === 'cloud' &&
+                providers.map((provider) => (
+                  <button
+                    key={provider.id}
+                    type="button"
+                    className={`tts-voice-item${activeId === provider.id ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setView('player')
+                    }}
+                  >
+                    <span className="tts-voice-name">
+                      {provider.name} · {provider.ttsModel ?? '未配置 TTS 模型'}
+                    </span>
+                    {activeId === provider.id && <Check size={15} weight="bold" aria-hidden />}
+                  </button>
+                ))}
+            </div>
+          )}
         </div>
       ) : (
         <>

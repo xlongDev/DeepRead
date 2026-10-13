@@ -18,7 +18,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppInfo } from '@deepread/shared'
 import type { OpenedBook } from '../../lib/book-import'
-import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import {
   FakeFoliateAdapter,
   latestAdapter,
@@ -49,6 +49,7 @@ vi.mock('../../lib/reading-stats', () => ({
 
 vi.mock('../../lib/ipc', () => ({
   invokeCommand: vi.fn(),
+  invokeStreamingCommand: vi.fn(),
   isTauriRuntime: vi.fn((): boolean => true),
 }))
 
@@ -68,6 +69,7 @@ vi.mock('./TtsDrawer', () => ({ TtsDrawer: () => <div data-testid="tts" /> }))
 vi.mock('./LearningDrawer', () => ({ LearningDrawer: () => <div data-testid="learning" /> }))
 
 const invokeMock = vi.mocked(invokeCommand)
+const streamMock = vi.mocked(invokeStreamingCommand)
 const isTauriMock = vi.mocked(isTauriRuntime)
 
 const APP_INFO: AppInfo = {
@@ -145,6 +147,8 @@ beforeEach(() => {
   localStorage.clear()
   invokeMock.mockReset()
   invokeMock.mockImplementation((command) => Promise.resolve(respond(command)) as never)
+  streamMock.mockReset()
+  streamMock.mockResolvedValue(undefined as never)
   isTauriMock.mockReturnValue(true)
 })
 
@@ -626,5 +630,72 @@ describe('ReaderScreen 从笔记页跳回原文', () => {
       cfi: 'epubcfi(/6/99!)',
       progress: 0.9,
     })
+  })
+})
+
+describe('划选翻译', () => {
+  const PROVIDER = {
+    id: 'cfg-1',
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+  }
+
+  /** 让流式命令在被调用的那一刻把模型输出推回去(真流是异步的,这里同步喂)。 */
+  function withStreamOutput(text: string): void {
+    streamMock.mockImplementation(((
+      _command: string,
+      _request: unknown,
+      onEvent: (event: { type: string; data: string }) => void,
+    ) => {
+      const push = (piece: string): void => {
+        onEvent({
+          type: 'chunk',
+          data: `data: ${JSON.stringify({ choices: [{ delta: { content: piece } }] })}\n\n`,
+        })
+      }
+      for (const piece of text.match(/.{1,8}/gs) ?? []) push(piece)
+      return Promise.resolve(undefined)
+    }) as never)
+  }
+
+  async function selectText(adapter: FakeFoliateAdapter): Promise<HTMLElement> {
+    adapter.emitSelection({ ...SELECTION })
+    return await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('选区工具栏没出现')
+      return node
+    })
+  }
+
+  it('翻译按钮走 ai.chat 流式,译文边收边渲染,并写明用的哪个服务', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'ai.config.list') return Promise.resolve({ providers: [PROVIDER] }) as never
+      return Promise.resolve(respond(command)) as never
+    })
+    withStreamOutput('LANG:zh-CN\n---\nThe wick crackled.')
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('翻译'))
+    await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(1))
+    const request = streamMock.mock.calls[0]?.[1] as { configId: string; messages: unknown }
+    expect(request.configId).toBe('cfg-1')
+    expect(JSON.stringify(request.messages)).toContain('被划的那一句。')
+
+    const card = await screen.findByLabelText('翻译')
+    expect(within(card).getByText('The wick crackled.')).toBeInTheDocument()
+    // 成本诚实:谁出的译文、用的哪个模型,直接写在卡片上。
+    expect(within(card).getByText('DeepSeek · deepseek-chat')).toBeInTheDocument()
+    expect(within(card).getByText('源语言 zh-CN')).toBeInTheDocument()
+  })
+
+  it('没配 AI 服务时说明原因,而不是给出假的译文', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+    fireEvent.click(within(toolbar).getByTitle('翻译'))
+    await waitFor(() => expect(screen.queryByLabelText('翻译')).not.toBeInTheDocument())
+    expect(streamMock).not.toHaveBeenCalled()
+    expect(await screen.findByText(/还没有配置 AI 服务/)).toBeInTheDocument()
   })
 })

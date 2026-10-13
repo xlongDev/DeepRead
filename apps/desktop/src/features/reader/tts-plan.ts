@@ -5,6 +5,8 @@
  * TtsDrawer 里,因为它和 ref 生命周期绑得太紧。这里只放能单测的部分。
  */
 
+import { buildSpeechSegments } from '@deepread/reader-core'
+
 /** 合成块上限:约 2-4 句。小块首响快(1-3 秒),配合预取无缝衔接。 */
 export const MAX_SYNTH_CHARS = 300
 
@@ -60,6 +62,62 @@ export function splitChapterBlocks(
   }
   if (start !== -1) blocks.push({ text: text.slice(start, end), start })
   return blocks
+}
+
+/** 一块只属于一个说话人 —— 多角色时不能让两个人的话进同一段音频。 */
+export interface SpeakerBlock extends Block {
+  readonly speaker: string
+}
+
+/** 角色页签的一行:名字 + 本章出现段数(给用户一个"这角色有多少戏份"的量级)。 */
+export interface SpeakerRole {
+  readonly name: string
+  readonly count: number
+}
+
+/**
+ * 按说话人分块。复用 reader-core 的 `splitDialogue → assignSpeakers` 链
+ * (spec §45):引号内的段落归角色,邻近叙述里唯一提到的人名认领它,归属不了的
+ * 台词仍归叙述者 —— 不猜、不硬凑。
+ *
+ * 段文本在原文里按顺序 `indexOf` 定位,块文本因此始终是**原文切片**,块内
+ * 字符推进与原文 1:1(与 {@link splitChapterBlocks} 同一约束,正文高亮靠它)。
+ * `knownNames` 为空时整章都是 narrator,输出退化成普通分块。
+ */
+export function buildSpeakerPlan(
+  text: string,
+  knownNames: readonly string[],
+  max = MAX_SYNTH_CHARS,
+): { readonly blocks: SpeakerBlock[]; readonly roles: SpeakerRole[] } {
+  const blocks: SpeakerBlock[] = []
+  const counts = new Map<string, number>()
+  let start = -1
+  let end = -1
+  let speaker: string | null = null
+  let cursor = 0
+  for (const segment of buildSpeechSegments(text, knownNames)) {
+    const at = text.indexOf(segment.text, cursor)
+    // 段文本来自原文切片,定位不到只可能是上游改了切分规则 —— 跳过而不是错位。
+    if (at === -1) continue
+    const nextEnd = at + segment.text.length
+    cursor = nextEnd
+    counts.set(segment.speaker, (counts.get(segment.speaker) ?? 0) + 1)
+    if (speaker === null || segment.speaker !== speaker || nextEnd - start > max) {
+      if (speaker !== null && start !== -1) {
+        blocks.push({ text: text.slice(start, end), start, speaker })
+      }
+      start = at
+      speaker = segment.speaker
+    }
+    end = nextEnd
+  }
+  if (speaker !== null && start !== -1) {
+    blocks.push({ text: text.slice(start, end), start, speaker })
+  }
+  const roles = [...counts]
+    .filter(([name]) => name !== 'narrator')
+    .map(([name, count]) => ({ name, count }))
+  return { blocks, roles }
 }
 
 /** 起点块下标:`startChar` 落在哪个块里;越界(章末)返回 -1。 */

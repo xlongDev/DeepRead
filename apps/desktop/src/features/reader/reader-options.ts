@@ -166,6 +166,26 @@ export function persistTypography(patch: TypographySettings): void {
   cachedTypography = next
 }
 
+/* ---------- 划选翻译的目标语言(只落 localStorage)。 ---------- */
+
+const TRANSLATE_KEY = 'deepread.translate.target'
+
+export const TRANSLATE_TARGETS = ['中文', 'English', '日本語', '한국어'] as const
+
+/** 没选过就返回 null —— 默认值要看书的语言,由调用方决定。 */
+export function loadTranslateTarget(): string | null {
+  try {
+    const stored = localStorage.getItem(TRANSLATE_KEY)
+    return stored === null || stored === '' ? null : stored
+  } catch {
+    return null
+  }
+}
+
+export function persistTranslateTarget(target: string): void {
+  localStorage.setItem(TRANSLATE_KEY, target)
+}
+
 /* ---------- 底栏显示偏好与翻页动画(同样只落 localStorage)。 ---------- */
 
 export interface StatsSettings {

@@ -21,6 +21,7 @@ import {
   Sparkle,
   Sun,
   TextAa,
+  Translate,
   Trash,
   X,
 } from '@phosphor-icons/react'
@@ -29,6 +30,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   toAppError,
+  type AiProviderConfig,
   type AnnotationRecord,
   type BookmarkRecord,
   type DictionaryMeta,
@@ -52,7 +54,15 @@ import {
   type EngineSelection,
 } from '@deepread/reader-adapter'
 import type { RepairChange } from '@deepread/reader-adapter'
-import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import {
+  createSseParser,
+  extractDelta,
+  buildTranslateMessages,
+  parseTranslation,
+  streamTranslationView,
+  TRANSLATE_MAX_CHARS,
+} from '@deepread/ai-core'
+import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import {
   buildFontFacesCss,
   FONT_FAMILY_OPTIONS,
@@ -71,7 +81,10 @@ import {
   persistPageTurnStyle,
   persistStatsSettings,
   persistTypography,
+  loadTranslateTarget,
+  persistTranslateTarget,
   READER_THEMES,
+  TRANSLATE_TARGETS,
   VIEW_MODE_OPTIONS,
   withAlpha,
   type PageTurnStyle,
@@ -81,6 +94,7 @@ import {
 import { buildReadingStats } from './reading-indicators'
 import { readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
+import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
 import { LearningDrawer } from './LearningDrawer'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
@@ -266,6 +280,23 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [tocTab, setTocTab] = useState<'toc' | 'annotations'>('toc')
   const [annotationScope, setAnnotationScope] = useState<'chapter' | 'book'>('book')
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null)
+  /** AI 服务列表:翻译要显示用的哪个 provider/model(成本诚实)。 */
+  const [aiProviders, setAiProviders] = useState<readonly AiProviderConfig[]>([])
+  /** 划选翻译的浮层状态;null = 没在翻译。 */
+  const [translation, setTranslation] = useState<{
+    readonly rect: { readonly top: number; readonly left: number }
+    readonly lang: string | null
+    readonly body: string
+    readonly provider: string
+    readonly truncated: boolean
+    readonly error: string | null
+    readonly loading: boolean
+  } | null>(null)
+  /** 目标语言:null = 没手动选过,跟着书的语言走(见 effectiveTranslateTarget)。 */
+  const [translateTarget, setTranslateTarget] = useState<string | null>(loadTranslateTarget)
+  /** 目标语言的实际取值:没手动选过时,中文书译英、其余译中。 */
+  const effectiveTranslateTarget =
+    translateTarget ?? (bookLanguage?.toLowerCase().startsWith('zh') ? 'English' : '中文')
   const [rebuildPattern, setRebuildPattern] = useState(
     () => localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '',
   )
@@ -474,6 +505,14 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       buildFontFacesCss(customFonts.map((font) => ({ name: font.name, path: font.path }))),
     )
   }, [customFonts, phase])
+
+  useEffect(() => {
+    invokeCommand('ai.config.list', undefined)
+      .then((response) => setAiProviders(response?.providers ?? []))
+      .catch(() => {
+        // 没配 AI 服务时翻译按钮会说明原因,这里不打扰。
+      })
+  }, [])
 
   useEffect(() => {
     if (!isTauriRuntime()) return
@@ -981,6 +1020,74 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     },
     [book.bookId, scheduleSave, selection],
   )
+
+  /**
+   * 划选翻译:走 ai.chat 流式通道,边收边渲染,收完 zod 校验。
+   * 门槛是「有没有配 AI 服务」——没配就说清楚,不做假的翻译结果。
+   */
+  const runTranslate = useCallback(async (): Promise<void> => {
+    const current = selection
+    if (current === null) return
+    const provider = aiProviders[0]
+    if (provider === undefined) {
+      setNotice({ text: '还没有配置 AI 服务:先在 AI 助手里添加一个,再回来翻译。', danger: false })
+      return
+    }
+    const source = current.text
+    const text = source.slice(0, TRANSLATE_MAX_CHARS)
+    const rect = { top: current.rect.top, left: current.rect.left }
+    setSelection(null)
+    setTranslation({
+      rect,
+      lang: null,
+      body: '',
+      provider: `${provider.name} · ${provider.model}`,
+      truncated: source.length > TRANSLATE_MAX_CHARS,
+      error: null,
+      loading: true,
+    })
+    const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+    let buffer = ''
+    const parser = createSseParser((data) => {
+      const delta = extractDelta(data)
+      if (delta.type !== 'delta') return
+      buffer += delta.text
+      const view = streamTranslationView(buffer)
+      setTranslation((state) =>
+        state === null ? state : { ...state, lang: view.lang, body: view.body },
+      )
+    })
+    try {
+      await invokeStreamingCommand(
+        'ai.chat',
+        {
+          taskId,
+          configId: provider.id,
+          messages: [
+            ...buildTranslateMessages({
+              text,
+              targetLang: effectiveTranslateTarget,
+              context: text,
+            }),
+          ],
+        },
+        (event) => {
+          if (event.type === 'chunk') parser.push(event.data)
+        },
+      )
+      parser.end()
+      const parsed = parseTranslation(buffer)
+      setTranslation((state) =>
+        state === null
+          ? state
+          : { ...state, lang: parsed.detectedLang, body: parsed.translation, loading: false },
+      )
+    } catch (cause) {
+      setTranslation((state) =>
+        state === null ? state : { ...state, loading: false, error: toAppError(cause).message },
+      )
+    }
+  }, [aiProviders, effectiveTranslateTarget, selection])
 
   /** 下笔:选中即成划线 + 一条笔记。已有批注只改 note,高亮本身不动。 */
   const commitNote = async (): Promise<void> => {
@@ -2227,6 +2334,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             >
               <Note size={16} weight="regular" aria-hidden />
             </button>
+            <button type="button" onClick={() => void runTranslate()} title="翻译">
+              <Translate size={16} weight="regular" aria-hidden />
+            </button>
             {selection.text.trim().length <= 40 && (
               <button type="button" onClick={() => void runLookup()} title="查词典">
                 <BookOpen size={16} weight="regular" aria-hidden />
@@ -2243,6 +2353,80 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
               onSave={() => void commitNote()}
               onCancel={() => setNoteDraft(null)}
             />
+          </div>
+        )}
+
+        {translation !== null && (
+          <div
+            className="lookup-card translate-card"
+            aria-label="翻译"
+            style={{
+              top: Math.min(
+                Math.max(64, (translation.rect.top ?? 100) - 12),
+                window.innerHeight - 300,
+              ),
+              left: Math.max(12, Math.min(translation.rect.left ?? 100, window.innerWidth - 340)),
+            }}
+          >
+            <div className="lookup-head">
+              <strong>翻译 → {effectiveTranslateTarget}</strong>
+              <button
+                type="button"
+                className="chrome-button"
+                onClick={() => setTranslation(null)}
+                title="关闭"
+              >
+                <X size={12} weight="regular" aria-hidden />
+              </button>
+            </div>
+            <DropdownMenu
+              className="tts-card-dropdown"
+              ariaLabel="翻译目标语言"
+              value={effectiveTranslateTarget}
+              options={TRANSLATE_TARGETS.map((target) => ({ value: target, label: target }))}
+              onChange={(target) => {
+                setTranslateTarget(target)
+                persistTranslateTarget(target)
+              }}
+            >
+              <span className="tts-card-value">{effectiveTranslateTarget}</span>
+              <span className="tts-card-label">目标语言</span>
+            </DropdownMenu>
+            {translation.truncated && (
+              <p className="reader-toc-empty">
+                选中内容超过 {TRANSLATE_MAX_CHARS} 字,只译了前 {TRANSLATE_MAX_CHARS} 字。
+              </p>
+            )}
+            {translation.error !== null ? (
+              <p className="ai-error" role="alert">
+                {translation.error}
+              </p>
+            ) : (
+              <p className="translate-body">
+                {translation.body === ''
+                  ? translation.loading
+                    ? '翻译中…'
+                    : '没有返回译文。'
+                  : translation.body}
+              </p>
+            )}
+            <div className="translate-foot">
+              {/* 成本诚实:这译文是谁出的、用的哪个模型,直接写在卡片上。 */}
+              <span className="translate-provider">{translation.provider}</span>
+              <div className="translate-actions">
+                {translation.lang !== null && (
+                  <span className="translate-provider">源语言 {translation.lang}</span>
+                )}
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => void navigator.clipboard?.writeText(translation.body)}
+                  title="复制译文"
+                >
+                  <Copy size={12} weight="regular" aria-hidden />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

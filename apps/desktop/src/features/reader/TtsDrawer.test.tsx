@@ -455,3 +455,81 @@ describe('setRate stopped 守卫', () => {
     ])
   })
 })
+
+describe('多角色听书', () => {
+  /** 两段台词各自被邻近叙述里唯一的人名认领。 */
+  const DIALOGUE = '青柳说:「谢谢你。」雅子回答:「不用谢。」两人沉默了。'
+  const NAMES = ['青柳', '雅子']
+
+  function respondWithCharacters(command: string, index: number): unknown {
+    if (command === 'ai.artifact.get') {
+      return { payload: { characters: NAMES.map((name) => ({ name })) }, createdAt: null }
+    }
+    return respond(command, index)
+  }
+
+  it('角色块用角色音色,叙述块用叙述者音色(缓存按音色分开存,互不覆盖)', async () => {
+    localStorage.setItem(
+      'deepread.tts.settings',
+      JSON.stringify({
+        speakerVoices: {
+          青柳: { edge: 'zh-CN-YunxiNeural' },
+          雅子: { edge: 'zh-CN-XiaoyiNeural' },
+        },
+      }),
+    )
+    invokeMock.mockImplementation(
+      (command) => Promise.resolve(respondWithCharacters(command as string, 0)) as never,
+    )
+    const props = makeProps({ getSectionText: vi.fn(async () => DIALOGUE) })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    // 块是串行播放的:每一块播完才合成下一块,这里把整章推到底。
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        FakeAudio.current.end()
+      })
+      await flush()
+    }
+
+    const voices = synthCalls().map((call) => (call as [string, { voice: string }])[1].voice)
+    expect(voices).toContain('zh-CN-YunxiNeural')
+    expect(voices).toContain('zh-CN-XiaoyiNeural')
+    // 叙述部分仍是叙述者音色,不会被角色音色顶掉。
+    expect(voices).toContain('zh-CN-XiaoxiaoNeural')
+  })
+
+  it('没抽过角色图谱时全书走单一叙述音色,不凭空造角色', async () => {
+    const props = makeProps({ getSectionText: vi.fn(async () => DIALOGUE) })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+
+    const calls = synthCalls() as readonly [string, { voice: string }][]
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every(([, request]) => request.voice === 'zh-CN-XiaoxiaoNeural')).toBe(true)
+  })
+
+  it('角色页签只在真的认领到角色时出现', async () => {
+    invokeMock.mockImplementation(
+      (command) => Promise.resolve(respondWithCharacters(command as string, 0)) as never,
+    )
+    const props = makeProps({ getSectionText: vi.fn(async () => DIALOGUE) })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+
+    fireEvent.click(screen.getByTitle('选择语音'))
+    const rolesTab = screen.getByRole('button', { name: /角色 2/ })
+    expect(rolesTab).toBeInTheDocument()
+    fireEvent.click(rolesTab)
+    // 角色行 = 名字 + 出现段数,音色选择器在里面。
+    expect(screen.getByText(/青柳/)).toBeInTheDocument()
+    expect(screen.getByText(/雅子/)).toBeInTheDocument()
+    expect(screen.getByLabelText('青柳 的音色')).toBeInTheDocument()
+  })
+})

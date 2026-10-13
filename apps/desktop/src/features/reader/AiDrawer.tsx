@@ -19,17 +19,23 @@ import {
 } from '@deepread/ai-core'
 import {
   applyCorrections,
+  applyConversions,
   buildCharactersMessages,
+  buildConvertMessages,
   buildRepairMessages,
   charactersSchema,
+  conversionRuleLabel,
   outlineInsightSchema,
   parseCharacters,
+  parseConversions,
   parseCorrections,
   parseOutlineInsight,
   parseSummaryInsight,
   summaryInsightSchema,
   type AiCorrection,
   type CharactersPayload,
+  type Conversion,
+  type ConversionRule,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import { useAiProviders } from '../settings/AiProviderSettings'
@@ -85,6 +91,13 @@ export function AiDrawer({
   const [aiCorrections, setAiCorrections] = useState<{
     proposals: readonly AiCorrection[]
     accepted: ReadonlySet<string>
+  } | null>(null)
+  /** 繁简转换评审(与 AI 校对同一框架;providerLabel 供 UI 诚实标注)。 */
+  const [conversions, setConversions] = useState<{
+    proposals: readonly Conversion[]
+    accepted: ReadonlySet<string>
+    rule: ConversionRule
+    providerLabel: string
   } | null>(null)
   // Browser (non-Tauri) sessions keep the index and insights in memory;
   // Tauri persists them per book hash via IPC (Rust, covered by its tests).
@@ -350,6 +363,52 @@ export function AiDrawer({
     setError(
       result.skipped > 0
         ? `已应用 ${result.applied} 处,跳过 ${result.skipped} 处(命中不再唯一)。`
+        : null,
+    )
+  }
+
+  /**
+   * 繁简转换:当前 AI provider 出 find/replace 提案,逐条对照原文校验后交用户审批
+   * (与 AI 校对同一"检测-应用分离"框架)。单次上限 100 条,长书可重复检查。
+   */
+  const runConvert = useCallback(
+    async (rule: ConversionRule): Promise<void> => {
+      if (sourceText === null || insightPhase === 'streaming') return
+      setInsightPhase('streaming')
+      setError(null)
+      try {
+        const full = await streamChatText(buildConvertMessages(sourceText.slice(0, 6000), rule))
+        const proposals = parseConversions(full, sourceText, rule)
+        if (proposals.length === 0) {
+          setError('AI 在前 6000 字里没有找到需要转换的用字。')
+          setConversions(null)
+          return
+        }
+        const provider = providers.find((item) => item.id === activeId)
+        setConversions({
+          proposals,
+          accepted: new Set(proposals.filter((p) => p.occurrences === 1).map((p) => p.id)),
+          rule,
+          providerLabel: provider ? `${provider.name} · ${provider.model}` : '未知服务',
+        })
+      } catch (convertError) {
+        setError(toAppError(convertError).message)
+      } finally {
+        setInsightPhase('idle')
+      }
+    },
+    [activeId, insightPhase, providers, sourceText, streamChatText],
+  )
+
+  const applyConversionsAccepted = async (): Promise<void> => {
+    const review = conversions
+    if (!review || sourceText === null) return
+    const result = applyConversions(sourceText, review.proposals, [...review.accepted])
+    await onReplaceSource(result.text)
+    setConversions(null)
+    setError(
+      result.skipped > 0
+        ? `已转换 ${result.applied} 处,跳过 ${result.skipped} 处(命中不再唯一)。`
         : null,
     )
   }
@@ -710,6 +769,27 @@ export function AiDrawer({
               </div>
             </div>
           )}
+          {sourceText !== null && (
+            <div className="settings-row">
+              <span className="settings-label">繁简转换</span>
+              <div className="segmented">
+                <button
+                  type="button"
+                  onClick={() => void runConvert('t2s')}
+                  disabled={insightPhase === 'streaming'}
+                >
+                  繁→简
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runConvert('s2t')}
+                  disabled={insightPhase === 'streaming'}
+                >
+                  简→繁
+                </button>
+              </div>
+            </div>
+          )}
           {aiCorrections !== null && (
             <div className="ai-insight">
               {aiCorrections.proposals.map((proposal) => (
@@ -736,6 +816,51 @@ export function AiDrawer({
                 onClick={() => void applyAiCorrectionsAccepted()}
               >
                 应用已选({aiCorrections.accepted.size}/{aiCorrections.proposals.length})
+              </button>
+            </div>
+          )}
+          {conversions !== null && (
+            <div className="ai-insight">
+              <p className="lookup-empty">
+                由当前 AI 提供商({conversions.providerLabel})生成
+                {conversionRuleLabel(conversions.rule)}提案,已逐条对照原文校验,仅应用勾选项。
+                单次上限 100 条,未覆盖的部分可再检查一次。
+              </p>
+              {conversions.proposals.map((proposal) => (
+                <label
+                  key={proposal.id}
+                  className="repair-item"
+                  aria-label={`应用${conversionRuleLabel(proposal.rule)}转换`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={conversions.accepted.has(proposal.id)}
+                    onChange={() =>
+                      setConversions((current) => {
+                        if (!current) return current
+                        const accepted = new Set(current.accepted)
+                        if (accepted.has(proposal.id)) accepted.delete(proposal.id)
+                        else accepted.add(proposal.id)
+                        return { ...current, accepted }
+                      })
+                    }
+                  />
+                  <span className="repair-body">
+                    <span className="repair-rule">
+                      {conversionRuleLabel(proposal.rule)}
+                      {proposal.occurrences > 1 && ` · 命中 ${proposal.occurrences} 处`}
+                    </span>
+                    <s className="repair-before">{proposal.find}</s>
+                    <span className="repair-after">{proposal.replace}</span>
+                  </span>
+                </label>
+              ))}
+              <button
+                type="button"
+                className="reader-error-button"
+                onClick={() => void applyConversionsAccepted()}
+              >
+                应用已选({conversions.accepted.size}/{conversions.proposals.length})
               </button>
             </div>
           )}

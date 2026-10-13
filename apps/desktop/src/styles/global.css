@@ -2797,6 +2797,43 @@ button:disabled {
   gap: 2px;
 }
 
+.translate-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-height: 420px;
+}
+
+.translate-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  color: var(--color-text-primary);
+  overflow-y: auto;
+}
+
+.translate-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-xs);
+}
+
+.translate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* 成本诚实:这译文是谁出的、用的哪个模型。 */
+.translate-provider {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
 /* ---------- Dictionary lookup card ---------- */
 
 .lookup-card {
@@ -4228,6 +4265,40 @@ dialog.modal-panel {
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
+}
+
+/* 角色配音行:左名字(带出现段数),右音色选择器。 */
+.tts-role-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.tts-role-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.tts-role-count {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.tts-role-input {
+  width: 128px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
 }
 
 .tts-voice-name {

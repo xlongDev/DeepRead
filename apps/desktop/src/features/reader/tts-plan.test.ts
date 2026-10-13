@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   blockSeekRatio,
+  buildSpeakerPlan,
   formatClock,
   locateBlock,
   nextRate,
@@ -207,5 +208,61 @@ describe('nextRate', () => {
   it('未收录的速率回落到第一档', () => {
     expect(nextRate(rates, 3)).toBe(0.75)
     expect(nextRate(rates, 0)).toBe(0.75)
+  })
+})
+
+describe('buildSpeakerPlan', () => {
+  /** 两角色对话:每段前后都有提到人名的叙述,归属才成立。 */
+  const CHAPTER = '青柳说:「谢谢你。」雅子回答:「不用谢。」两人沉默了。'
+
+  it('认领到的角色单独成块,叙述者归叙述者', () => {
+    const { blocks, roles } = buildSpeakerPlan(CHAPTER, ['青柳', '雅子'])
+    expect(roles.map((role) => role.name)).toEqual(['青柳', '雅子'])
+    // 三块:青柳的台词 / 雅子的台词 / 结尾叙述。
+    const speakers = blocks.map((block) => block.speaker)
+    expect(speakers).toContain('青柳')
+    expect(speakers).toContain('雅子')
+    expect(speakers.at(-1)).toBe('narrator')
+  })
+
+  it('块文本是原文切片且互不重叠 —— 偏移换算仍 1:1', () => {
+    const { blocks } = buildSpeakerPlan(CHAPTER, ['青柳', '雅子'])
+    let cursor = 0
+    for (const block of blocks) {
+      expect(block.start).toBeGreaterThanOrEqual(cursor)
+      expect(CHAPTER.slice(block.start, block.start + block.text.length)).toBe(block.text)
+      cursor = block.start + block.text.length
+    }
+    // 覆盖到章末:最后一块的尾巴就是原文的尾巴(允许尾部标点留在块内)。
+    expect(cursor).toBeGreaterThan(CHAPTER.length - 12)
+  })
+
+  it('没有角色名时整章都是叙述者,退化成普通分块', () => {
+    const { blocks, roles } = buildSpeakerPlan(CHAPTER, [])
+    expect(roles).toEqual([])
+    expect(blocks.every((block) => block.speaker === 'narrator')).toBe(true)
+    expect(blocks.length).toBeGreaterThan(0)
+  })
+
+  it('同一说话人的连续段合并成一块', () => {
+    // 两句台词都没有叙述提示语可认领 → 都归叙述者,自然合成一块。
+    const blocks = buildSpeakerPlan('「甲。」「乙。」', [], 1000).blocks
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.text).toBe('「甲。」「乙。」')
+  })
+
+  it('换说话人即断块;max 收紧只增加块数,不会把两个人塞进一块', () => {
+    // 「小明说:」是叙述(narrator),台词归小明 —— 交替出现就交替成块。
+    const text = '小明说:「一二三四五。」小明说:「六七八九十。」'
+    expect(buildSpeakerPlan(text, ['小明'], 1000).blocks.map((b) => b.speaker)).toEqual([
+      'narrator',
+      '小明',
+      'narrator',
+      '小明',
+    ])
+    const tight = buildSpeakerPlan(text, ['小明'], 8).blocks
+    // 每块单一说话人是构造保证;收紧 max 只让块更短,不会把叙述和台词并进一块。
+    expect(tight.length).toBeGreaterThanOrEqual(4)
+    expect(tight.every((block) => block.text.length <= 8)).toBe(true)
   })
 })
