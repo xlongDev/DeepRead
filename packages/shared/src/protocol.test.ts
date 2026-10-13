@@ -4,6 +4,8 @@ import { appErrorPayloadSchema } from './protocol/errors'
 import {
   appInfoSchema,
   COMMAND,
+  librarySearchRequestSchema,
+  librarySearchResponseSchema,
   requestValidators,
   responseSchemas,
   responseValidators,
@@ -60,6 +62,42 @@ describe('command validators', () => {
   it('request validators exist for commands that take a request', () => {
     expect(requestValidators[COMMAND.systemPing]).toBeDefined()
     expect(requestValidators[COMMAND.appInfo]).toBeUndefined()
+  })
+})
+
+describe('librarySearchRequestSchema', () => {
+  it('accepts a normal query and rejects blank/oversized ones', () => {
+    expect(librarySearchRequestSchema.safeParse({ query: '灯芯' }).success).toBe(true)
+    expect(librarySearchRequestSchema.safeParse({ query: '' }).success).toBe(false)
+    expect(librarySearchRequestSchema.safeParse({ query: 'x'.repeat(201) }).success).toBe(false)
+  })
+})
+
+describe('librarySearchResponseSchema', () => {
+  it('keeps both segments and the indexed-book count', () => {
+    const response = {
+      books: [],
+      hits: [
+        {
+          bookHash: 'a'.repeat(64),
+          displayName: '化雪的季节',
+          fileName: '化雪的季节.epub',
+          label: '第一章',
+          excerpt: '……灯芯偶尔响一声……',
+        },
+      ],
+      indexedBooks: 3,
+    }
+    expect(librarySearchResponseSchema.parse(response)).toEqual(response)
+  })
+
+  it('rejects a hit without an excerpt', () => {
+    const bad = {
+      books: [],
+      hits: [{ bookHash: 'a'.repeat(64), displayName: null, fileName: 'x.epub', label: '第一章' }],
+      indexedBooks: 1,
+    }
+    expect(librarySearchResponseSchema.safeParse(bad).success).toBe(false)
   })
 })
 

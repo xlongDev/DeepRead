@@ -10,6 +10,7 @@ import {
   toAppError,
   type AppInfo,
   type BookReadingStat,
+  type LibrarySearchHit,
   type NoteEntry,
 } from '@deepread/shared'
 import { extractCover, extractMetadata } from '@deepread/reader-adapter'
@@ -36,6 +37,7 @@ import {
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { mapWithConcurrency } from '../../lib/pool'
 import { loadNotes } from '../../lib/notes'
+import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SyncDrawer } from './SyncDrawer'
@@ -135,6 +137,17 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   const [dragging, setDragging] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  /**
+   * 跨书搜索结果(`library.search`):书目命中 + 正文命中 + 已建索引的书数。
+   * null = 没有查询(书架显示全部书)。
+   */
+  const [search, setSearch] = useState<{
+    books: readonly ShelfBook[]
+    hits: readonly LibrarySearchHit[]
+    indexedBooks: number
+  } | null>(null)
+  /** 请求序号:晚发出的响应不许覆盖早发出的(防乱序回包)。 */
+  const searchSeqRef = useRef(0)
 
   // Dev-only demo shelf (?demoShelf) so the grid and real cover extraction are
   // verifiable in a browser without Tauri; production never sees it.
@@ -796,16 +809,46 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     else inputRef.current?.click()
   }, [importFromDialog])
 
+  /**
+   * 跨书搜索:查询词变了就(防抖 200ms)问后端。两个平台走同一条命令 ——
+   * 桌面端是 Rust 的两层搜索,浏览器端在 ipc 层被分流(只有书目层)。
+   */
+  useEffect(() => {
+    const q = query.trim()
+    if (q === '') {
+      searchSeqRef.current += 1
+      setSearch(null)
+      return
+    }
+    const seq = (searchSeqRef.current += 1)
+    const timer = window.setTimeout(() => {
+      invokeCommand('library.search', { query: q })
+        .then((response) => {
+          // 过期响应直接丢:用户又打了两个字,旧结果回来只会闪一下。
+          if (searchSeqRef.current !== seq) return
+          setSearch({
+            books: response.books,
+            hits: response.hits,
+            indexedBooks: response.indexedBooks,
+          })
+        })
+        .catch(() => {
+          if (searchSeqRef.current !== seq) return
+          setSearch(null)
+        })
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const base = q
-      ? books.filter(
-          (book) =>
-            book.fileName.toLowerCase().includes(q) || shelfTitle(book).toLowerCase().includes(q),
-        )
-      : books
+    // demo 书架只活在内存里(没写 IndexedDB),而浏览器端的搜索命令读的是库 ——
+    // 对它只能本地过滤,不然 demo 书一本都搜不到。
+    const base =
+      query.trim() === '' || demoSeeded.current
+        ? books.filter((book) => matchesBookQuery(book, query))
+        : (search?.books ?? [])
     return sortBooks(base, sort, sortDir)
-  }, [books, query, sort, sortDir])
+  }, [books, query, search, sort, sortDir])
 
   // Two-step: one stray click used to drop a book plus its progress forever.
   // 待确认状态留在外壳(它和整批移出共用同一个哨兵),ShelfView 只管渲染按钮。
@@ -1227,10 +1270,12 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
 
   /**
    * 从笔记页打开一本书:带 CFI 就落到那条批注,不带就回上次读到的位置。
+   * `sectionLabel` 来自跨书搜索的正文命中:阅读器按它在目录里定位(RAG
+   * chunk 没有 CFI),找不到会如实告知。
    * 书可能已经被移出书架(批注随之删除,但这一屏还是旧的),所以要如实说
    * 清楚,而不是打开一本不存在的书。
    */
-  const openShelfBook = (bookHash: string, cfi?: string): void => {
+  const openShelfBook = (bookHash: string, cfi?: string, sectionLabel?: string): void => {
     const book = books.find((item) => item.hash === bookHash)
     if (book === undefined) {
       setProblem('这本书已经不在书架里了,这条笔记暂时打不开。')
@@ -1239,7 +1284,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
     setProblem(null)
     void (async () => {
       const url = isTauriRuntime() ? undefined : await browserBookUrl(book.hash)
-      onOpenBook(openedBookFromLibrary(book, url, cfi))
+      onOpenBook(openedBookFromLibrary(book, url, cfi, sectionLabel))
     })()
   }
 
@@ -1386,41 +1431,66 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
             )}
 
             {libraryLoaded && books.length > 0 && (
-              <ShelfView
-                books={visible}
-                total={books.length}
-                covers={covers}
-                query={query}
-                onQuery={setQuery}
-                view={shelfMode}
-                onView={changeShelfMode}
-                sort={sort}
-                onSort={changeSort}
-                sortDir={sortDir}
-                onToggleSortDir={toggleSortDir}
-                tags={allTags}
-                selecting={selecting}
-                selected={selected}
-                onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
-                onToggleSelected={toggleSelected}
-                onOpenBook={openBook}
-                onToggleFavorite={toggleFavorite}
-                onEditInfo={openBookInfo}
-                onSetTags={(book, next) => void setBookTags(book, next)}
-                onFavoriteSelected={() => void favoriteSelected()}
-                onImport={triggerImport}
-                confirmRemove={confirmRemove}
-                onRemoveClick={handleRemoveClick}
-                tagDraft={tagDraft}
-                onTagDraft={setTagDraft}
-                onTagSelected={() => void tagSelected()}
-                onTagPreset={(tag) => void applyTagToSelection(tag)}
-                onExportNotes={exportBookNotes}
-                onSelectAll={toggleSelectAll}
-                onRemoveSelected={() => void removeSelected()}
-                bulkBusy={bulkBusy}
-                emptyHint={emptyHint}
-              />
+              <>
+                {search !== null && search.hits.length > 0 && (
+                  <section className="shelf-search-hits" aria-label="全文匹配">
+                    <p className="shelf-search-hits-label">
+                      全文匹配 · 基于已建 AI 索引的 {search.indexedBooks} 本书
+                      {search.hits.length === MAX_SEARCH_HITS ? '(已达上限)' : ''}
+                    </p>
+                    {search.hits.map((hit, index) => (
+                      <button
+                        key={`${hit.bookHash}-${index}`}
+                        type="button"
+                        className="shelf-search-hit"
+                        onClick={() => openShelfBook(hit.bookHash, undefined, hit.label)}
+                        title="打开这本书并跳到命中章节"
+                      >
+                        <span className="shelf-search-hit-head">
+                          <span className="shelf-search-hit-title">{shelfTitle(hit)}</span>
+                          <span className="shelf-search-hit-label">{hit.label}</span>
+                        </span>
+                        <span className="shelf-search-hit-excerpt">{hit.excerpt}</span>
+                      </button>
+                    ))}
+                  </section>
+                )}
+                <ShelfView
+                  books={visible}
+                  total={books.length}
+                  covers={covers}
+                  query={query}
+                  onQuery={setQuery}
+                  view={shelfMode}
+                  onView={changeShelfMode}
+                  sort={sort}
+                  onSort={changeSort}
+                  sortDir={sortDir}
+                  onToggleSortDir={toggleSortDir}
+                  tags={allTags}
+                  selecting={selecting}
+                  selected={selected}
+                  onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
+                  onToggleSelected={toggleSelected}
+                  onOpenBook={openBook}
+                  onToggleFavorite={toggleFavorite}
+                  onEditInfo={openBookInfo}
+                  onSetTags={(book, next) => void setBookTags(book, next)}
+                  onFavoriteSelected={() => void favoriteSelected()}
+                  onImport={triggerImport}
+                  confirmRemove={confirmRemove}
+                  onRemoveClick={handleRemoveClick}
+                  tagDraft={tagDraft}
+                  onTagDraft={setTagDraft}
+                  onTagSelected={() => void tagSelected()}
+                  onTagPreset={(tag) => void applyTagToSelection(tag)}
+                  onExportNotes={exportBookNotes}
+                  onSelectAll={toggleSelectAll}
+                  onRemoveSelected={() => void removeSelected()}
+                  bulkBusy={bulkBusy}
+                  emptyHint={emptyHint}
+                />
+              </>
             )}
           </>
         )}

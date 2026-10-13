@@ -633,6 +633,52 @@ describe('ReaderScreen 从笔记页跳回原文', () => {
   })
 })
 
+describe('跨书搜索正文命中定位(sectionLabel)', () => {
+  const TOC = [
+    { id: 'c1', title: '第一章 夜航', href: 'ch1.xhtml', children: [] },
+    { id: 'c2', title: '第二章 灯塔', href: 'ch2.xhtml', children: [] },
+  ]
+
+  /** 带 sectionLabel 打开;progress = 上次读到的位置(不能被沿用的那一个)。 */
+  function renderWithSectionLabel(
+    sectionLabel: string,
+    progress?: { cfi: string; fraction: number },
+  ): Promise<void> {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'reader.state.get') {
+        return Promise.resolve({
+          state:
+            progress === undefined
+              ? null
+              : { progress, annotations: [], bookmarks: [], updatedAt: '2026-09-28T00:00:00Z' },
+        }) as never
+      }
+      return Promise.resolve(respond(command)) as never
+    })
+    FakeFoliateAdapter.nextOptions = { toc: TOC }
+    render(<ReaderScreen book={{ ...BOOK, sectionLabel }} onBack={vi.fn()} />)
+    return waitFor(() => {
+      expect(document.querySelector('.reader-opening')).toBeNull()
+    })
+  }
+
+  it('label 命中目录时按 href 跳过去,上次进度不盖掉它', async () => {
+    await renderWithSectionLabel('第二章 灯塔', { cfi: 'epubcfi(/6/99!)', fraction: 0.9 })
+    const positions = latestAdapter().goTo.mock.calls.map((call) => call[0])
+    expect(positions).toContainEqual({ href: 'ch2.xhtml', progress: 0 })
+    expect(positions.some((target) => target.progress === 0.9)).toBe(false)
+  })
+
+  it('label 不在目录里时说清楚没找到,仍按常规位置打开', async () => {
+    await renderWithSectionLabel('第九章 归途', { cfi: 'epubcfi(/6/99!)', fraction: 0.9 })
+    expect(await screen.findByText(/没找到「第九章 归途」这一章/)).toBeInTheDocument()
+    // 常规位置 = 上次读到的 90%:那一章找不到,但不能把人悄悄丢在开头。
+    const positions = latestAdapter().goTo.mock.calls.map((call) => call[0])
+    expect(positions).toContainEqual({ cfi: 'epubcfi(/6/99!)', progress: 0.9 })
+    expect(positions.some((target) => 'href' in target)).toBe(false)
+  })
+})
+
 describe('划选翻译', () => {
   const PROVIDER = {
     id: 'cfg-1',

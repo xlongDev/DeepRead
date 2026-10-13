@@ -25,6 +25,7 @@ import {
   type ReadingFont,
 } from '@deepread/shared'
 import { base64ToImageBlob } from './blob'
+import { matchesBookQuery } from './library-search'
 import {
   addStoredStat,
   deleteStoredBook,
@@ -146,6 +147,13 @@ export const webHandlers: {
   [K in CommandName]?: (request: CommandMap[K]['request']) => Promise<CommandMap[K]['response']>
 } = {
   [COMMAND.libraryList]: async () => ({ books: await listBooks() }),
+
+  // 跨书搜索:浏览器端只有书目层 —— AI 索引(ai.index.*)本来就只有桌面版,
+  // indexedBooks 报 0,UI 据此隐藏正文匹配段,不假装搜过正文。
+  [COMMAND.librarySearch]: async (request) => {
+    const books = (await listBooks()).filter((book) => matchesBookQuery(book, request.query))
+    return { books, hits: [], indexedBooks: 0 }
+  },
 
   [COMMAND.libraryRemove]: async (request) => {
     const books = await listStoredBooks()

@@ -45,6 +45,9 @@ import type { LibraryRemoveRequest } from './generated/LibraryRemoveRequest'
 import type { LibraryRemoveResponse } from './generated/LibraryRemoveResponse'
 import type { LibraryInfoSetRequest } from './generated/LibraryInfoSetRequest'
 import type { LibraryInfoSetResponse } from './generated/LibraryInfoSetResponse'
+import type { LibrarySearchRequest } from './generated/LibrarySearchRequest'
+import type { LibrarySearchResponse } from './generated/LibrarySearchResponse'
+import type { LibrarySearchHit } from './generated/LibrarySearchHit'
 import type { LibraryTagSetRequest } from './generated/LibraryTagSetRequest'
 import type { LibraryTagSetResponse } from './generated/LibraryTagSetResponse'
 import type { LibraryCoverGetRequest } from './generated/LibraryCoverGetRequest'
@@ -193,6 +196,9 @@ export type {
   LibraryInfoSetResponse,
   LibraryListResponse,
   LibraryRemoveRequest,
+  LibrarySearchHit,
+  LibrarySearchRequest,
+  LibrarySearchResponse,
   LibraryRemoveResponse,
   LibraryTagSetRequest,
   LibraryTagSetResponse,
@@ -234,6 +240,7 @@ export const COMMAND = {
   readerStateSet: 'reader.state.set',
   readerStateGetAll: 'reader.state.getAll',
   libraryList: 'library.list',
+  librarySearch: 'library.search',
   libraryImport: 'library.import',
   libraryRemove: 'library.remove',
   libraryInfoSet: 'library.info.set',
@@ -303,6 +310,10 @@ export interface CommandMap {
     readonly response: ReaderStateGetAllResponse
   }
   [COMMAND.libraryList]: { readonly request: undefined; readonly response: LibraryListResponse }
+  [COMMAND.librarySearch]: {
+    readonly request: LibrarySearchRequest
+    readonly response: LibrarySearchResponse
+  }
   [COMMAND.libraryImport]: {
     readonly request: LibraryImportRequest
     readonly response: LibraryImportResponse
@@ -536,6 +547,20 @@ export const readerStateGetAllResponseSchema = z.object({
 })
 
 export const libraryListResponseSchema = z.object({ books: z.array(libraryBookSchema).max(10_000) })
+export const librarySearchRequestSchema = z.object({ query: z.string().min(1).max(200) })
+/** 正文命中:query 前后各带一圈上下文的摘录。 */
+export const librarySearchHitSchema = z.object({
+  bookHash: bookHash,
+  displayName: z.string().min(1).max(512).nullable(),
+  fileName: z.string().min(1).max(1024),
+  label: z.string().min(1).max(512),
+  excerpt: z.string().min(1).max(400),
+})
+export const librarySearchResponseSchema = z.object({
+  books: z.array(libraryBookSchema).max(10_000),
+  hits: z.array(librarySearchHitSchema).max(30),
+  indexedBooks: z.number().int().min(0),
+})
 export const libraryImportRequestSchema = z.object({ path: z.string().min(1).max(4096) })
 export const libraryImportResponseSchema = z.object({ book: libraryBookSchema })
 export const libraryRemoveRequestSchema = z.object({ bookHash: bookHash })
@@ -884,6 +909,7 @@ export const responseSchemas = {
   [COMMAND.readerStateGetAll]: readerStateGetAllResponseSchema,
   [COMMAND.readerStateSet]: readerStateSetResponseSchema,
   [COMMAND.libraryList]: libraryListResponseSchema,
+  [COMMAND.librarySearch]: librarySearchResponseSchema,
   [COMMAND.libraryImport]: libraryImportResponseSchema,
   [COMMAND.libraryRemove]: libraryRemoveResponseSchema,
   [COMMAND.libraryInfoSet]: libraryInfoSetResponseSchema,
@@ -944,6 +970,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.readerStateGetAll]: undefined,
   [COMMAND.readerStateSet]: readerStateSetRequestSchema,
   [COMMAND.libraryList]: undefined,
+  [COMMAND.librarySearch]: librarySearchRequestSchema,
   [COMMAND.libraryImport]: libraryImportRequestSchema,
   [COMMAND.libraryRemove]: libraryRemoveRequestSchema,
   [COMMAND.libraryInfoSet]: libraryInfoSetRequestSchema,

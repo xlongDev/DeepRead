@@ -19,6 +19,11 @@ export interface OpenedBook {
    * 而不是恢复上次读到的位置 —— 用户点的是某条批注,不是「继续阅读」。
    */
   readonly cfi?: string
+  /**
+   * 打开后按目录 label 定位(跨书搜索的正文命中用)。命中带的是章节名而不是
+   * CFI(RAG chunk 只存 label),所以定位是「label → 目录项 → href」。
+   */
+  readonly sectionLabel?: string
 }
 
 /**
@@ -106,6 +111,7 @@ export function openedBookFromLibrary(
   record: LibraryBook,
   browserUrl?: string,
   cfi?: string,
+  sectionLabel?: string,
 ): OpenedBook {
   return {
     bookId: record.hash,
@@ -114,6 +120,7 @@ export function openedBookFromLibrary(
     name: record.fileName,
     url: browserUrl ?? convertFileSrc(record.path),
     ...(cfi === undefined ? {} : { cfi }),
+    ...(sectionLabel === undefined ? {} : { sectionLabel }),
   }
 }
 

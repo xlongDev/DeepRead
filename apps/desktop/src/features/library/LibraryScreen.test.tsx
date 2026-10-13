@@ -16,6 +16,7 @@ import {
   type AppInfo,
   type BookReadingStat,
   type LibraryBook,
+  type LibrarySearchResponse,
   type NoteEntry,
 } from '@deepread/shared'
 import { LibraryScreen } from './LibraryScreen'
@@ -209,6 +210,8 @@ const TOP_BOOKS: readonly BookReadingStat[] = [
 function mockBackend(books: readonly LibraryBook[], notes: readonly NoteEntry[] = NOTES): void {
   invokeCommandMock.mockImplementation((command, request) => {
     if (command === 'library.list') return Promise.resolve({ books: [...books] })
+    if (command === 'library.search')
+      return Promise.resolve({ books: [], hits: [], indexedBooks: 0 })
     if (command === 'reader.stats.get') return Promise.resolve(STATS)
     if (command === 'reader.stats.books') return Promise.resolve({ books: [...TOP_BOOKS] })
     if (command === 'reader.notes.list') return Promise.resolve({ notes: [...notes] })
@@ -585,6 +588,114 @@ describe('LibraryScreen 批量管理', () => {
     await waitFor(() =>
       expect(invokeCommandMock).toHaveBeenCalledWith('library.remove', { bookHash: HASH_A }),
     )
+  })
+})
+
+describe('LibraryScreen 跨书搜索(library.search)', () => {
+  /** 一次跨书搜索的两层结果:书目命中一本,正文命中一条。 */
+  const SEARCH_RESPONSE = {
+    books: [BOOKS[0]!],
+    hits: [
+      {
+        bookHash: HASH_A,
+        displayName: '夜航书',
+        fileName: '夜航书.epub',
+        label: '第三章 夜航',
+        excerpt: '他想起那个起雾的下午',
+      },
+    ],
+    indexedBooks: 2,
+  }
+
+  function respondSearch(response: LibrarySearchResponse): void {
+    invokeCommandMock.mockImplementation((command) => {
+      if (command === 'library.list') return Promise.resolve({ books: [...BOOKS] })
+      if (command === 'library.search') return Promise.resolve(response)
+      return Promise.resolve(APP_INFO)
+    })
+  }
+
+  it('查询词防抖 200ms 后问后端,书目与正文命中分开呈现', async () => {
+    const { onOpenBook } = await renderLibrary()
+    respondSearch(SEARCH_RESPONSE)
+
+    // 连打两个字符:防抖应该只留下最后一次查询。
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '夜' } })
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '夜航' } })
+
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.search', { query: '夜航' }),
+    )
+    const searchCalls = invokeCommandMock.mock.calls.filter(
+      ([command]) => command === 'library.search',
+    )
+    expect(searchCalls).toHaveLength(1)
+
+    // 书目命中进网格(只留夜航书),正文命中单独一列,在网格上方。
+    expect(await screen.findByLabelText('全文匹配')).toBeInTheDocument()
+    expect(screen.getAllByText('夜航书').length).toBeGreaterThan(0)
+    expect(screen.queryByText('化雪的季节')).toBeNull()
+
+    const section = screen.getByLabelText('全文匹配')
+    expect(section.textContent).toContain('基于已建 AI 索引的 2 本书')
+    expect(section.textContent).toContain('第三章 夜航')
+    expect(section.textContent).toContain('他想起那个起雾的下午')
+
+    // 点正文命中:带着章节 label 打开这本书(定位由阅读器按目录解析),
+    // 不带 CFI —— 点的是「跳到那一章」,不是某一句。
+    fireEvent.click(within(section).getByText('第三章 夜航'))
+    expect(onOpenBook).toHaveBeenCalledTimes(1)
+    expect(onOpenBook.mock.calls[0]?.[0]).toMatchObject({
+      bookId: HASH_A,
+      sectionLabel: '第三章 夜航',
+    })
+    expect(onOpenBook.mock.calls[0]?.[0]).not.toHaveProperty('cfi')
+  })
+
+  it('正文命中达到上限时说清截断了;书目没命中也不藏掉正文命中', async () => {
+    const hits = Array.from({ length: 30 }, (_unused, index) => ({
+      bookHash: HASH_A,
+      displayName: '夜航书',
+      fileName: '夜航书.epub',
+      label: `第 ${index} 章`,
+      excerpt: `片段 ${index}`,
+    }))
+    await renderLibrary()
+    respondSearch({ books: [], hits, indexedBooks: 1 })
+
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '片段' } })
+    const section = await screen.findByLabelText('全文匹配')
+    expect(section.querySelectorAll('.shelf-search-hit')).toHaveLength(30)
+    expect(section.textContent).toContain('(已达上限)')
+
+    // 书目层零命中:网格说「没有匹配」,但上面的正文命中列照样在。
+    expect(await screen.findByText(/没有匹配/)).toBeInTheDocument()
+    expect(section).toBeInTheDocument()
+  })
+
+  it('一条正文命中都没有时不出这一列', async () => {
+    await renderLibrary()
+    respondSearch({ books: [BOOKS[0]!], hits: [], indexedBooks: 0 })
+
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '夜航' } })
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.search', { query: '夜航' }),
+    )
+    expect(screen.queryByLabelText('全文匹配')).toBeNull()
+  })
+
+  it('清空查询词时两层结果一起收起', async () => {
+    await renderLibrary()
+    respondSearch(SEARCH_RESPONSE)
+
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '夜航' } })
+    expect(await screen.findByLabelText('全文匹配')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '' } })
+    await waitFor(() => expect(screen.queryByLabelText('全文匹配')).toBeNull())
+    // 全部三本书回到架上(每本的书名在封面与标题各出现一次)。
+    expect(screen.getAllByText('夜航书').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('化雪的季节').length).toBeGreaterThan(0)
   })
 })
 

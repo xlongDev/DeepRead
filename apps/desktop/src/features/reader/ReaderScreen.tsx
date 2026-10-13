@@ -131,6 +131,20 @@ interface NoteDraft {
  * CFI 共享这个前缀(epubcfi(/6/4…)),所以它可以当"章节键"用,不必再问内核。
  * 解析不出来就返回 null(比如某些非 EPUB 的大段落),调用方退回"全书"。
  */
+/**
+ * 按章节 label 在目录里找一项(跨书搜索正文命中定位用)。先精确匹配,
+ * 再容忍首尾空白 —— 目录标题常带不可见空格,而 label 来自 RAG chunk。
+ */
+function findTocItem(items: readonly TocItem[], label: string): TocItem | null {
+  const want = label.trim()
+  for (const item of items) {
+    if (item.title.trim() === want) return item
+    const nested = findTocItem(item.children, want)
+    if (nested !== null) return nested
+  }
+  return null
+}
+
 function cfiChapter(cfi: string): string | null {
   const match = /epubcfi\(\/(\d+)\/(\d+)/.exec(cfi)
   return match === null ? null : `${match[1]}/${match[2]}`
@@ -567,6 +581,23 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           paragraphMargin: settingsRef.current.paragraphMargin,
         })
 
+        // 跨书搜索的正文命中:先按章节 label 定位。找不到那一章就照常
+        // (恢复上次进度 / 开头),但要说一声 —— 用户点的是「跳到命中处」,
+        // 悄悄落在别处比告诉他没找到更糟。
+        let locatedByLabel = false
+        if (book.sectionLabel !== undefined) {
+          const match = findTocItem(tocItems, book.sectionLabel)
+          if (match?.href !== undefined) {
+            await adapter.goTo({ href: match.href, progress: 0 })
+            locatedByLabel = true
+          } else {
+            setNotice({
+              text: `没找到「${book.sectionLabel}」这一章,已按常规位置打开。`,
+              danger: false,
+            })
+          }
+        }
+
         // 两个平台都回读:桌面端读 SQLite,浏览器端在 ipc 层被分流到
         // IndexedDB —— 这正是「web 端也能记住读到哪」的关键一步。读不到
         // (全新导入 / 存储异常)就当没有,不挡打开这本书。
@@ -583,7 +614,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           // 「继续阅读」,所以不能被上次读到的位置盖掉。
           if (book.cfi !== undefined) {
             await adapter.goTo({ cfi: book.cfi, progress: 0 })
-          } else if (restored.progress) {
+          } else if (!locatedByLabel && restored.progress) {
             await adapter.goTo({ cfi: restored.progress.cfi, progress: restored.progress.fraction })
           }
         } else if (book.cfi !== undefined) {

@@ -121,6 +121,7 @@ pub fn run() {
             state::reader_notes_list,
             state::reader_note_update,
             library::library_list,
+            library::library_search,
             library::library_import,
             library::library_remove,
             library::library_info_set,

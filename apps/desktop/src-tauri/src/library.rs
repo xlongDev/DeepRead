@@ -160,6 +160,51 @@ pub struct LibraryInfoSetResponse {
     pub book: LibraryBook,
 }
 
+/// 跨书搜索的请求。只收一个 query —— 两层(书目 / 正文)都从它派生,不需要
+/// 调用方声明搜哪层。
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibrarySearchRequest {
+    pub query: String,
+}
+
+/// 正文命中:哪本书、哪一章、命中处长什么样。
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySearchHit {
+    pub book_hash: String,
+    /// 标题的两个来源都给出去 —— 文件名清洗规则属于前端(`cleanBookTitle`),
+    /// Rust 不猜(与 `NoteEntry` 同一条规矩)。
+    pub display_name: Option<String>,
+    pub file_name: String,
+    /// 命中所在的章节 label(RAG chunk 的 label)。
+    pub label: String,
+    /// 命中片段:query 前后各带一圈上下文,超长截断。
+    pub excerpt: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySearchResponse {
+    /// 书目命中(题名/作者/副题/文件名/标签),按加入时间倒序。
+    pub books: Vec<LibraryBook>,
+    /// 正文命中,上限 `MAX_SEARCH_HITS` 条。
+    pub hits: Vec<LibrarySearchHit>,
+    /// 已建 AI 索引的书数。UI 要诚实标注正文匹配的来源范围 —— 没建索引的
+    /// 书不在这个搜索里,不说清楚就像"搜遍了全书架"。
+    pub indexed_books: u32,
+}
+
+/// 查询词上限:再长既没法 LIKE,也没法人读。
+pub const MAX_QUERY_CHARS: usize = 200;
+/// 正文命中上限:个人书库量级下 30 条足够翻,再多只是噪音。
+pub const MAX_SEARCH_HITS: usize = 30;
+/// 摘录前后各保留的字符数。
+const EXCERPT_CONTEXT_CHARS: usize = 60;
+
 /// 重新导入时要原样保留的既有元数据。不含 path/size —— 那两个每次都要刷新,
 /// 保留它们反而是错的。
 struct ExistingBookMeta {
@@ -253,6 +298,197 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
             AppError::new(ErrorCode::StorageIo, "failed to read library row").with_cause(err)
         })?;
     Ok(books)
+}
+
+/// RAG chunk 的搜索用子集:只用 label/text。**刻意不反序列化 `AiIndexChunk`** ——
+/// 那个结构体带 `vector`,而搜索跟向量无关;用手写的子集,一份被手工改过的索引
+/// (丢了向量列)也照样能搜。
+#[derive(Deserialize)]
+struct ChunkForSearch {
+    label: String,
+    text: String,
+}
+
+/// LIKE 的通配符转义:用户查询里的 `%` / `_` 必须是字面量,否则
+/// "100%" 会匹配一切。`ESCAPE '\'` 与这里的 `\\` 对应。
+fn escape_like(raw: &str) -> String {
+    raw.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// 大小写不敏感查找(ASCII 不敏感;CJK 无大小写,直接匹配)。
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if let Some(position) = haystack.find(needle) {
+        return Some(position);
+    }
+    haystack.to_lowercase().find(&needle.to_lowercase())
+}
+
+/// 把字节偏移夹回字符边界:中文按 UTF-8 多字节存储,`to_lowercase` 后的偏移
+/// 直接切原串可能切坏一个字符。
+fn clamp_to_char_boundary(text: &str, mut index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// 命中片段:query 前后各 `EXCERPT_CONTEXT_CHARS` 个字符,两头加省略号。
+fn excerpt_around(text: &str, query: &str, position: usize) -> String {
+    let start = clamp_to_char_boundary(text, position);
+    let end = clamp_to_char_boundary(text, position + query.len());
+    let chars_before: String = text[..start]
+        .chars()
+        .rev()
+        .take(EXCERPT_CONTEXT_CHARS)
+        .collect();
+    let chars_after: String = text[end..].chars().take(EXCERPT_CONTEXT_CHARS).collect();
+    let mut excerpt = String::new();
+    if chars_before.chars().count() == EXCERPT_CONTEXT_CHARS {
+        excerpt.push('…');
+    }
+    // rev() 把前缀读反了,正回来。
+    excerpt.push_str(&chars_before.chars().rev().collect::<String>());
+    excerpt.push_str(&text[start..end]);
+    excerpt.push_str(&chars_after);
+    if chars_after.chars().count() == EXCERPT_CONTEXT_CHARS {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+/// 跨书搜索(plan-v0.3 §B6.1):两层,都不改写任何数据。
+///
+/// ① 书目:`books` 的题名/作者/副题/文件名/标签 LIKE。SQLite 的 LIKE 对 ASCII
+///    大小写不敏感,CJK 是精确匹配 —— 个人书库量级下够用,FTS5 不承诺。
+/// ② 正文:`ai_index.chunks` 的 label/text 子串匹配,只搜已建索引的书,上限
+///    `MAX_SEARCH_HITS` 条。
+pub fn search_library(conn: &Connection, query: &str) -> Result<LibrarySearchResponse, AppError> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(LibrarySearchResponse {
+            books: Vec::new(),
+            hits: Vec::new(),
+            indexed_books: 0,
+        });
+    }
+    if trimmed.chars().count() > MAX_QUERY_CHARS {
+        return Err(AppError::new(ErrorCode::SystemValidation, "搜索词太长了"));
+    }
+
+    // ① 书目层。tags 存的是 JSON 数组文本,LIKE 能命中数组里的任意标签。
+    let pattern = format!("%{}%", escape_like(trimmed));
+    let mut statement = conn
+        .prepare(
+            "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
+                    b.tags, p.fraction AS progress
+             FROM books b
+             LEFT JOIN progress p ON p.book_hash = b.hash
+             WHERE COALESCE(b.display_name, '') LIKE ?1 ESCAPE '\\'
+                OR b.file_name LIKE ?1 ESCAPE '\\'
+                OR COALESCE(b.author, '') LIKE ?1 ESCAPE '\\'
+                OR COALESCE(b.subtitle, '') LIKE ?1 ESCAPE '\\'
+                OR b.tags LIKE ?1 ESCAPE '\\'
+             ORDER BY b.added_at DESC, b.rowid DESC
+             LIMIT 200",
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to prepare search").with_cause(err)
+        })?;
+    let books = statement
+        .query_map([&pattern], row_to_book)
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to search library").with_cause(err)
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read search row").with_cause(err)
+        })?;
+    // ② 正文层。索引不在书架上的书(理论上 remove_book 已级联删)直接跳过 ——
+    // 点击命中要能开书,给一个开不了的书名比不显示更糟。
+    // 书名表必须是**全部书**,不是层① 的命中:正文命中的书完全可以没匹配上
+    // 任何元数据(搜的就是正文里的词)。
+    let mut titles: std::collections::HashMap<String, (Option<String>, String)> =
+        std::collections::HashMap::new();
+    {
+        let mut title_statement = conn
+            .prepare("SELECT hash, display_name, file_name FROM books")
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to prepare title scan").with_cause(err)
+            })?;
+        let title_rows = title_statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to scan titles").with_cause(err)
+            })?;
+        for row in title_rows {
+            let (hash, display_name, file_name) = row.map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to read title row").with_cause(err)
+            })?;
+            titles.insert(hash, (display_name, file_name));
+        }
+    }
+    let mut index_statement = conn
+        .prepare("SELECT book_hash, chunks FROM ai_index")
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to prepare index scan").with_cause(err)
+        })?;
+    let rows = index_statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to scan index").with_cause(err)
+        })?;
+    let mut hits: Vec<LibrarySearchHit> = Vec::new();
+    let mut indexed_books: u32 = 0;
+    for row in rows {
+        let (book_hash, chunks_text) = row.map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read index row").with_cause(err)
+        })?;
+        indexed_books += 1;
+        let Some((display_name, file_name)) = titles.get(&book_hash) else {
+            continue;
+        };
+        let chunks: Vec<ChunkForSearch> = serde_json::from_str(&chunks_text).unwrap_or_default();
+        for chunk in &chunks {
+            if hits.len() >= MAX_SEARCH_HITS {
+                break;
+            }
+            let Some(position) = find_case_insensitive(&chunk.text, trimmed) else {
+                continue;
+            };
+            hits.push(LibrarySearchHit {
+                book_hash: book_hash.clone(),
+                display_name: display_name.clone(),
+                file_name: file_name.clone(),
+                label: chunk.label.clone(),
+                excerpt: excerpt_around(&chunk.text, trimmed, position),
+            });
+        }
+        if hits.len() >= MAX_SEARCH_HITS {
+            break;
+        }
+    }
+
+    Ok(LibrarySearchResponse {
+        books,
+        hits,
+        indexed_books,
+    })
 }
 
 /// Remove a book **and everything derived from it**. The `books` row used to be
@@ -627,6 +863,17 @@ pub fn library_remove(
         }
     }
     Ok(LibraryRemoveResponse { removed })
+}
+
+#[tauri::command(rename = "library.search")]
+pub fn library_search(
+    db: tauri::State<'_, Db>,
+    request: LibrarySearchRequest,
+) -> Result<LibrarySearchResponse, AppError> {
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    search_library(&conn, &request.query)
 }
 
 #[tauri::command(rename = "library.tag.set")]
@@ -1118,5 +1365,167 @@ mod tests {
         // title must not be lost.
         let reimported = import_book(&conn, path.to_str().unwrap()).unwrap();
         assert_eq!(reimported.display_name.as_deref(), Some("夜航书"));
+    }
+
+    /// 造一本带索引的书:hash 用真实 SHA-256 形状(zero 填充 + 序号),免得
+    /// 撞上 validate_hash 的形状校验。
+    fn import_with_index(
+        conn: &Connection,
+        name: &str,
+        title: Option<&str>,
+        chunks: &[(&str, &str)],
+    ) -> String {
+        let base = std::env::temp_dir().join(format!(
+            "reader-lib-search-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join(name);
+        std::fs::write(&path, b"epub-bytes").unwrap();
+        let book = import_book(conn, path.to_str().unwrap()).unwrap();
+        if let Some(title) = title {
+            set_book_info(
+                conn,
+                &book.hash,
+                &LibraryInfoSetRequest {
+                    book_hash: book.hash.clone(),
+                    display_name: Some(title.to_string()),
+                    author: None,
+                    subtitle: None,
+                    publisher: None,
+                    language: None,
+                },
+            )
+            .unwrap();
+        }
+        if !chunks.is_empty() {
+            // `chunks` 列是**裸 JSON 数组**(与 `store_index` 写的形状一致),
+            // vector 留空数组:搜索不依赖向量,带不带都能搜。
+            let payload: Vec<serde_json::Value> = chunks
+                .iter()
+                .map(|(label, text)| {
+                    serde_json::json!({ "label": label, "text": text, "vector": [] })
+                })
+                .collect();
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_index (book_hash, chunks, embedding_model, created_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    book.hash,
+                    serde_json::to_string(&payload).unwrap(),
+                    "text-embedding-3-small",
+                    "2026-10-13T00:00:00Z"
+                ],
+            )
+            .unwrap();
+        }
+        book.hash
+    }
+
+    #[test]
+    fn search_matches_book_metadata_and_indexed_body_text() {
+        let conn = memory_db();
+        let hash = import_with_index(
+            &conn,
+            "化雪的季节.epub",
+            Some("化雪的季节"),
+            &[
+                ("第一章", "青柳把灯点起来,灯芯偶尔响一声。"),
+                ("第二章", "雅子推开门,带进一阵雪。"),
+            ],
+        );
+
+        let by_title = search_library(&conn, "化雪").unwrap();
+        assert_eq!(by_title.books.len(), 1);
+        assert_eq!(by_title.books[0].hash, hash);
+
+        let by_body = search_library(&conn, "灯芯").unwrap();
+        assert_eq!(by_body.books.len(), 0, "正文命中不该冒充满书目命中");
+        assert_eq!(by_body.hits.len(), 1);
+        assert_eq!(by_body.hits[0].book_hash, hash);
+        assert_eq!(by_body.hits[0].label, "第一章");
+        assert!(by_body.hits[0].excerpt.contains("灯芯"));
+        assert_eq!(by_body.indexed_books, 1);
+    }
+
+    #[test]
+    fn search_is_case_insensitive_for_ascii() {
+        let conn = memory_db();
+        import_with_index(
+            &conn,
+            "Wick.epub",
+            Some("The Wick"),
+            &[("Ch 1", "The wick crackled in the dark.")],
+        );
+        let hits = search_library(&conn, "wick").unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert!(hits.hits[0].excerpt.contains("wick"));
+    }
+
+    #[test]
+    fn search_treats_like_wildcards_as_literals() {
+        let conn = memory_db();
+        import_with_index(&conn, "100%.epub", Some("100% 的雪"), &[]);
+        // "%" 必须是字面量:不转义的话它会匹配整个书架。
+        let all = search_library(&conn, "%").unwrap();
+        assert_eq!(all.books.len(), 1);
+        let none = search_library(&conn, "zzz%").unwrap();
+        assert_eq!(none.books.len(), 0);
+    }
+
+    #[test]
+    fn search_skips_unindexed_books_and_reports_the_count() {
+        let conn = memory_db();
+        import_with_index(&conn, "无索引.epub", Some("没有索引的书"), &[]);
+        let result = search_library(&conn, "索引").unwrap();
+        assert_eq!(result.indexed_books, 0);
+        assert!(result.hits.is_empty());
+    }
+
+    #[test]
+    fn search_caps_hits_at_the_limit() {
+        let conn = memory_db();
+        // 40 章都含同一个词:命中数会被 MAX_SEARCH_HITS 截断,而不是全吐出来。
+        let owned: Vec<(String, String)> = (0..40)
+            .map(|i| (format!("第 {i} 章"), "重复词出现在这一章里。".to_string()))
+            .collect();
+        let refs: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(label, text)| (label.as_str(), text.as_str()))
+            .collect();
+        import_with_index(&conn, "很多章.epub", Some("重复的书"), &refs);
+        let result = search_library(&conn, "重复词").unwrap();
+        assert_eq!(result.hits.len(), MAX_SEARCH_HITS);
+    }
+
+    #[test]
+    fn search_rejects_blank_and_overlong_queries() {
+        let conn = memory_db();
+        let blank = search_library(&conn, "   ").unwrap();
+        assert!(blank.books.is_empty());
+        assert!(blank.hits.is_empty());
+        assert_eq!(blank.indexed_books, 0);
+        let long = "雪".repeat(MAX_QUERY_CHARS + 1);
+        let err = search_library(&conn, &long).expect_err("overlong query must be rejected");
+        assert_eq!(err.code.as_str(), "SYSTEM_VALIDATION");
+    }
+
+    #[test]
+    fn search_hit_wire_shape_is_camel_case() {
+        let hit = LibrarySearchHit {
+            book_hash: "0".repeat(64),
+            display_name: Some("化雪的季节".into()),
+            file_name: "化雪的季节.epub".into(),
+            label: "第一章".into(),
+            excerpt: "……灯芯偶尔响一声……".into(),
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json["bookHash"], "0".repeat(64));
+        assert_eq!(json["displayName"], "化雪的季节");
+        assert_eq!(json["fileName"], "化雪的季节.epub");
+        assert_eq!(json["label"], "第一章");
+        assert_eq!(json["excerpt"], "……灯芯偶尔响一声……");
     }
 }
