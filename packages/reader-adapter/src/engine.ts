@@ -39,6 +39,8 @@ import 'foliate-js/view.js'
 const MAX_SEARCH_RESULTS = 200
 const MAX_SELECTION_TEXT = 2000
 const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
+/** overlayer 的 key:TTS 洗色与用户批注共用 overlayer,但不能共用 key 空间。 */
+const TTS_HIGHLIGHT_KEY = 'deepread-tts'
 
 /**
  * 块级元素集合 —— 与 foliate-js `tts.js` 的 `blockTags` 一致,另补 `ul`
@@ -279,8 +281,9 @@ export class FoliateAdapter implements ReaderEngine {
   #pageMargin: number | undefined
   #bookCharStats: BookCharStats | null = null
   #bookCharStatsComputed = false
-  /** 当前 TTS 句级高亮对应的 annotation CFI;null = 没有高亮。 */
-  #ttsHighlightCfi: string | null = null
+  /** 当前 TTS 洗色挂在哪个 overlayer 上;null = 没有洗色。overlayer 随
+   *  section 的 content 一起创建/销毁,切章时旧的那个连文档一起没。 */
+  #ttsOverlayer: Overlayer | null = null
   /** 最近一次 `getSectionText` 命中的 section index。TTS 高亮的 offset
    *  就来自那次文本,必须落在同一个 content 上,否则 Range 越界。 */
   #lastTextIndex: number | undefined
@@ -524,6 +527,9 @@ export class FoliateAdapter implements ReaderEngine {
   async close(): Promise<void> {
     this.#view?.close()
     this.#annotationCfis.clear()
+    // overlayer 随 view 一起销毁,引用不摘的话下次 #clearTtsWash 会
+    // 在已卸载的 SVG group 上 remove。
+    this.#ttsOverlayer = null
   }
 
   async destroy(): Promise<void> {
@@ -659,7 +665,8 @@ export class FoliateAdapter implements ReaderEngine {
    * 解析 TTS 该作用在哪个已挂载 content 上:优先最近一次取文本的
    * section,退化到第一个挂载项。返回 undefined 表示一个都没挂载。
    */
-  #resolveTtsContent(): { readonly doc: Document; readonly index: number } | undefined {
+  #resolveTtsContent():
+    { readonly doc: Document; readonly index: number; readonly overlayer?: Overlayer } | undefined {
     const contents = this.#requireView().renderer.getContents()
     if (this.#lastTextIndex !== undefined) {
       const matched = contents.find((item) => item.index === this.#lastTextIndex)
@@ -750,14 +757,19 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
-   * TTS 句级高亮:把 [charStart, charEnd) 区间标为高亮,并把对应 Range
-   * 滚入视口中央。foliate-js 在 paginated 模式下会按需跨页,scrolled
-   * 模式下走原生滚动。
+   * TTS 洗色:把 [charStart, charEnd) 区间画成高亮,并把对应 Range 滚入视口
+   * 中央。foliate-js 在 paginated 模式下会按需跨页,scrolled 模式下走原生
+   * 滚动。
    *
    * offset 必须来自最近一次 `getSectionText` 的文本(同一个
-   * {@link walkSectionText} 模型),且高亮落在**同一个 section doc** 上 ——
+   * {@link walkSectionText} 模型),且洗色落在**同一个 section doc** 上 ——
    * 之前这里写死 `getContents()[0]`,而文本可能取自别的 section,Range
    * 于是越界、高亮整段消失,表现为「读了几句才开始高亮」。传入空色 = 关闭。
+   *
+   * 画在 overlayer 上而不是 annotation:annotation 要走
+   * `getCFI → addAnnotation → 下一次 deleteAnnotation` 的异步往返,一句一次
+   * 还行、一词一次就是每词两次跨帧往返,洗色永远追不上声音。`Overlayer.add`
+   * 按 key 覆盖,词级更新只换一个 SVG group。传入空色 = 关闭。
    */
   async setTTSHighlightByOffset(charStart: number, charEnd: number, color: string): Promise<void> {
     const view = this.#requireView()
@@ -769,25 +781,22 @@ export class FoliateAdapter implements ReaderEngine {
       content = this.#resolveTtsContent()
     }
     if (!content) return
-    // 先清掉上一句的高亮,避免在同一帧叠多条 annotation。
-    if (this.#ttsHighlightCfi !== null) {
-      try {
-        await view.deleteAnnotation({ value: this.#ttsHighlightCfi })
-      } catch {
-        // kernel 在 page-turn 之间的瞬时态可能拒删 — 忽略,下一次覆盖即可。
-      }
-      this.#ttsHighlightCfi = null
+    if (color === '' || charEnd <= charStart) {
+      this.#clearTtsWash()
+      return
     }
-    if (color === '' || charEnd <= charStart) return
     const range = findRangeByCharOffset(content.doc.body, charStart, charEnd)
     if (range === null) return
-    try {
-      const cfi = view.getCFI(content.index, range)
-      await view.addAnnotation({ value: cfi, color })
-      this.#ttsHighlightCfi = cfi
-    } catch {
-      // 跨页渲染中的 getCFI 偶发失败 — 跳过本句高亮,下一句会再尝试。
+    const overlayer = content.overlayer
+    if (!overlayer) return
+    // 换 section overlayer 也换:先把上一个上的洗色摘掉,否则旧章文档在被
+    // 卸载前会一直留着一块高亮。
+    if (this.#ttsOverlayer !== null && this.#ttsOverlayer !== overlayer) {
+      this.#ttsOverlayer.remove(TTS_HIGHLIGHT_KEY)
     }
+    this.#ttsOverlayer = overlayer
+    // 按 key 覆盖:词级更新只换一个 SVG group,不叠条。
+    overlayer.add(TTS_HIGHLIGHT_KEY, range, Overlayer.highlight, { color })
     // 自动翻页 / 滚动:让 Range 落到视口中央(paginated 走分页;scrolled
     // 走原生滚动,foliate-js 内部按 flow 分发)。
     try {
@@ -797,15 +806,14 @@ export class FoliateAdapter implements ReaderEngine {
     }
   }
 
-  /** 清除当前 TTS 句级高亮(切章 / 暂停 / 关闭时用)。 */
+  /** 清除当前 TTS 洗色(切章 / 暂停 / 关闭时用)。 */
   async clearTTSHighlight(): Promise<void> {
-    if (this.#ttsHighlightCfi === null) return
-    try {
-      await this.#requireView().deleteAnnotation({ value: this.#ttsHighlightCfi })
-    } catch {
-      // page-turn 之间的瞬时态 — 忽略,卸载时 dispose 自会清理。
-    }
-    this.#ttsHighlightCfi = null
+    this.#clearTtsWash()
+  }
+
+  #clearTtsWash(): void {
+    this.#ttsOverlayer?.remove(TTS_HIGHLIGHT_KEY)
+    this.#ttsOverlayer = null
   }
 
   /** 注入书籍文档的 @font-face 规则(内置 + 用户导入)。 */

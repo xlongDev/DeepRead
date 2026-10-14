@@ -112,6 +112,7 @@ import type { TtsAudioRequest } from './generated/TtsAudioRequest'
 import type { TtsAudioResponse } from './generated/TtsAudioResponse'
 import type { EdgeTtsAudioRequest } from './generated/EdgeTtsAudioRequest'
 import type { EdgeTtsAudioResponse } from './generated/EdgeTtsAudioResponse'
+import type { EdgeWord } from './generated/EdgeWord'
 import type { EdgeVoice as EdgeTtsVoice } from './generated/EdgeVoice'
 import type { EdgeVoicesResponse as EdgeTtsVoicesResponse } from './generated/EdgeVoicesResponse'
 import type { ReadingFont } from './generated/ReadingFont'
@@ -189,6 +190,7 @@ export type {
   EdgeTtsAudioResponse,
   EdgeTtsVoice,
   EdgeTtsVoicesResponse,
+  EdgeWord,
   FontImportRequest,
   FontRemoveRequest,
   LearningCard,
@@ -880,14 +882,22 @@ export const ttsAudioResponseSchema = z.object({
   cached: z.boolean(),
 })
 
+// No `rate`: every clip is synthesised at 1.0 and stretched at playout, so the
+// speed never crosses the wire and never invalidates a cached utterance.
 export const edgeTtsAudioRequestSchema = z.object({
   text: z.string().min(1).max(5000),
   voice: z.string().min(1).max(128),
   lang: z.string().max(16).optional(),
-  rate: z.number().min(0.25).max(4).optional(),
+})
+/** One word the service timed. `at` is seconds from the start of the clip. */
+export const edgeWordSchema = z.object({
+  at: z.number().min(0).max(86_400),
+  text: z.string().max(512),
 })
 export const edgeTtsAudioResponseSchema = z.object({
-  path: z.string().min(1).max(4096),
+  /** 24 kHz mono MP3, base64. */
+  audio: z.string().min(1).max(8_000_000),
+  words: z.array(edgeWordSchema).max(4_000),
   cached: z.boolean(),
 })
 export const edgeTtsVoiceSchema = z.object({

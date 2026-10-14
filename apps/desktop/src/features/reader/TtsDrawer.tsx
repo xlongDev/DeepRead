@@ -18,28 +18,21 @@ import {
   Highlighter,
   Pause,
   Play,
-  SpinnerBall,
   X,
 } from '@phosphor-icons/react'
-import { convertFileSrc } from '@tauri-apps/api/core'
-import { toAppError, type AiProviderConfig } from '@deepread/shared'
-import { splitSentencesWithOffsets } from '@deepread/reader-core'
+import { type AiProviderConfig } from '@deepread/shared'
+import {
+  buildSpeechUnits,
+  queuePosition,
+  speakerRoles,
+  unitAtChar,
+  washSpan,
+  type SpeechUnit,
+} from '@deepread/reader-core'
 import { invokeCommand } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
-import {
-  blockSeekRatio,
-  buildSpeakerPlan,
-  CHARS_PER_SECOND,
-  formatClock,
-  locateBlock,
-  sentenceIndexAt,
-  totalChars as sumChars,
-  voicesForLanguage,
-  type Block,
-  type Sentence,
-  type SpeakerBlock,
-  type SpeakerRole,
-} from './tts-plan'
+import { useTts } from './tts/useTts'
+import { CHARS_PER_SECOND, formatClock, sentencesOf, voicesForLanguage } from './tts-plan'
 
 type Engine = 'edge' | 'system' | 'cloud'
 
@@ -77,7 +70,7 @@ interface TtsSettings {
   narratorEdge: string
   narratorSystem?: string
   narratorCloud: string
-  /** 正文 TTS 高亮粒度:'word' 留作下一轮接入,目前等价于 'sentence'。 */
+  /** 正文 TTS 高亮粒度:'word' 走引擎报回的词边界,逐词洗色。 */
   highlightMode: HighlightMode
   highlightColor: string
   /**
@@ -153,7 +146,7 @@ interface TtsDrawerProps {
   readonly getSectionText: () => Promise<string>
   /** 跳转章节(±1);返回 false 表示越界。 */
   readonly jumpSection: (delta: number) => Promise<boolean>
-  /** TTS 句级高亮广播:每次切到新句时通知父层;父层负责把高亮打回正文
+  /** TTS 高亮广播:声音移动到新位置时通知父层;父层负责把高亮打回正文
    *  并触发自动翻页。传 null 表示清掉当前高亮(暂停/切章/关闭)。 */
   readonly onHighlight?: (
     highlight: {
@@ -180,26 +173,26 @@ export interface TtsDrawerHandle {
 }
 
 /** 歌词页的一行。memo 化:600 句的长章里,切句只重画两行(current/past 翻转),
- *  其余行 props 全等直接跳过 —— 60ms ticker 时代它们每帧都被重建。 */
+ *  其余行 props 全等直接跳过。 */
 const SentenceItem = memo(function SentenceItem({
   text,
-  start,
+  index,
   current,
   past,
   onSeek,
 }: {
   readonly text: string
-  readonly start: number
+  readonly index: number
   readonly current: boolean
   readonly past: boolean
-  readonly onSeek: (start: number) => void
+  readonly onSeek: (index: number) => void
 }) {
   return (
     <li>
       <button
         type="button"
         className={`tts-sentence-item${current ? ' is-current' : ''}${past ? ' is-past' : ''}`}
-        onClick={() => onSeek(start)}
+        onClick={() => onSeek(index)}
         aria-current={current}
       >
         {text}
@@ -239,53 +232,61 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const [view, setView] = useState<'player' | 'voices'>('player')
   /** 语音面板的两栏:叙述者 / 角色。没有角色时只显示叙述者。 */
   const [voiceTab, setVoiceTab] = useState<'narrator' | 'roles'>('narrator')
-  /** 本章的角色(名 + 出现段数);空 = 这章没认领到任何角色。 */
-  const [roles, setRoles] = useState<readonly SpeakerRole[]>([])
+  /** 本章的角色(名 + 出现单元数);空 = 这章没认领到任何角色。 */
+  const [roles, setRoles] = useState<readonly { name: string; count: number }[]>([])
   /** 角色名来源:AI 角色图谱 artifact。没跑过抽取就没有角色 —— 不假装有。 */
   const [knownNames, setKnownNames] = useState<readonly string[]>([])
-  const [phase, setPhase] = useState<Phase>('idle')
-  const [sentences, setSentences] = useState<readonly Sentence[]>([])
-  const [charPos, setCharPos] = useState(0)
+  /** 朗读单元队列(一句一个,带说话人与章节偏移);歌词页即它的投影。 */
+  const [units, setUnits] = useState<readonly SpeechUnit[]>([])
+  /** 已提交的朗读进度(累加字符空间,见 queuePosition):跨句时才进 state,
+   *  进度条/时钟走 DOM 直写。「声音在哪一句」由引擎报的 tts.unit 回答,
+   *  不经过这里 —— 章节偏移与累加字符是两个空间,互相换算会漂。 */
+  const [progress, setProgress] = useState(0)
   const [sectionTitle, setSectionTitle] = useState(sectionLabel)
-  const [error, setError] = useState<string | null>(null)
-  const [voices, setVoices] = useState<readonly SpeechSynthesisVoice[]>([])
   const [edgeVoices, setEdgeVoices] = useState<
     readonly { shortName: string; friendlyName: string; locale: string; lang: string }[]
   >([])
   const [providers, setProviders] = useState<readonly AiProviderConfig[]>([])
-  const [voiceSwitching, setVoiceSwitching] = useState(false)
 
-  const stopFlagRef = useRef(false)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeId = providers[0]?.id ?? null
+
+  // 引擎:词级高亮时才逐词发布边界(见 useTts 的 trackBoundary)。
+  const tts = useTts({
+    trackBoundary: settings.highlightMode === 'word',
+    lang: bookLanguage,
+    cloudConfigId: activeId,
+  })
+  const {
+    play: ttsPlay,
+    stop: ttsStop,
+    pause: ttsPause,
+    resume: ttsResume,
+    setRate: ttsSetRate,
+    setVoice: ttsSetVoice,
+    boundaryAt: ttsBoundaryAt,
+  } = tts
+  const error = tts.error
+  const voices = tts.systemVoices
+
+  const phase: Phase = tts.status === 'idle' ? 'idle' : tts.loading ? 'loading' : tts.status
+
   // 播放循环比渲染活得久,实时值全部从镜像读取。
   const settingsRef = useRef(settings)
   const phaseRef = useRef(phase)
-  const sentencesRef = useRef<readonly Sentence[]>([])
-  const charPosRef = useRef(0)
-  const voicesRef = useRef(voices)
+  const unitsRef = useRef<readonly SpeechUnit[]>([])
+  /** 引擎正在读的单元下标:跨句提交 React 状态的那个值的镜像,效果里读。 */
+  const ttsUnitRef = useRef<number | null>(null)
   const knownNamesRef = useRef<readonly string[]>([])
   const activeIdRef = useRef<string | null>(null)
   const sectionTokenRef = useRef(0)
-  // 首挂标记:热切换 effect 用它跳过首次执行。
-  const voiceSettingsProbe = useRef(false)
-  // 60ms ticker 的直写出口:进度条/时钟绕过 React 更新(见 paintCharPos),
-  // React 状态 charPos 只在切句时提交,长章不再整抽屉重渲染。
+  const stopFlagRef = useRef(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 60ms ticker 的直写出口:进度条/时钟绕过 React 更新(见 paintProgress),
+  // React 状态 progress 只在跨句时提交,长章不再整抽屉重渲染。
   const miniFillRef = useRef<HTMLSpanElement | null>(null)
   const seekInputRef = useRef<HTMLInputElement | null>(null)
   const elapsedClockRef = useRef<HTMLSpanElement | null>(null)
   const remainingClockRef = useRef<HTMLSpanElement | null>(null)
-  /** 已提交进 state 的句下标:applyCharPos 用它判「跨句了没有」。 */
-  const committedSentenceRef = useRef(0)
-
-  /** 拆音频:暂停、断 src(释放已解码缓冲)、丢引用 —— 各处 teardown 共用。 */
-  const releaseAudio = useCallback((): void => {
-    const audio = audioRef.current
-    if (!audio) return
-    audio.pause()
-    audio.removeAttribute('src')
-    audioRef.current = null
-  }, [])
 
   /** 清睡眠定时器(有则清并置空)。 */
   const clearTimer = useCallback((): void => {
@@ -294,36 +295,23 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     timerRef.current = null
   }, [])
 
-  /** 进度条与时钟的 DOM 直写:60ms 频率下绕开 React,布局抖动只有这几
-   *  个节点;React 重渲染面收窄到「切句」(见 applyCharPos)。出口随形态
-   *  只挂一套(迷你条 or 完整抽屉),null 检查兜住切换瞬间。 */
-  const paintCharPos = useCallback((pos: number): void => {
-    const list = sentencesRef.current
-    const total = sumChars(list)
-    const progress = total > 0 ? Math.min(1, pos / total) : 0
-    if (miniFillRef.current) miniFillRef.current.style.width = `${progress * 100}%`
-    if (seekInputRef.current) seekInputRef.current.value = String(Math.round(progress * 1000))
+  /** 进度条与时钟的 DOM 直写:60ms 频率下绕开 React,布局抖动只有这几个
+   *  节点;React 重渲染面收窄到「跨句」(见 progress state)。出口随形态
+   *  只挂一套(迷你条 or 完整抽屉),null 检查兜住切换瞬间。
+   *
+   *  入参是**累加字符位置**(queuePosition 的空间),与单元 start/end 的
+   *  章节真实偏移刻意分开 —— 见 reader-core 的 queuePosition 注释。 */
+  const paintProgress = useCallback((pos: number): void => {
+    const total = queuePosition(unitsRef.current, null).total
+    const fraction = total > 0 ? Math.min(1, pos / total) : 0
+    if (miniFillRef.current) miniFillRef.current.style.width = `${fraction * 100}%`
+    if (seekInputRef.current) seekInputRef.current.value = String(Math.round(fraction * 1000))
     const cps = CHARS_PER_SECOND * settingsRef.current.rate
     if (elapsedClockRef.current)
       elapsedClockRef.current.textContent = formatClock(total > 0 ? pos / cps : 0)
     if (remainingClockRef.current)
       remainingClockRef.current.textContent = formatClock(total > 0 ? (total - pos) / cps : 0)
   }, [])
-
-  /** charPos 的唯一写入口:ref 是真源(播放循环比渲染活得久),进度条直写,
-   *  state 只在跨句时提交一次 —— is-current、高亮广播、滚动居中都由它驱动。 */
-  const applyCharPos = useCallback(
-    (pos: number, force = false): void => {
-      charPosRef.current = pos
-      paintCharPos(pos)
-      const index = sentenceIndexAt(sentencesRef.current, pos)
-      if (force || index !== committedSentenceRef.current) {
-        committedSentenceRef.current = index
-        setCharPos(pos)
-      }
-    },
-    [paintCharPos],
-  )
 
   useEffect(() => {
     settingsRef.current = settings
@@ -334,22 +322,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     onPlayingChange(phase !== 'idle')
   }, [phase, onPlayingChange])
   useEffect(() => {
-    voicesRef.current = voices
-  }, [voices])
+    ttsUnitRef.current = tts.unit
+  }, [tts.unit])
   useEffect(() => {
     knownNamesRef.current = knownNames
   }, [knownNames])
   useEffect(() => {
     setSectionTitle(sectionLabel)
   }, [sectionLabel])
-
-  useEffect(() => {
-    if (!('speechSynthesis' in window)) return
-    const load = (): void => setVoices(window.speechSynthesis.getVoices())
-    load()
-    window.speechSynthesis.addEventListener('voiceschanged', load)
-    return () => window.speechSynthesis.removeEventListener('voiceschanged', load)
-  }, [])
 
   useEffect(() => {
     invokeCommand('ai.config.list', undefined)
@@ -387,8 +367,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     return () => {
       window.removeEventListener('keydown', onKey)
       stopFlagRef.current = true
-      window.speechSynthesis?.cancel()
-      releaseAudio()
+      ttsStop()
       clearTimer()
     }
     // oxlint-disable-next-line react-hooks/exhaustive-deps
@@ -416,7 +395,6 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     }
   }, [])
 
-  const activeId = providers[0]?.id ?? null
   useEffect(() => {
     activeIdRef.current = activeId
   }, [activeId])
@@ -425,13 +403,11 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     stopFlagRef.current = true
     sectionTokenRef.current += 1
     clearTimer()
-    window.speechSynthesis?.cancel()
-    releaseAudio()
-    setPhase('idle')
-    setSentences([])
-    sentencesRef.current = []
-    applyCharPos(0, true)
-  }, [clearTimer, releaseAudio, applyCharPos])
+    ttsStop()
+    setUnits([])
+    unitsRef.current = []
+    setProgress(0)
+  }, [clearTimer, ttsStop])
 
   useImperativeHandle(ref, () => ({ stop }), [stop])
 
@@ -444,391 +420,245 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     // section/book 模式在章循环结束处检查。
   }, [stop])
 
-  /** Ticker 当前正在播放的块:外层 60ms ticker 读这个推 charPos,
-   *  不再依赖 audio.ontimeupdate 的低频事件(浏览器通常 ~250ms)。
-   *  audio.currentTime 是浏览器自己的播放时钟,不会被 ticker 漂移影响。 */
-  const playingRef = useRef<{ readonly block: Block; readonly duration: number } | null>(null)
-
-  /** 播放已合成的块文件;外层 useEffect 跑 60ms ticker 推 charPos。 */
-  const playBlockFile = useCallback(
-    async (block: Block, path: string, seekRatio: number): Promise<void> => {
-      const audio = new Audio(convertFileSrc(path))
-      audioRef.current = audio
-      await new Promise<void>((resolve, reject) => {
-        let settled = false
-        const settle = (): void => {
-          if (settled) return
-          settled = true
-          resolve()
-        }
-        const applySeek = (): void => {
-          if (seekRatio > 0 && audio.duration > 0) {
-            audio.currentTime = seekRatio * audio.duration
-          }
-          playingRef.current = { block, duration: audio.duration || 0 }
-          // 立即推一次,避免首个 ticker 之前是 0。
-          applyCharPos(
-            block.start + Math.round((seekRatio > 0 ? seekRatio : 0) * block.text.length),
-            true,
-          )
-        }
-        audio.onloadedmetadata = () => applySeek()
-        // metadata 在某些环境下不会触发,保底用 canplay。
-        audio.oncanplay = () => {
-          if (playingRef.current === null) applySeek()
-        }
-        audio.onended = settle
-        audio.onerror = () => {
-          if (!settled) {
-            settled = true
-            reject(new Error('音频播放失败'))
-          }
-        }
-        void audio.play().catch((reason: unknown) => {
-          if (!settled) {
-            settled = true
-            reject(reason instanceof Error ? reason : new Error('音频播放失败'))
-          }
-        })
-      })
-      playingRef.current = null
-      applyCharPos(block.start + block.text.length, true)
-    },
-    [applyCharPos],
-  )
-
-  /** 系统引擎:整块 utterance + 估算时钟推进字符位置。 */
-  const speakSystemBlock = useCallback(
-    async (block: SpeakerBlock): Promise<void> => {
-      if (!('speechSynthesis' in window)) throw new Error('当前环境不支持系统语音')
-      const current = settingsRef.current
-      const wanted = voiceForSpeaker(current, block.speaker, 'system')
-      const voice = voicesRef.current.find((item) => item.voiceURI === wanted)
-      const chars = block.text.length
-      const perChar = 1000 / (CHARS_PER_SECOND * current.rate)
-      let elapsed = 0
-      const step = 60
-      const clock = setInterval(() => {
-        if (stopFlagRef.current) return
-        elapsed += step
-        applyCharPos(block.start + Math.min(chars, Math.round(elapsed / perChar)))
-      }, step)
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const utterance = new SpeechSynthesisUtterance(block.text)
-          if (voice) utterance.voice = voice
-          utterance.rate = current.rate
-          utterance.onend = () => resolve()
-          utterance.onerror = (event) => {
-            if (event.error === 'interrupted' || event.error === 'canceled') resolve()
-            else reject(new Error(`系统语音合成失败(${event.error})`))
-          }
-          window.speechSynthesis.speak(utterance)
-        })
-      } finally {
-        clearInterval(clock)
-      }
-      applyCharPos(block.start + chars)
-    },
-    [applyCharPos],
-  )
-
-  /** 从 startChar 起连播整章;章末按连读开关与定时模式决定去留。 */
+  /**
+   * 从 `fromUnit` 起连播整章;章末按连读开关与定时模式决定去留。
+   *
+   * 播放本身在引擎层(`useTts` + `clipEngine`:预取、跟词、变速),这里只做
+   * 编排:取章节文本 → 切单元 → 起播 → 章末回调里决定连读/停止。文本**不
+   *  trim**:偏移模型必须和父层高亮用的 `walkSectionText` 一致,trim 掉
+   * 头部空白会让整章高亮偏一格。
+   */
   const run = useCallback(
-    async (startChar = 0, opts?: { readonly stopAtChapterEnd?: boolean }): Promise<void> => {
+    (opts: { readonly fromUnit?: number; readonly stopAtChapterEnd?: boolean } = {}): void => {
       sectionTokenRef.current += 1
       const token = sectionTokenRef.current
       stopFlagRef.current = false
-      setPhase('loading')
-      setError(null)
       armTimer()
-      try {
-        let previous = ''
-        for (;;) {
-          if (stopFlagRef.current || sectionTokenRef.current !== token) return
-          const text = (await getSectionText()).trim()
-          if (text === '' || text === previous) return
-          previous = text
-          const sentenceList = splitSentencesWithOffsets(text)
-          sentencesRef.current = sentenceList
-          // 新一轮句子计划:提交判据作废,第一帧 applyCharPos 必须落 state,
-          // 否则 charPos state 还停留在上一章的位置,is-current 会标错行。
-          committedSentenceRef.current = -1
-          setSentences(sentenceList)
-          setPhase('playing')
-          // 按说话人分块:一块只属于一个说话人,音色才有意义。
-          const plan = buildSpeakerPlan(text, knownNamesRef.current)
-          setRoles(plan.roles)
-          const blocks = plan.blocks
-          // 流水线:块 N 播放时后台合成块 N+1(readest 的 preload 思路)。
-          // 缓存命中时预取立即返回,重听零等待。
-          type Fetch = Promise<{ block: SpeakerBlock; path: string } | null>
-          const fetchBlock = async (
-            block: SpeakerBlock,
-          ): Promise<{ block: SpeakerBlock; path: string }> => {
-            const current = settingsRef.current
-            // 缓存 key 含 voice(Rust 侧 tts::cache_file_name),换角色音色
-            // 走新缓存条目,旧的不失效 —— 重听仍是零等待。
-            const voice = voiceForSpeaker(current, block.speaker, current.engine)
-            const response =
-              current.engine === 'edge'
-                ? await invokeCommand('tts.edge.audio', {
-                    text: block.text,
-                    voice: voice ?? '',
-                    lang: bookLanguage,
-                    rate: current.rate,
-                  })
-                : await invokeCommand('tts.audio', {
-                    configId: activeIdRef.current ?? '',
-                    text: block.text,
-                    voice: voice ?? '',
-                    speed: current.rate,
-                  })
-            return { block, path: response.path }
-          }
-          let prefetch: Fetch | null = null
-          // 找到起点块。
-          let cursor = locateBlock(blocks, startChar)
-          while (cursor !== -1) {
-            if (stopFlagRef.current || sectionTokenRef.current !== token) return
-            const block = blocks[cursor]!
-            const seekRatio = blockSeekRatio(block, startChar)
-            applyCharPos(Math.max(block.start, startChar))
-            if (settingsRef.current.engine === 'system') {
-              await speakSystemBlock(block)
-              cursor = locateBlock(blocks, block.start + block.text.length)
-              continue
-            }
-            let attempt = 0
-            for (;;) {
-              try {
-                const fetched = (await (prefetch ?? fetchBlock(block))) ?? (await fetchBlock(block))
-                prefetch = null
-                if (stopFlagRef.current || sectionTokenRef.current !== token) return
-                await playBlockFile(fetched.block, fetched.path, seekRatio)
-                break
-              } catch (blockError) {
-                prefetch = null
-                attempt += 1
-                if (attempt >= 2 || stopFlagRef.current || sectionTokenRef.current !== token)
-                  throw blockError
-                // ponytail: 不再等 600ms —— WebSocket 重连由 Rust 端的 retry 兜底,
-                // 这里拖一拍只把用户的播放体验拖黑。Edge 抽风再发起一次就好。
-              }
-            }
-            if (stopFlagRef.current || sectionTokenRef.current !== token) return
-            const next = locateBlock(blocks, blocks[cursor]!.start + blocks[cursor]!.text.length)
-            // 预取下一块:不等它,失败留给播放时重试。
-            if (next !== -1) {
-              prefetch = fetchBlock(blocks[next]!).catch(() => null)
-            }
-            cursor = next
-            if (cursor === -1) {
-              await (prefetch ?? Promise.resolve(null))
-              prefetch = null
-            }
-          }
+      let fromUnit = opts.fromUnit ?? 0
+      let stopAtEnd = opts.stopAtChapterEnd ?? false
+      let previous = ''
+      const step = async (): Promise<void> => {
+        if (stopFlagRef.current || sectionTokenRef.current !== token) return
+        const text = await getSectionText()
+        if (stopFlagRef.current || sectionTokenRef.current !== token) return
+        if (text.trim() === '' || text === previous) return
+        previous = text
+        const plan = buildSpeechUnits(text, knownNamesRef.current)
+        if (stopFlagRef.current || sectionTokenRef.current !== token) return
+        unitsRef.current = plan
+        setUnits(plan)
+        setRoles(speakerRoles(plan))
+        // 新一轮句子计划:进度提交到新章起点(累加字符空间),歌词页的当前行
+        // 由引擎报回的新单元接管。
+        const from = Math.max(0, Math.min(fromUnit, plan.length - 1))
+        setProgress(queuePosition(plan, from).spoken)
+        ttsPlay(plan, from, () => {
           if (stopFlagRef.current || sectionTokenRef.current !== token) return
           // 定时"本章结束",或跨章"上一句"只播上一章的尾部。
-          if (settingsRef.current.timerKind === 'section' || opts?.stopAtChapterEnd) {
+          if (stopAtEnd || settingsRef.current.timerKind === 'section') {
             stop()
             return
           }
-          startChar = 0
           if (!settingsRef.current.autoNext) {
             stop()
             return
           }
-          if (!(await jumpSection(1))) return
-        }
-      } catch (runError) {
-        if (!stopFlagRef.current && sectionTokenRef.current === token)
-          setError(toAppError(runError).message)
-      } finally {
-        if (sectionTokenRef.current === token) {
-          stopFlagRef.current = false
-          setPhase('idle')
-          setSentences([])
-          sentencesRef.current = []
-          applyCharPos(0, true)
-          clearTimer()
-        }
+          void jumpSection(1).then((moved) => {
+            if (!moved) return
+            if (stopFlagRef.current || sectionTokenRef.current !== token) return
+            fromUnit = 0
+            stopAtEnd = false
+            void step()
+          })
+        })
       }
+      void step()
     },
-    [
-      getSectionText,
-      jumpSection,
-      armTimer,
-      playBlockFile,
-      speakSystemBlock,
-      stop,
-      bookLanguage,
-      clearTimer,
-      applyCharPos,
-    ],
+    [getSectionText, jumpSection, armTimer, ttsPlay, stop],
   )
 
   const play = useCallback((): void => {
     if (phaseRef.current === 'paused') {
-      audioRef.current?.play().catch(() => {})
-      window.speechSynthesis?.resume()
-      setPhase('playing')
+      ttsResume()
       armTimer()
       return
     }
     if (phaseRef.current !== 'idle') return
-    void run(0)
-  }, [run, armTimer])
+    void run({ fromUnit: 0 })
+  }, [run, armTimer, ttsResume])
 
   const pause = useCallback((): void => {
     if (phaseRef.current !== 'playing') return
-    audioRef.current?.pause()
-    window.speechSynthesis?.pause()
-    // 强制提交精确位置:暂停后 ticker 停转,进度条/时钟只能靠 state 初值。
-    applyCharPos(charPosRef.current, true)
-    setPhase('paused')
+    ttsPause()
     clearTimer()
-  }, [clearTimer, applyCharPos])
+  }, [ttsPause, clearTimer])
 
   const toggle = useCallback((): void => {
     if (phaseRef.current === 'playing') pause()
     else play()
   }, [pause, play])
 
-  /** 音色/语速/引擎热切换:软中断当前块,从当前字符位置续播。 */
+  /** 语速:引擎在播音侧直接拉伸(rate 不进合成请求),不重合成、不重启。 */
   useEffect(() => {
-    const wasActive = phaseRef.current === 'playing' || phaseRef.current === 'paused'
-    const mounted = voiceSettingsProbe.current
-    if (!mounted) return
-    if (!wasActive) return
-    const at = charPosRef.current
-    setVoiceSwitching(true)
-    sectionTokenRef.current += 1
-    stopFlagRef.current = true
-    window.speechSynthesis?.cancel()
-    releaseAudio()
-    const delay = setTimeout(() => {
-      setVoiceSwitching(false)
-      void run(at)
-    }, 80)
-    return () => clearTimeout(delay)
+    ttsSetRate(settings.rate)
+  }, [settings.rate, ttsSetRate])
+
+  /** 音色/引擎/角色音色热切换:待机也同步(起播时引擎层读到的就是当前
+   *  设置);同引擎从下一句起生效(引擎层换音色,已合成的块不失效);
+   *  跨引擎两边队列无法交接,会话中断后从当前句续播。 */
+  const engineProbe = useRef<Engine | null>(null)
+  const mountedProbe = useRef(false)
+  useEffect(() => {
+    const wasEngine = engineProbe.current
+    const first = !mountedProbe.current
+    mountedProbe.current = true
+    engineProbe.current = settings.engine
+    ttsSetVoice(
+      settings.engine,
+      voiceForSpeaker(settings, 'narrator', settings.engine) ?? null,
+      (speaker) => voiceForSpeaker(settings, speaker, settings.engine) ?? null,
+    )
+    if (first) return
+    if (phaseRef.current === 'idle') return
+    if (settings.engine !== wasEngine) {
+      // 从引擎正在读的那句续播(引擎状态,不从字符位置反推)。
+      const at = ttsUnitRef.current ?? 0
+      sectionTokenRef.current += 1
+      stopFlagRef.current = true
+      setTimeout(() => {
+        void run({ fromUnit: at })
+      }, 60)
+    }
+    // 只依赖 settings 字段:`run` 的身份随父层 inline props 变化,放进来会让
+    // 父层每次重渲染都重放音色(清空预取缓存);ttsSetVoice 本身是稳定的。
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    settings.engine,
     settings.narratorEdge,
     settings.narratorCloud,
     settings.narratorSystem,
-    settings.rate,
-    settings.engine,
-    // 角色音色变了同样要按当前位置续播:缓存按音色分开,重合成只发生在新块。
+    // 角色音色变了同样从下一句生效:引擎按单元选音色,缓存按音色分开。
     settings.speakerVoices,
   ])
 
-  useEffect(() => {
-    voiceSettingsProbe.current = true
-  }, [])
-
-  /** 主动 ticker:每 60ms 用 audio.currentTime 推 charPos,
-   *  比 ontimeupdate 的 ~250ms 浏览器默认频率快 4 倍,
-   *  句级高亮跟手更紧。playingRef 由 playBlockFile 设置/清除。
-   *  tick 内不碰 React 状态:进度条/时钟走 paintCharPos 直写,
-   *  只有跨句时 applyCharPos 才提交一次 state。 */
+  /** 主动 ticker:每 60ms 读引擎报回的词边界,推进度 —— 比旧版
+   *  `currentTime/duration` 比例估算精确(引擎报的是真实词边界)。
+   *  tick 内不碰 React 状态:进度条/时钟走 paintProgress 直写,
+   *  只有跨句时才提交一次 state。 */
   useEffect(() => {
     const tick = setInterval(() => {
-      const playing = playingRef.current
-      const audio = audioRef.current
-      if (!playing || !audio || audio.paused) return
-      if (audio.duration <= 0) return
-      const ratio = audio.currentTime / audio.duration
-      applyCharPos(
-        playing.block.start +
-          Math.min(playing.block.text.length, Math.round(ratio * playing.block.text.length)),
-      )
+      if (phaseRef.current === 'idle') return
+      const spot = ttsBoundaryAt()
+      const list = unitsRef.current
+      if (!spot || list.length === 0) return
+      const unit = list[spot.unit]
+      if (!unit) return
+      // 累加字符空间:本句之前的所有字符 + 本句内已读到的词。
+      const spoken =
+        queuePosition(list, spot.unit).spoken + Math.min(spot.charIndex, unit.text.length)
+      paintProgress(spoken)
     }, 60)
     return () => clearInterval(tick)
-  }, [applyCharPos])
+  }, [ttsBoundaryAt, paintProgress])
 
-  const totalChars = useMemo(() => sumChars(sentences), [sentences])
-
-  /** 当前句:charPos 落在哪句区间。 */
-  const sentenceIndex = useMemo(() => sentenceIndexAt(sentences, charPos), [sentences, charPos])
-
-  /** TTS 句级高亮广播:每次切句或高亮档/色变化时,把当前句的字符区间
-   *  发给父层。关档或暂停时传 null,让父层把上一条高亮清掉。 */
+  /** 跨句即提交:引擎报回新单元时把进度落到新句开头(词边界随后由 ticker
+   *  细化), scrubber 的 state 值不等下一个 tick。 */
   useEffect(() => {
-    if (phase !== 'playing' || sentences.length === 0) {
+    if (tts.unit === null) return
+    if (unitsRef.current[tts.unit] === undefined) return
+    setProgress(queuePosition(unitsRef.current, tts.unit).spoken)
+  }, [tts.unit])
+
+  const totalChars = useMemo(() => queuePosition(units, null).total, [units])
+
+  /** TTS 高亮广播:声音移到新位置(跨句或跨词)时,把要洗的字符区间发给
+   *  父层。词级等引擎报回第一个词再洗 —— 先洗整句再缩成一个词读起来
+   *  是闪一下而不是高亮。
+   *
+   *  「声音在哪一句」由引擎报的 `tts.unit` 直接回答(同 ColorReader 的
+   *  span memo):不经过 charPos → unitAtChar 的往返 —— 那是两个字符空间
+   *  的换算,块间换行会让它随章节推进越漂越远(词级高亮整个失效、句级洗到
+   *  还没读的句子)。引擎没有当前单元(停止/切章间隙)才清洗。 */
+  useEffect(() => {
+    const index = tts.unit
+    if (index === null || settings.highlightMode === 'off') {
       onHighlight?.(null)
       return
     }
-    const sentence = sentences[sentenceIndex]
-    if (!sentence) return
-    if (settings.highlightMode === 'off') {
+    const unit = units[index]
+    if (unit === undefined) {
       onHighlight?.(null)
       return
     }
+    const span = washSpan(index, unit, tts.boundary, settings.highlightMode)
+    if (span === null) return
     onHighlight?.({
       mode: settings.highlightMode,
-      start: sentence.start,
-      end: sentence.start + sentence.text.length,
+      start: span.start,
+      end: span.end,
       color: settings.highlightColor,
     })
-    // 卸载/暂停时清掉:这一帧的 unmount cleanup 由父层兜底(onHighlight(null))。
-    return () => {
-      onHighlight?.(null)
-    }
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [sentenceIndex, sentences, phase, settings.highlightMode, settings.highlightColor])
+  }, [tts.unit, units, tts.boundary, settings.highlightMode, settings.highlightColor])
 
-  /** 跳到某句:换算块与块内比例,由 run 的 seek 语义落到正确音频位置。 */
+  /** scrubber 的位置(累加字符)→ 单元下标,从那一句起播。 */
   const seekToChar = useCallback(
     (target: number): void => {
       if (phaseRef.current === 'idle') return
-      const audio = audioRef.current
-      const list = sentencesRef.current
-      // 优先:目标就在当前音频对应的块内,直接 currentTime 精确 seek。
-      // 块边界未知于 UI 层,统一走重载路径:token 中断 + run(目标位置)。
-      if (audio && !audio.paused) {
-        // 粗判:目标位置仍在当前句块内时也可跳,但块信息不在 UI;重载即合成缓存命中(同文本同音色同语速),代价是秒级。
-      }
+      const list = unitsRef.current
+      if (list.length === 0) return
+      const total = queuePosition(list, null).total
+      const index = unitAtChar(list, Math.max(0, Math.min(target, total > 0 ? total - 1 : target)))
       sectionTokenRef.current += 1
       stopFlagRef.current = true
-      window.speechSynthesis?.cancel()
-      releaseAudio()
-      setPhase('loading')
+      ttsStop()
       setTimeout(() => {
-        void run(Math.max(0, Math.min(target, totalChars > 0 ? totalChars - 1 : target)))
+        void run({ fromUnit: index })
       }, 60)
-      void list
     },
-    [run, totalChars, releaseAudio],
+    [run, ttsStop],
   )
 
-  /** 句子行的 seek 走稳定引用:行已 memo 化,onClick 每渲染换新会整体失效。 */
-  const seekSentence = useCallback((start: number): void => seekToChar(start), [seekToChar])
+  /** 句子行的 seek 走稳定引用:行已 memo 化,onClick 每渲染换新会整体失效。
+   *  传单元下标而不是字符偏移 —— 行与队列同序,下标即答案。 */
+  const seekSentence = useCallback(
+    (index: number): void => {
+      if (phaseRef.current === 'idle') return
+      const list = unitsRef.current
+      if (list.length === 0) return
+      const at = Math.max(0, Math.min(index, list.length - 1))
+      sectionTokenRef.current += 1
+      stopFlagRef.current = true
+      ttsStop()
+      setTimeout(() => {
+        void run({ fromUnit: at })
+      }, 60)
+    },
+    [run, ttsStop],
+  )
 
   const jumpSentences = useCallback(
     (delta: number): void => {
       if (phaseRef.current === 'idle') return
-      const target = sentenceIndex + delta
+      const current = ttsUnitRef.current ?? 0
+      const target = current + delta
       if (target < 0) {
         void jumpSection(-1).then((moved) => {
           if (moved) {
             sectionTokenRef.current += 1
             stopFlagRef.current = true
-            window.speechSynthesis?.cancel()
-            audioRef.current?.pause()
-            setPhase('loading')
+            ttsStop()
             setTimeout(
-              () => void run(Number.MAX_SAFE_INTEGER / 2 - 1, { stopAtChapterEnd: true }),
+              () => void run({ fromUnit: Number.MAX_SAFE_INTEGER, stopAtChapterEnd: true }),
               60,
             )
           }
         })
         return
       }
-      const sentence = sentences[target]
-      if (sentence) seekToChar(sentence.start)
+      seekSentence(target)
     },
-    [sentenceIndex, sentences, jumpSection, run, seekToChar],
+    [jumpSection, run, seekSentence, ttsStop],
   )
 
   const changeSection = useCallback(
@@ -836,7 +666,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       const wasActive = phaseRef.current !== 'idle'
       stop()
       void jumpSection(delta).then((moved) => {
-        if (moved && wasActive) void run(0)
+        if (moved && wasActive) void run({ fromUnit: 0 })
       })
     },
     [stop, jumpSection, run],
@@ -848,12 +678,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     if (sentenceListRef.current === null) return
     const current = sentenceListRef.current.querySelector('.is-current')
     current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [sentenceIndex, sentences.length])
+  }, [tts.unit, units.length])
 
-  const sentenceProgress = totalChars > 0 ? Math.min(1, charPos / totalChars) : 0
+  const sentences = useMemo(() => sentencesOf(units), [units])
+
+  const sentenceProgress = totalChars > 0 ? Math.min(1, progress / totalChars) : 0
   const cps = CHARS_PER_SECOND * settings.rate
-  const elapsed = totalChars > 0 ? charPos / cps : 0
-  const remaining = totalChars > 0 ? (totalChars - charPos) / cps : 0
+  const elapsed = totalChars > 0 ? progress / cps : 0
+  const remaining = totalChars > 0 ? (totalChars - progress) / cps : 0
 
   const voiceLabel =
     settings.engine === 'edge'
@@ -886,7 +718,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     return (
       <section className="tts-mini" aria-label="朗读迷你条">
         {coverUrl ? (
-          <img src={coverUrl} alt="" className="tts-mini-cover" />
+          <img src={coverUrl} className="tts-mini-cover" alt="" />
         ) : (
           <span className="tts-mini-cover tts-cover-fallback" aria-hidden>
             {bookTitle.charAt(0)}
@@ -1037,7 +869,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 </div>
               ))}
               <p className="tts-voices-sub">
-                角色音色对本章生效;换音色会重新合成(缓存按音色分开存,重听不重新计费)。
+                角色音色对本章生效;换音色从下一句起生效,缓存按音色分开存,重听不重新计费。
               </p>
             </div>
           ) : (
@@ -1138,7 +970,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           </div>
 
           <div className="tts-sentences" aria-live="polite">
-            {phase === 'loading' ? (
+            {units.length === 0 && phase === 'loading' ? (
               <div className="tts-loading" aria-label="正在合成语音">
                 <div className="tts-loading-wave" aria-hidden>
                   <span />
@@ -1147,7 +979,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                   <span />
                   <span />
                 </div>
-                <span className="tts-loading-label">正在合成整章语音…</span>
+                <span className="tts-loading-label">正在合成语音…</span>
               </div>
             ) : sentences.length === 0 ? (
               <p className="tts-sentence-text is-idle">
@@ -1159,23 +991,13 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                   <SentenceItem
                     key={sentence.start}
                     text={sentence.text}
-                    start={sentence.start}
-                    current={index === sentenceIndex}
-                    past={index < sentenceIndex}
+                    index={index}
+                    current={index === tts.unit}
+                    past={tts.unit !== null && index < tts.unit}
                     onSeek={seekSentence}
                   />
                 ))}
               </ol>
-            )}
-            {voiceSwitching && (
-              <span className="tts-switching" aria-hidden>
-                <SpinnerBall size={16} weight="bold" /> 切换音色中
-                <span className="tts-switching-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </span>
             )}
           </div>
 
@@ -1346,7 +1168,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                       ? '关闭正文高亮'
                       : mode === 'sentence'
                         ? '按整句高亮(自动翻页)'
-                        : '按词高亮(下一版接入,目前与句级一致)'
+                        : '按词高亮(引擎报回的词边界,逐词洗色)'
                   }
                 >
                   {mode === 'off' ? '关' : mode === 'sentence' ? '句级' : '词级'}

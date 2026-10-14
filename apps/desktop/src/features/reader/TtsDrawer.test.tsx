@@ -1,20 +1,19 @@
 /**
  * TtsDrawer 契约测试。
  *
- * TtsDrawer 的播放循环(预取、重试、token 中断)与 ref 生命周期绑得紧,且依赖
- * 真 IPC + 真 <audio>,之前没有任何测试网,B1 改它的渲染路径前先补上。
+ * TtsDrawer 的播放循环(起播、切句、连读、定时)与 ref 生命周期绑得紧,且依赖
+ * 真 IPC + 真 Web Audio,这里用替身驱动:
  *
- * 三条替身边界:
- * 1. IPC 打桩:`tts.edge.audio` 返回假音频路径,断言合成的请求参数(文本块/
- *    voice/lang/rate)—— 这是与 Rust 端的契约面。
- * 2. `Audio` 换成可手工驱动的 FakeAudio(jsdom 的 HTMLMediaElement.play 未实现,
- *    而且真加载音频也不该发生在单测里)。用例通过 `end()` / `currentTime` 模拟
- *    播放推进。
- * 3. 不 mock speechSynthesis:默认 Edge 引擎路径碰不到它,组件里所有
+ * 1. IPC 打桩:`tts.edge.audio` 返回假音频(base64)+ 按文本摊分的词表,
+ *    断言合成的请求参数(文本/voice/lang;rate 不再进请求 —— 变速在播音
+ *    侧完成,这是新管线的前提)。
+ * 2. Web Audio 换成可手工驱动的 FakeAudioContext/FakeSource(jsdom 没有
+ *    AudioContext):`end()` 播完一段,`currentTime` + rAF 冲刷推词边界。
+ * 3. `speechSynthesis` 不 mock:默认 Edge 引擎路径碰不到它,组件里所有
  *    `window.speechSynthesis?.` 都是可选链,jsdom 没有它也能走通。
  *
- * 用假时钟驱动:切句 seek 的 60ms 延迟、音色切换的 80ms、60ms ticker 都是
- * 定时器,`advanceTimersByTimeAsync` 一并推进。
+ * 用假时钟驱动:切句 seek 的 60ms、ticker 60ms、音色切换的 60ms 都是定时器,
+ * `advanceTimersByTimeAsync` 一并推进;rAF 由本文件自己排空。
  */
 
 import { act, fireEvent, render, screen } from '@testing-library/react'
@@ -35,65 +34,125 @@ vi.mock('../../lib/ipc', () => ({
 
 const invokeMock = vi.mocked(invokeCommand)
 
-/** 两句各 201 字:句子层每句 ≤220 不再切,块层两句 >300 字必然分成两块。 */
+/** 两句各 201 字:句子层每句 ≤220 不再切,一句一个单元。 */
 const SENTENCE_1 = `${'甲'.repeat(200)}。`
 const SENTENCE_2 = `${'乙'.repeat(200)}。`
 const SECTION_1 = SENTENCE_1 + SENTENCE_2
 const SECTION_2 = '第二章的第一句。第二章的第二句。'
 
-/** 可手工驱动的 <audio> 替身:只实现 TtsDrawer 摸得到的那层契约。 */
-class FakeAudio {
-  static instances: FakeAudio[] = []
+/** 按文本摊分的词表:每 2 字一个词,`at` 每次 +0.1s —— wordCues 向前匹配。 */
+function wordsFor(text: string): { at: number; text: string }[] {
+  const words: { at: number; text: string }[] = []
+  for (let at = 0; at + 2 <= text.length; at += 2) {
+    words.push({ at: (at / 2) * 0.1, text: text.slice(at, at + 2) })
+  }
+  return words
+}
 
-  src: string
-  duration = 10
-  currentTime = 0
-  paused = true
-  onloadedmetadata: (() => void) | null = null
-  oncanplay: (() => void) | null = null
+/* -------------------------------------------------------------------------- */
+/* Web Audio 替身                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** 可手工驱动的 BufferSource:`end()` 播完这一段。 */
+class FakeSource {
+  static instances: FakeSource[] = []
+
+  buffer: AudioBuffer | null = null
+  started = false
+  stopped = false
   onended: (() => void) | null = null
-  onerror: (() => void) | null = null
 
-  readonly play = vi.fn((): Promise<void> => {
-    this.paused = false
-    // 真浏览器在 play() 之后异步回调 metadata;同步给,用例好推进。
-    this.onloadedmetadata?.()
-    return Promise.resolve()
-  })
-  readonly pause = vi.fn((): void => {
-    this.paused = true
-  })
-
-  constructor(src: string) {
-    this.src = src
-    FakeAudio.instances.push(this)
+  constructor() {
+    FakeSource.instances.push(this)
   }
 
-  removeAttribute(name: string): void {
-    if (name === 'src') this.src = ''
+  readonly connect = (): void => {}
+  readonly disconnect = (): void => {}
+  readonly start = (): void => {
+    this.started = true
+  }
+  readonly stop = (): void => {
+    this.stopped = true
+  }
+  addEventListener(type: string, fn: () => void): void {
+    if (type === 'ended') this.onended = fn
   }
 
-  /** 测试驱动:这一块播完了。 */
+  /** 测试驱动:这一单元播完了。 */
   end(): void {
-    this.paused = true
     this.onended?.()
   }
 
-  static get current(): FakeAudio {
-    const instance = FakeAudio.instances.at(-1)
-    if (instance === undefined) throw new Error('还没有音频实例被创建:播放没有真正开始')
+  static get current(): FakeSource {
+    const instance = FakeSource.instances.at(-1)
+    if (instance === undefined) throw new Error('还没有音频源被创建:播放没有真正开始')
     return instance
   }
 }
 
-function respond(command: string, index: number): unknown {
+/** 可手工驱动的 AudioContext:`currentTime` 由用例推进,rAF 由排空器驱动。 */
+class FakeAudioContext {
+  static latest: FakeAudioContext | null = null
+
+  state: 'running' | 'suspended' = 'running'
+  currentTime = 0
+  readonly destination = {}
+
+  constructor() {
+    FakeAudioContext.latest = this
+  }
+
+  createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer {
+    return {
+      numberOfChannels: channels,
+      length,
+      sampleRate,
+      getChannelData: () => new Float32Array(length),
+      copyToChannel: () => {},
+    } as unknown as AudioBuffer
+  }
+
+  createBufferSource(): AudioBufferSourceNode {
+    return new FakeSource() as unknown as AudioBufferSourceNode
+  }
+
+  decodeAudioData(): Promise<AudioBuffer> {
+    return Promise.resolve(this.createBuffer(1, 24_000, 24_000))
+  }
+
+  resume(): Promise<void> {
+    this.state = 'running'
+    return Promise.resolve()
+  }
+
+  suspend(): Promise<void> {
+    this.state = 'suspended'
+    return Promise.resolve()
+  }
+}
+
+/** rAF 替身:回调排队,由 flushRaf 统一驱动(引擎的跟词循环每帧重注册)。 */
+const rafQueue = new Map<number, FrameRequestCallback>()
+let rafId = 0
+
+function flushRaf(): void {
+  const pending = [...rafQueue.values()]
+  rafQueue.clear()
+  for (const callback of pending) callback(0)
+}
+
+function respond(command: string, request?: Record<string, unknown>): unknown {
   switch (command) {
     case 'ai.config.list':
       return { providers: [] }
     case 'tts.edge.voices':
       return { voices: [] }
     case 'tts.edge.audio':
-      return { path: `/tmp/tts-${index}.mp3` }
+      return {
+        audio: 'AAAA',
+        words: wordsFor(String(request?.['text'] ?? '')),
+        cached: false,
+      }
     default:
       return undefined
   }
@@ -120,18 +179,38 @@ function makeProps(overrides: Partial<TtsDrawerProps> = {}): TtsDrawerProps {
 
 /** 推进微任务与挂载期 effect;run() 内部的 await 链全是微任务,一冲到底。 */
 async function flush(): Promise<void> {
-  await act(async () => {})
-}
-
-/** 推进真实定时器(切句 60ms / 音色切换 80ms / ticker 60ms)。 */
-async function advance(ms: number): Promise<void> {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms)
+    flushRaf()
   })
 }
 
-function synthCalls(): readonly unknown[] {
-  return invokeMock.mock.calls.filter(([command]) => command === 'tts.edge.audio')
+/** 推进真实定时器(seek 60ms / ticker 60ms)与 rAF 跟词循环。
+ *  先冲刷 rAF:跟词循环报回的词边界是 ticker 的输入,顺序反了 ticker 读到的
+ *  还是上一个位置的旧值。 */
+async function advance(ms: number): Promise<void> {
+  await act(async () => {
+    flushRaf()
+    await vi.advanceTimersByTimeAsync(ms)
+    flushRaf()
+  })
+}
+
+/** 播完当前单元(合成/解码都是微任务,flush 后 FakeSource.current 即当前段)。 */
+async function endUnit(): Promise<void> {
+  await act(async () => {
+    FakeSource.current.end()
+  })
+  await flush()
+}
+
+function synthRequests(): readonly { text: string; voice: string; lang?: string }[] {
+  return invokeMock.mock.calls
+    .filter(([command]) => command === 'tts.edge.audio')
+    .map(([, request]) => request as { text: string; voice: string; lang?: string })
+}
+
+function synthTexts(): readonly string[] {
+  return synthRequests().map((request) => request.text)
 }
 
 function currentSentence(): string | null {
@@ -152,12 +231,22 @@ async function chooseRate(label: string): Promise<void> {
 beforeEach(() => {
   localStorage.clear()
   vi.useFakeTimers()
-  FakeAudio.instances.length = 0
-  vi.stubGlobal('Audio', FakeAudio)
-  let audioIndex = 0
+  FakeSource.instances.length = 0
+  FakeAudioContext.latest = null
+  rafQueue.clear()
+  rafId = 0
+  vi.stubGlobal('AudioContext', FakeAudioContext)
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    rafId += 1
+    rafQueue.set(rafId, callback)
+    return rafId
+  })
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    rafQueue.delete(id)
+  })
   invokeMock.mockReset()
   invokeMock.mockImplementation(
-    (command) => Promise.resolve(respond(command as string, audioIndex++)) as never,
+    (command, request) => Promise.resolve(respond(command as string, request)) as never,
   )
 })
 
@@ -171,21 +260,24 @@ describe('待机与播放', () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
-    expect(synthCalls()).toHaveLength(0)
+    expect(synthRequests()).toHaveLength(0)
     expect(props.onPlayingChange).toHaveBeenCalledWith(false)
     expect(screen.getByText('待机')).toBeInTheDocument()
   })
 
-  it('播放:按块合成第一块(edge 参数齐全),句子列表逐句渲染,首句 current', async () => {
+  it('播放:按单元合成第一句(edge 参数不含 rate),句子列表逐句渲染,首句 current', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
 
-    expect(synthCalls()).toEqual([
-      ['tts.edge.audio', { text: SENTENCE_1, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 }],
-    ])
+    // rate 不再进请求:所有片段按 1.0 合成,变速在播音侧完成。
+    expect(synthRequests()[0]).toEqual({
+      text: SENTENCE_1,
+      voice: 'zh-CN-XiaoxiaoNeural',
+      lang: 'zh',
+    })
     expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
     expect(sentenceTexts()).toEqual([SENTENCE_1, SENTENCE_2])
     expect(currentSentence()).toBe(SENTENCE_1)
@@ -199,29 +291,32 @@ describe('待机与播放', () => {
     })
   })
 
-  it('块播完自动接下一块,当前句随之推进', async () => {
+  it('预取下一单元:起播即合成 AHEAD 范围内的后续句', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
 
-    expect(synthCalls()).toHaveLength(2)
-    expect(synthCalls()[1]).toEqual([
-      'tts.edge.audio',
-      { text: SENTENCE_2, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-    ])
+    expect(synthTexts()).toContain(SENTENCE_1)
+    expect(synthTexts()).toContain(SENTENCE_2)
+  })
+
+  it('一句播完自动接下一句,当前句随之推进', async () => {
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    await endUnit()
+
     expect(currentSentence()).toBe(SENTENCE_2)
     expect(props.onHighlight).toHaveBeenLastCalledWith(
       expect.objectContaining({ start: SENTENCE_1.length }),
     )
   })
 
-  it('章末连读(默认开):最后一块播完自动跳下一章接着播', async () => {
+  it('章末连读(默认开):最后一句播完自动跳下一章接着播', async () => {
     const props = makeProps({
       getSectionText: vi.fn().mockResolvedValueOnce(SECTION_1).mockResolvedValue(SECTION_2),
     })
@@ -229,21 +324,12 @@ describe('待机与播放', () => {
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
+    await endUnit()
+    await endUnit()
 
     expect(props.jumpSection).toHaveBeenCalledWith(1)
-    expect(synthCalls()).toHaveLength(3)
-    expect(synthCalls()[2]).toEqual([
-      'tts.edge.audio',
-      { text: SECTION_2, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-    ])
+    expect(synthTexts()).toContain('第二章的第一句。')
+    expect(synthTexts()).toContain('第二章的第二句。')
   })
 
   it('关掉「连读下一章」:章末停止而不是跳章', async () => {
@@ -253,14 +339,8 @@ describe('待机与播放', () => {
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
+    await endUnit()
+    await endUnit()
 
     expect(props.jumpSection).not.toHaveBeenCalled()
     expect(props.onPlayingChange).toHaveBeenLastCalledWith(false)
@@ -268,8 +348,8 @@ describe('待机与播放', () => {
   })
 })
 
-describe('渲染优化(60ms ticker 不触发整抽屉重渲染)', () => {
-  it('句内推进:进度条与时钟经 DOM 直写更新,当前句不翻转', async () => {
+describe('词边界与进度(60ms ticker 不触发整抽屉重渲染)', () => {
+  it('词内推进:进度条与时钟经 DOM 直写更新,当前句不翻转', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
@@ -279,38 +359,58 @@ describe('渲染优化(60ms ticker 不触发整抽屉重渲染)', () => {
     const elapsed = document.querySelector('.tts-clock')!
     expect(seek.value).toBe('0')
 
-    // 半块处仍在第一句内:React 状态此时不应提交,但进度条/时钟必须走直写前进。
-    FakeAudio.current.currentTime = 5
+    // 播放时钟走到 5s:跟词循环报回词边界,ticker 直写进度条。
+    FakeAudioContext.latest!.currentTime = 5
     await advance(60)
     expect(seek.value).not.toBe('0')
     expect(elapsed.textContent).not.toBe('0:00')
     expect(currentSentence()).toBe(SENTENCE_1)
   })
-})
 
-describe('暂停与继续', () => {
-  it('暂停拆不动合成进度;继续只 audio.play(),不重新合成', async () => {
+  it('词级高亮:切到词级后,父层收到词区间而不是整句', async () => {
+    localStorage.setItem('deepread.tts.settings', JSON.stringify({ highlightMode: 'word' }))
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    const callsAfterStart = synthCalls().length
+    vi.mocked(props.onHighlight!).mockClear()
+    FakeAudioContext.latest!.currentTime = 1
+    await advance(60)
+
+    // 1s 处落在第 10 个词(每词 0.1s、2 字):区间是章内的 20..22。
+    expect(props.onHighlight).toHaveBeenLastCalledWith({
+      mode: 'word',
+      start: 20,
+      end: 22,
+      color: '#f5d76e',
+    })
+  })
+})
+
+describe('暂停与继续', () => {
+  it('暂停挂起音频上下文;继续只 resume,不重新合成', async () => {
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    const callsAfterStart = synthRequests().length
 
     fireEvent.click(screen.getByRole('button', { name: '暂停' }))
-    expect(FakeAudio.current.pause).toHaveBeenCalled()
+    expect(FakeAudioContext.latest!.state).toBe('suspended')
     // paused 对父层仍是「非 idle」:迷你播放条要保留,只有真正停止才回落 false。
     expect(props.onPlayingChange).toHaveBeenLastCalledWith(true)
     expect(screen.getByRole('button', { name: '播放' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
-    expect(FakeAudio.current.play).toHaveBeenCalledTimes(2)
-    expect(synthCalls()).toHaveLength(callsAfterStart)
+    expect(FakeAudioContext.latest!.state).toBe('running')
+    expect(synthRequests()).toHaveLength(callsAfterStart)
   })
 })
 
 describe('切句与切章', () => {
-  it('下一句:中断当前块,60ms 后从下一句起点重新合成', async () => {
+  it('下一句:中断当前句,60ms 后从下一句起点起播', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
@@ -320,38 +420,25 @@ describe('切句与切章', () => {
     await advance(60)
     await flush()
 
-    expect(synthCalls()).toHaveLength(2)
-    expect(synthCalls()[1]).toEqual([
-      'tts.edge.audio',
-      { text: SENTENCE_2, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-    ])
     expect(currentSentence()).toBe(SENTENCE_2)
+    expect(synthTexts()).toContain(SENTENCE_2)
   })
 
-  it('上一句:跨块回跳到上一句开头', async () => {
+  it('上一句:回到上一句开头', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    await act(async () => {
-      FakeAudio.current.end()
-    })
-    await flush()
+    await endUnit()
     fireEvent.click(screen.getByRole('button', { name: '上一句' }))
     await advance(60)
     await flush()
 
     expect(currentSentence()).toBe(SENTENCE_1)
-    // 第三次合成:块1(自动接块2 一次 + 回跳重合成一次)。
-    expect(synthCalls()).toHaveLength(3)
-    expect(synthCalls()[2]).toEqual([
-      'tts.edge.audio',
-      { text: SENTENCE_1, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-    ])
   })
 
-  it('下一章:停当前章、跳新章、旧音频被拆除', async () => {
+  it('下一章:停当前章、跳新章、旧音频源被拆除', async () => {
     const props = makeProps({
       getSectionText: vi.fn().mockResolvedValueOnce(SECTION_1).mockResolvedValue(SECTION_2),
     })
@@ -359,18 +446,69 @@ describe('切句与切章', () => {
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
+    const stale = FakeSource.current
     fireEvent.click(screen.getByRole('button', { name: '下一章' }))
     await flush()
 
     expect(props.jumpSection).toHaveBeenCalledWith(1)
-    expect(synthCalls()).toHaveLength(2)
-    expect(synthCalls()[1]).toEqual([
-      'tts.edge.audio',
-      { text: SECTION_2, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1 },
-    ])
-    expect(FakeAudio.instances).toHaveLength(2)
-    // 旧块的音频在切章时已被软中断拆除。
-    expect(FakeAudio.instances[0]!.src).toBe('')
+    expect(synthTexts()).toContain('第二章的第一句。')
+    // 旧音频源在切章时已被软中断拆除。
+    expect(stale.stopped).toBe(true)
+  })
+})
+
+/** 两字符空间的分界测试:8 个 4 字句,句间各一个 `\n`(章=块级元素拼接,
+ *  每个块后补 `\n`,但单元文本不含 `\n` —— 累加长度与真实偏移从此分叉)。
+ *  累加空间:单元 k 占 [4k, 4k+4);真实空间:单元 k 起点 5k。
+ *  第 4 单元(戊戊戊。)真实起点 20,恰好落进累加空间的第 5 单元区间 ——
+ *  旧编排把真实偏移喂 unitAtChar 反推单元,会洗到下一句(己己己。,25)。 */
+const PARAGRAPHS = '甲甲甲。\n乙乙乙。\n丙丙丙。\n丁丁丁。\n戊戊戊。\n己己己。\n庚庚庚。\n辛辛辛。'
+
+describe('多段章节(换行不污染洗色)', () => {
+  it('句级高亮按引擎单元洗真实偏移,不漂移到还没读的句子', async () => {
+    const props = makeProps({ getSectionText: vi.fn(async () => PARAGRAPHS) })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    for (let i = 0; i < 4; i += 1) await endUnit()
+
+    // 引擎读到第 4 单元(戊戊戊。,真实 20..24):洗它,不是累加空间反推的第 5 单元。
+    expect(props.onHighlight).toHaveBeenLastCalledWith({
+      mode: 'sentence',
+      start: 20,
+      end: 24,
+      color: '#f5d76e',
+    })
+    const starts = vi
+      .mocked(props.onHighlight!)
+      .mock.calls.map(([arg]) => arg)
+      .filter((arg) => arg !== null)
+      .map((arg) => arg.start)
+    expect(starts).not.toContain(25)
+  })
+
+  it('词级高亮跟引擎词边界,换行章节里不整句失效', async () => {
+    localStorage.setItem('deepread.tts.settings', JSON.stringify({ highlightMode: 'word' }))
+    const props = makeProps({ getSectionText: vi.fn(async () => PARAGRAPHS) })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+    for (let i = 0; i < 4; i += 1) await endUnit()
+    vi.mocked(props.onHighlight!).mockClear()
+
+    // 第 4 单元 startedAt=0(假时钟未推进);两个词各 0.1s。wall 0.15s × tempo 1
+    // = 第 2 个词(单元内 2..4)→ 章节坐标 22..24。词没变时引擎不上报,
+    // 所以先推进到第二个词再断言。
+    FakeAudioContext.latest!.currentTime = 0.15
+    await advance(60)
+    expect(props.onHighlight).toHaveBeenLastCalledWith({
+      mode: 'word',
+      start: 22,
+      end: 24,
+      color: '#f5d76e',
+    })
   })
 })
 
@@ -396,38 +534,38 @@ describe('取消与收起', () => {
     expect(props.onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('handle.stop():音频拆除、清空句子、父层收到 playing=false', async () => {
+  it('handle.stop():音频源拆除、清空句子、父层收到 playing=false', async () => {
     const props = makeProps()
     const ref: RefObject<TtsDrawerHandle | null> = { current: null }
     render(<TtsDrawer ref={ref} {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
+    const source = FakeSource.current
 
     act(() => {
       ref.current?.stop()
     })
-    expect(FakeAudio.current.pause).toHaveBeenCalled()
+    expect(source.stopped).toBe(true)
     expect(props.onPlayingChange).toHaveBeenLastCalledWith(false)
     expect(screen.getByText('待机')).toBeInTheDocument()
     expect(sentenceTexts()).toEqual([])
   })
 
-  it('卸载 cleanup:暂停音频并断开 src,不留发声实例', async () => {
+  it('卸载 cleanup:停止音频源,不留发声实例', async () => {
     const props = makeProps()
     const view = render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    const audio = FakeAudio.current
+    const source = FakeSource.current
 
     view.unmount()
-    expect(audio.pause).toHaveBeenCalled()
-    expect(audio.src).toBe('')
+    expect(source.stopped).toBe(true)
   })
 })
 
-describe('setRate stopped 守卫', () => {
+describe('语速(变速不重合成)', () => {
   it('待机时改语速不触发任何合成', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
@@ -435,24 +573,53 @@ describe('setRate stopped 守卫', () => {
     await chooseRate('1.5×')
     await advance(200)
 
-    expect(synthCalls()).toHaveLength(0)
+    expect(synthRequests()).toHaveLength(0)
   })
 
-  it('播放中改语速:软中断当前块,以新语速从当前位置续播', async () => {
+  it('播放中改语速:零重新合成 —— 片段按 1.0 合成,变速在播音侧完成', async () => {
     const props = makeProps()
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
+    const before = synthRequests().length
+
     await chooseRate('1.5×')
-    await advance(80)
+    await advance(200)
     await flush()
 
-    expect(synthCalls()).toHaveLength(2)
-    expect(synthCalls()[1]).toEqual([
-      'tts.edge.audio',
-      { text: SENTENCE_1, voice: 'zh-CN-XiaoxiaoNeural', lang: 'zh', rate: 1.5 },
-    ])
+    expect(synthRequests()).toHaveLength(before)
+    // 播放不中断:仍显示暂停键。
+    expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
+  })
+
+  it('播放中改语速:下一段按新 tempo 跟词,高亮跟上语速', async () => {
+    // 词级高亮:onHighlight 的区间就是引擎报回的词位置,直接可断言。
+    localStorage.setItem('deepread.tts.settings', JSON.stringify({ highlightMode: 'word' }))
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+
+    // 第一段 tempo=1:clock 走到 1s → 第 10 个词(每词 0.1s、2 字)。
+    FakeAudioContext.latest!.currentTime = 1
+    await advance(60)
+    expect(props.onHighlight).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: 'word', start: 20, end: 22 }),
+    )
+
+    // 切到 2×:当前段按旧 tempo 读完(设计如此),推队列进第二段。
+    await chooseRate('2×')
+    await endUnit()
+
+    // 第二段 startedAt=1;wall clock 再走 1s × tempo 2 = rate-1.0 时间轴 2s
+    // → 第 20 个词 → 单元内 charIndex 40 → 章节坐标 201+40。
+    FakeAudioContext.latest!.currentTime = 2
+    await advance(60)
+    expect(props.onHighlight).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: 'word', start: 241, end: 243 }),
+    )
   })
 })
 
@@ -461,14 +628,14 @@ describe('多角色听书', () => {
   const DIALOGUE = '青柳说:「谢谢你。」雅子回答:「不用谢。」两人沉默了。'
   const NAMES = ['青柳', '雅子']
 
-  function respondWithCharacters(command: string, index: number): unknown {
+  function respondWithCharacters(command: string, request?: Record<string, unknown>): unknown {
     if (command === 'ai.artifact.get') {
       return { payload: { characters: NAMES.map((name) => ({ name })) }, createdAt: null }
     }
-    return respond(command, index)
+    return respond(command, request)
   }
 
-  it('角色块用角色音色,叙述块用叙述者音色(缓存按音色分开存,互不覆盖)', async () => {
+  it('角色句用角色音色,叙述句用叙述者音色(缓存按音色分开存,互不覆盖)', async () => {
     localStorage.setItem(
       'deepread.tts.settings',
       JSON.stringify({
@@ -479,22 +646,20 @@ describe('多角色听书', () => {
       }),
     )
     invokeMock.mockImplementation(
-      (command) => Promise.resolve(respondWithCharacters(command as string, 0)) as never,
+      (command, request) =>
+        Promise.resolve(respondWithCharacters(command as string, request)) as never,
     )
     const props = makeProps({ getSectionText: vi.fn(async () => DIALOGUE) })
     render(<TtsDrawer {...props} />)
     await flush()
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
-    // 块是串行播放的:每一块播完才合成下一块,这里把整章推到底。
-    for (let i = 0; i < 6; i += 1) {
-      await act(async () => {
-        FakeAudio.current.end()
-      })
-      await flush()
-    }
+    // 预取窗口只有两句:往队列后面推,雅子的音色才会被合成。
+    await endUnit()
+    await endUnit()
+    await endUnit()
 
-    const voices = synthCalls().map((call) => (call as [string, { voice: string }])[1].voice)
+    const voices = synthRequests().map((request) => request.voice)
     expect(voices).toContain('zh-CN-YunxiNeural')
     expect(voices).toContain('zh-CN-XiaoyiNeural')
     // 叙述部分仍是叙述者音色,不会被角色音色顶掉。
@@ -508,14 +673,15 @@ describe('多角色听书', () => {
     fireEvent.click(screen.getByRole('button', { name: '播放' }))
     await flush()
 
-    const calls = synthCalls() as readonly [string, { voice: string }][]
-    expect(calls.length).toBeGreaterThan(0)
-    expect(calls.every(([, request]) => request.voice === 'zh-CN-XiaoxiaoNeural')).toBe(true)
+    const requests = synthRequests()
+    expect(requests.length).toBeGreaterThan(0)
+    expect(requests.every((request) => request.voice === 'zh-CN-XiaoxiaoNeural')).toBe(true)
   })
 
   it('角色页签只在真的认领到角色时出现', async () => {
     invokeMock.mockImplementation(
-      (command) => Promise.resolve(respondWithCharacters(command as string, 0)) as never,
+      (command, request) =>
+        Promise.resolve(respondWithCharacters(command as string, request)) as never,
     )
     const props = makeProps({ getSectionText: vi.fn(async () => DIALOGUE) })
     render(<TtsDrawer {...props} />)
@@ -527,9 +693,40 @@ describe('多角色听书', () => {
     const rolesTab = screen.getByRole('button', { name: /角色 2/ })
     expect(rolesTab).toBeInTheDocument()
     fireEvent.click(rolesTab)
-    // 角色行 = 名字 + 出现段数,音色选择器在里面。
+    // 角色行 = 名字 + 出现单元数,音色选择器在里面。
     expect(screen.getByText(/青柳/)).toBeInTheDocument()
     expect(screen.getByText(/雅子/)).toBeInTheDocument()
     expect(screen.getByLabelText('青柳 的音色')).toBeInTheDocument()
+  })
+})
+
+describe('云端引擎', () => {
+  it('走 tts.audio 取缓存文件并解码播放(无词表 → 句级洗色)', async () => {
+    localStorage.setItem('deepread.tts.settings', JSON.stringify({ engine: 'cloud' }))
+    const fetchMock = vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    vi.stubGlobal('fetch', fetchMock)
+    invokeMock.mockImplementation((command, request) => {
+      if (command === 'ai.config.list') {
+        return Promise.resolve({
+          providers: [{ id: 'cfg-1', name: '测试服务', ttsModel: 'tts-1' }],
+        }) as never
+      }
+      if (command === 'tts.audio') {
+        return Promise.resolve({ path: '/tmp/tts-cloud.mp3', cached: false }) as never
+      }
+      return Promise.resolve(respond(command as string, request)) as never
+    })
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+
+    const cloudCalls = invokeMock.mock.calls.filter(([command]) => command === 'tts.audio')
+    expect(cloudCalls.length).toBeGreaterThan(0)
+    // speed 恒为 1:变速在播音侧,缓存键因此与语速无关。
+    expect((cloudCalls[0]![1] as { speed: number }).speed).toBe(1)
+    expect(fetchMock).toHaveBeenCalled()
+    expect(FakeSource.current.started).toBe(true)
   })
 })

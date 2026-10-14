@@ -8,6 +8,8 @@
  */
 
 declare module 'foliate-js/view.js' {
+  import type { Overlayer } from 'foliate-js/overlayer.js'
+
   export interface FoliateTocItem {
     label?: string
     href?: string
@@ -80,7 +82,7 @@ declare module 'foliate-js/view.js' {
     scrollToAnchor?(anchor: unknown, select?: boolean): Promise<void>
     next(distance?: number): Promise<void>
     prev(distance?: number): Promise<void>
-    getContents(): { doc: Document; index: number; overlayer?: unknown }[]
+    getContents(): { doc: Document; index: number; overlayer?: Overlayer }[]
     destroy(): void
   }
 
@@ -128,6 +130,19 @@ declare module 'foliate-js/overlayer.js' {
     static highlight: (...args: unknown[]) => unknown
     static outline: (...args: unknown[]) => unknown
     static underline: (...args: unknown[]) => unknown
+    static strikethrough: (...args: unknown[]) => unknown
+    static squiggly: (...args: unknown[]) => unknown
+    /** Paints `range` under `key`, replacing whatever that key held: a word-level
+     *  update costs one SVG group, not one per word. */
+    add(
+      key: string,
+      range: Range,
+      draw: (...args: unknown[]) => unknown,
+      options?: { color?: string; width?: number; radius?: number },
+    ): void
+    remove(key: string): void
+    redraw(): void
+    hitTest(event: MouseEvent): [string | null, Range | null] | null
   }
 }
 

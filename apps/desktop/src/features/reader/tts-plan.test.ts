@@ -1,157 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import {
-  blockSeekRatio,
-  buildSpeakerPlan,
-  formatClock,
-  locateBlock,
-  nextRate,
-  sentenceIndexAt,
-  splitChapterBlocks,
-  totalChars,
-  voicesForLanguage,
-  withOffsets,
-} from './tts-plan'
+import { buildSpeechUnits } from '@deepread/reader-core'
+import { formatClock, nextRate, sentencesOf, voicesForLanguage } from './tts-plan'
 
-/** 造句子列表 + 与之匹配的原文('a' 连续、无间隙)。 */
-function sentencesOf(...lengths: readonly number[]): {
-  readonly text: string
-  readonly sentences: ReturnType<typeof withOffsets>
-} {
-  const sentences = withOffsets(lengths.map((n) => 'a'.repeat(n)))
-  return { text: sentences.map((s) => s.text).join(''), sentences }
-}
-
-describe('withOffsets', () => {
-  it('累加字符起点', () => {
-    const list = withOffsets(['abc', 'de', 'f'])
-    expect(list).toEqual([
-      { text: 'abc', start: 0 },
-      { text: 'de', start: 3 },
-      { text: 'f', start: 5 },
+describe('sentencesOf', () => {
+  it('单元 → 歌词页行,顺序与下标即队列顺序', () => {
+    const units = buildSpeechUnits('灯亮了。他走了。')
+    expect(sentencesOf(units)).toEqual([
+      { text: '灯亮了。', start: 0 },
+      { text: '他走了。', start: 4 },
     ])
   })
 
   it('空输入得到空列表', () => {
-    expect(withOffsets([])).toEqual([])
-  })
-})
-
-describe('splitChapterBlocks', () => {
-  it('按 max 攒块,块起点是首句起点', () => {
-    const { text, sentences } = sentencesOf(4, 4, 4)
-    const blocks = splitChapterBlocks(text, sentences, 8)
-    expect(blocks).toEqual([
-      { text: 'aaaaaaaa', start: 0 },
-      { text: 'aaaa', start: 8 },
-    ])
-  })
-
-  it('单句超过 max 时自己成一块,不被切碎', () => {
-    const { text, sentences } = sentencesOf(10, 2)
-    const blocks = splitChapterBlocks(text, sentences, 8)
-    expect(blocks).toEqual([
-      { text: 'a'.repeat(10), start: 0 },
-      { text: 'aa', start: 10 },
-    ])
-  })
-
-  it('块文本是原文切片 —— 句间空白留在块内,块内推进才不偏格', () => {
-    // 回归:块文本若只拼句子、丢掉句间的换行,块内 ratio*length 的换算
-    // 每过一个句界就偏一格,高亮越读越偏。
-    const text = '甲。\n乙。'
-    const sentences = [
-      { text: '甲。', start: 0 },
-      { text: '乙。', start: 3 },
-    ]
-    const blocks = splitChapterBlocks(text, sentences, 100)
-    expect(blocks).toEqual([{ text: '甲。\n乙。', start: 0 }])
-  })
-
-  it('空输入得到空列表', () => {
-    expect(splitChapterBlocks('', [])).toEqual([])
-  })
-})
-
-describe('locateBlock', () => {
-  const blocks = [
-    { text: 'aaaa', start: 0 },
-    { text: 'bbbb', start: 4 },
-    { text: 'cc', start: 8 },
-  ]
-
-  it('落在块内返回该块下标', () => {
-    expect(locateBlock(blocks, 0)).toBe(0)
-    expect(locateBlock(blocks, 3)).toBe(0)
-    expect(locateBlock(blocks, 4)).toBe(1)
-    expect(locateBlock(blocks, 9)).toBe(2)
-  })
-
-  it('恰好等于块尾(下一个块的首字)归下一块', () => {
-    expect(locateBlock(blocks, 4)).toBe(1)
-    expect(locateBlock(blocks, 8)).toBe(2)
-  })
-
-  it('越过章末返回 -1', () => {
-    expect(locateBlock(blocks, 10)).toBe(-1)
-  })
-
-  it('空块列表返回 -1', () => {
-    expect(locateBlock([], 0)).toBe(-1)
-  })
-
-  it('「块尾」可作下一块的入口(游标推进用)', () => {
-    // 播完块 0(0..3)后从 4 进块 1;播完块 2 后从 10 越界。
-    expect(locateBlock(blocks, blocks[0]!.start + blocks[0]!.text.length)).toBe(1)
-    expect(locateBlock(blocks, blocks[2]!.start + blocks[2]!.text.length)).toBe(-1)
-  })
-})
-
-describe('blockSeekRatio', () => {
-  const block = { text: 'abcdefgh', start: 100 }
-
-  it('起点等于块起始时不跳', () => {
-    expect(blockSeekRatio(block, 100)).toBe(0)
-  })
-
-  it('起点在块起始之前时按 0 处理', () => {
-    expect(blockSeekRatio(block, 50)).toBe(0)
-  })
-
-  it('句中续播换算成块内比例', () => {
-    expect(blockSeekRatio(block, 104)).toBe(0.5)
-    expect(blockSeekRatio(block, 102)).toBe(0.25)
-  })
-})
-
-describe('sentenceIndexAt', () => {
-  const sentences = withOffsets(['aa', 'bb', 'cc'])
-
-  it('落在首句时返回 0', () => {
-    expect(sentenceIndexAt(sentences, 0)).toBe(0)
-    expect(sentenceIndexAt(sentences, 1)).toBe(0)
-  })
-
-  it('落在后续句时返回对应下标', () => {
-    expect(sentenceIndexAt(sentences, 2)).toBe(1)
-    expect(sentenceIndexAt(sentences, 4)).toBe(2)
-  })
-
-  it('超出总长时停在最后一句', () => {
-    expect(sentenceIndexAt(sentences, 999)).toBe(2)
-  })
-
-  it('空列表返回 0', () => {
-    expect(sentenceIndexAt([], 0)).toBe(0)
-  })
-})
-
-describe('totalChars', () => {
-  it('累加全部句长', () => {
-    expect(totalChars(withOffsets(['abc', 'de']))).toBe(5)
-  })
-
-  it('空列表为 0', () => {
-    expect(totalChars([])).toBe(0)
+    expect(sentencesOf(buildSpeechUnits(''))).toEqual([])
   })
 })
 
@@ -208,61 +69,5 @@ describe('nextRate', () => {
   it('未收录的速率回落到第一档', () => {
     expect(nextRate(rates, 3)).toBe(0.75)
     expect(nextRate(rates, 0)).toBe(0.75)
-  })
-})
-
-describe('buildSpeakerPlan', () => {
-  /** 两角色对话:每段前后都有提到人名的叙述,归属才成立。 */
-  const CHAPTER = '青柳说:「谢谢你。」雅子回答:「不用谢。」两人沉默了。'
-
-  it('认领到的角色单独成块,叙述者归叙述者', () => {
-    const { blocks, roles } = buildSpeakerPlan(CHAPTER, ['青柳', '雅子'])
-    expect(roles.map((role) => role.name)).toEqual(['青柳', '雅子'])
-    // 三块:青柳的台词 / 雅子的台词 / 结尾叙述。
-    const speakers = blocks.map((block) => block.speaker)
-    expect(speakers).toContain('青柳')
-    expect(speakers).toContain('雅子')
-    expect(speakers.at(-1)).toBe('narrator')
-  })
-
-  it('块文本是原文切片且互不重叠 —— 偏移换算仍 1:1', () => {
-    const { blocks } = buildSpeakerPlan(CHAPTER, ['青柳', '雅子'])
-    let cursor = 0
-    for (const block of blocks) {
-      expect(block.start).toBeGreaterThanOrEqual(cursor)
-      expect(CHAPTER.slice(block.start, block.start + block.text.length)).toBe(block.text)
-      cursor = block.start + block.text.length
-    }
-    // 覆盖到章末:最后一块的尾巴就是原文的尾巴(允许尾部标点留在块内)。
-    expect(cursor).toBeGreaterThan(CHAPTER.length - 12)
-  })
-
-  it('没有角色名时整章都是叙述者,退化成普通分块', () => {
-    const { blocks, roles } = buildSpeakerPlan(CHAPTER, [])
-    expect(roles).toEqual([])
-    expect(blocks.every((block) => block.speaker === 'narrator')).toBe(true)
-    expect(blocks.length).toBeGreaterThan(0)
-  })
-
-  it('同一说话人的连续段合并成一块', () => {
-    // 两句台词都没有叙述提示语可认领 → 都归叙述者,自然合成一块。
-    const blocks = buildSpeakerPlan('「甲。」「乙。」', [], 1000).blocks
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0]?.text).toBe('「甲。」「乙。」')
-  })
-
-  it('换说话人即断块;max 收紧只增加块数,不会把两个人塞进一块', () => {
-    // 「小明说:」是叙述(narrator),台词归小明 —— 交替出现就交替成块。
-    const text = '小明说:「一二三四五。」小明说:「六七八九十。」'
-    expect(buildSpeakerPlan(text, ['小明'], 1000).blocks.map((b) => b.speaker)).toEqual([
-      'narrator',
-      '小明',
-      'narrator',
-      '小明',
-    ])
-    const tight = buildSpeakerPlan(text, ['小明'], 8).blocks
-    // 每块单一说话人是构造保证;收紧 max 只让块更短,不会把叙述和台词并进一块。
-    expect(tight.length).toBeGreaterThanOrEqual(4)
-    expect(tight.every((block) => block.text.length <= 8)).toBe(true)
   })
 })
