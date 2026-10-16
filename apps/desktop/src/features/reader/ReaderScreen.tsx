@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpen,
   BookmarkSimple,
   CaretLeft,
   CaretRight,
@@ -14,14 +13,12 @@ import {
   MagnifyingGlass,
   Minus,
   Moon,
-  Note,
   PencilSimple,
   Plus,
   SlidersHorizontal,
   Sparkle,
   Sun,
   TextAa,
-  Translate,
   Trash,
   X,
 } from '@phosphor-icons/react'
@@ -36,7 +33,7 @@ import {
   type DictionaryMeta,
   type ReadingFont,
 } from '@deepread/shared'
-import type { TocItem } from '@deepread/reader-core'
+import type { AnnotationStyle, TocItem } from '@deepread/reader-core'
 import { localDayKey } from '@deepread/shared'
 import { countChars } from '@deepread/reader-core'
 import {
@@ -102,7 +99,10 @@ import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
 import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
+import { SelectionToolbar } from './SelectionToolbar'
+import { anchorFromRect, placeCompanionCard, windowFrame } from './selection-place'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
+import { primeTtsAudio } from './tts/audio'
 import type { OpenedBook } from '../../lib/book-import'
 
 const CHROME_TIMEOUT_MS = 2500
@@ -111,6 +111,10 @@ const MAX_SHOWN_SEARCH_RESULTS = 50
 /** 与 `reader.note.update` 的上限对齐(shared 协议里那条 zod)。 */
 const NOTE_MAX_CHARS = 4000
 const EXCERPT_MAX_CHARS = 500
+/** 翻译卡的估计高度:算避让位置用(卡片 max-height 420,流式中会变)。 */
+const TRANSLATE_CARD_HEIGHT = 300
+/** 词典卡的估计高度(max-height 300),同用于避让工具条。 */
+const LOOKUP_CARD_HEIGHT = 280
 
 interface ReaderScreenProps {
   readonly book: OpenedBook
@@ -128,6 +132,7 @@ interface NoteDraft {
   readonly cfi: string
   readonly excerpt: string
   readonly color: string
+  readonly style: AnnotationStyle
   readonly note: string
 }
 
@@ -161,6 +166,9 @@ function toDomainAnnotation(record: AnnotationRecord, bookId: string) {
     ...record,
     // wire 的 note 是 string | null(生成类型);领域模型用 undefined 表示「没有」。
     note: record.note ?? undefined,
+    // style 在 wire 上是裸 String(Rust 只校验形状),这里收口成三态联合 ——
+    // 预 v8 的行和手写请求带来的怪值按背景高亮走,渲染层同一约定。
+    style: toAnnotationStyle(record.style),
     bookId,
     createdAt: now,
     updatedAt: now,
@@ -171,6 +179,11 @@ function toDomainAnnotation(record: AnnotationRecord, bookId: string) {
     },
     selectedText: record.excerpt ?? '',
   }
+}
+
+/** wire 的 style 字符串 → 领域三态。非法值一律 highlight(与 Rust / zod 同约定)。 */
+function toAnnotationStyle(style: string | undefined): AnnotationStyle {
+  return style === 'underline' || style === 'squiggly' ? style : 'highlight'
 }
 
 const ttsCoverCache = new Map<string, string>()
@@ -185,8 +198,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const lastChromeActivityRef = useRef(0)
   /** chrome 显隐函数的 ref:内核回调(constant closure)经它调用最新版本。 */
   const showChromeRef = useRef<() => void>(() => {})
-  const hideChromeRef = useRef<() => void>(() => {})
-  const chromeVisibleRef = useRef(true)
   const searchInputRef = useRef<HTMLInputElement>(null)
   /** 浏览器端导入阅读字体的文件选择器(桌面端走 openFileDialog)。 */
   const fontInputRef = useRef<HTMLInputElement>(null)
@@ -196,8 +207,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const openPanelRef = useRef<'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null>(
     null,
   )
-  /** 关闭面板那一刻的时间戳:同一次点击不会再触发翻页/切换 chrome。 */
-  const panelClosedAtRef = useRef(0)
   const storedTypography = loadTypography()
   const settingsRef = useRef({
     viewMode: storedTypography.viewMode ?? ('single' as ViewMode),
@@ -209,7 +218,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     pageMargin: storedTypography.pageMargin ?? 72,
     paragraphMargin: storedTypography.paragraphMargin,
   })
-  const turnPageRef = useRef<(dir: 'next' | 'prev') => void>(() => {})
   /** 进行中的 View Transition 计数:连翻两页时根节点的动画属性不能提前清掉。 */
   const vtDepthRef = useRef(0)
   /** True while the progress slider is being dragged or key-stepped. */
@@ -229,6 +237,18 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }>({ cfi: null, fraction: 0, location: undefined })
   const [selection, setSelection] = useState<EngineSelection | null>(null)
   const [activeAnnotation, setActiveAnnotation] = useState<string | null>(null)
+  /** 编辑模式划词工具的锚点:划线的实测选区框。点中的是已有划线时没有
+   *  伴随选区可问,不测一个工具条就会落在 (0,0)(左上角)。 */
+  const [activeAnnotationRect, setActiveAnnotationRect] = useState<{
+    readonly top: number
+    readonly left: number
+    readonly height: number
+  } | null>(null)
+  /** 读者上次用的墨水:新选区画得可预期,不用每次重挑。 */
+  const [lastInk, setLastInk] = useState<{ color: string; style: AnnotationStyle }>({
+    color: HIGHLIGHT_COLOR,
+    style: 'highlight',
+  })
   const [annotations, setAnnotations] = useState<readonly AnnotationRecord[]>([])
   const [bookmarks, setBookmarks] = useState<readonly BookmarkRecord[]>([])
   const [viewMode, setViewMode] = useState<ViewMode>(() => storedTypography.viewMode ?? 'single')
@@ -273,6 +293,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [ttsMinimized, setTtsMinimized] = useState(false)
   const [ttsActive, setTtsActive] = useState(false)
   const ttsDrawerRef = useRef<TtsDrawerHandle>(null)
+  /** 划词工具的「朗读此处」:选区文本 + 起点偏移等在这,等 TTS 抽屉挂载
+   *  后起播。「开面板」和「起播」必须分两步 —— ref 在抽屉挂载前是 null。
+   *  偏移来自内核(与章节文本同一坐标系),编辑模式没有选区时为 null。 */
+  const [pendingSpeak, setPendingSpeak] = useState<{
+    readonly text: string
+    readonly start: number | null
+  } | null>(null)
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
   )
@@ -451,12 +478,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       },
       onSelection: (sel) => {
         // 书页内容在 iframe 里,父层收不到 pointerdown;任何书内交互都兼作
-        // "点空白"——面板开着时先收起面板(内核翻页 zone 有 250ms 延迟,
-        // panelClosedAtRef 保证同一次点击不再被当成翻页)。
-        if (openPanelRef.current !== null) {
-          panelClosedAtRef.current = Date.now()
-          setOpenPanel(null)
-        }
+        // "点空白"——面板开着、工具条开着,这一下都先把它们收起。
+        if (openPanelRef.current !== null) setOpenPanel(null)
         setActiveAnnotation(null)
         setSelection(sel)
         // 点按/翻页(空选区)不打扰 chrome 的显隐节奏;真正划选文本才唤起。
@@ -465,23 +488,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       onShowAnnotation: (cfi) => {
         setSelection(null)
         setActiveAnnotation(cfi)
+        // 点中的是已有划线:没有伴随选区,锚点由内核把 CFI 解回 Range 现测。
+        setActiveAnnotationRect(adapterRef.current?.rectOfAnnotation(cfi) ?? null)
         showChromeRef.current()
-      },
-      onTapZone: (zone) => {
-        if (openPanelRef.current !== null) {
-          panelClosedAtRef.current = Date.now()
-          setOpenPanel(null)
-          return
-        }
-        if (Date.now() - panelClosedAtRef.current < 600) return
-        if (zone === 'center') {
-          // 中间点按是唯一的手动开关:隐藏时唤起并按常规节奏自动收起。
-          if (chromeVisibleRef.current) hideChromeRef.current()
-          else showChromeRef.current()
-          return
-        }
-        // 点按翻页与键盘/翻页钮同路:同样播放翻页动画,且不唤起工具栏。
-        turnPageRef.current(zone === 'left' ? 'prev' : 'next')
       },
     }
   })
@@ -553,7 +562,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       onRelocate: (location) => callbacksRef.current.onRelocate?.(location),
       onSelection: (sel) => callbacksRef.current.onSelection?.(sel),
       onShowAnnotation: (cfi) => callbacksRef.current.onShowAnnotation?.(cfi),
-      onTapZone: (zone) => callbacksRef.current.onTapZone?.(zone),
       onKeyDown: (event) => handleReaderKeyRef.current(event),
     })
     adapterRef.current = adapter
@@ -645,6 +653,18 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       void adapter.destroy()
     }
   }, [book])
+
+  // 「朗读此处」的第二拍:抽屉挂载后(ref 就位)把等的文本交给它。
+  // 面板开着 + 有待播文本才动手;文本在调用瞬间就被清掉,重复渲染不会
+  // 重放同一段( StrictMode 的双调 effect 也只会播一次)。
+  useEffect(() => {
+    if (pendingSpeak === null || openPanel !== 'tts') return
+    const drawer = ttsDrawerRef.current
+    if (drawer === null) return
+    const { text, start } = pendingSpeak
+    setPendingSpeak(null)
+    drawer.speakFromText(text, start)
+  }, [pendingSpeak, openPanel])
 
   // One bounded snippet of the current section, refreshed when the drawer
   // opens — enough context for explanations without shipping the whole book.
@@ -785,18 +805,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     setChromeVisible(true)
   }, [])
 
-  const hideChrome = useCallback((): void => {
-    setChromeVisible(false)
-  }, [])
-
   useEffect(() => {
     showChromeRef.current = showChrome
-    hideChromeRef.current = hideChrome
-    chromeVisibleRef.current = chromeVisible
-  }, [showChrome, hideChrome, chromeVisible])
+  }, [showChrome])
 
   // chrome 自动隐藏:可见且无任何浮层(面板/选区/批注)时收起;指针活动
-  // 会刷新计时。翻页、点按翻页区都不在此列——沉浸阅读不被翻页打断。
+  // 会刷新计时。翻页不在此列——沉浸阅读不被翻页打断。
   useEffect(() => {
     // 写笔记时 chrome 不能收:顶栏一走,编辑器的锚点参照物也没了。
     if (
@@ -873,10 +887,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     },
     [pageTurnStyle, viewMode],
   )
-
-  useEffect(() => {
-    turnPageRef.current = (dir) => void turnPage(dir)
-  }, [turnPage])
 
   useEffect(() => {
     const onPointerMove = (): void => showChrome()
@@ -1041,22 +1051,48 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   // useCallback:色板那五个按钮在每次渲染都要复用同一个句柄,否则 React
   // Compiler 会把「渲染期间调用了含 Date 的函数」当成不确定性来源。
   const addHighlight = useCallback(
-    async (color: string): Promise<void> => {
+    async (color: string, style: AnnotationStyle): Promise<void> => {
       const adapter = adapterRef.current
       if (!adapter || selection === null) return
       const record: AnnotationRecord = {
         id: crypto.randomUUID(),
         cfi: selection.cfi,
         color,
+        style,
         excerpt: selection.text.slice(0, EXCERPT_MAX_CHARS),
         updatedAt: new Date().toISOString(),
       }
       await adapter.createAnnotation(toDomainAnnotation(record, book.bookId))
       setAnnotations((current) => [...current, record])
-      setSelection(null)
+      setLastInk({ color, style })
+      // 工具栏不关:接着点色板就是改这条划线(编辑模式),而不是叠一条新的。
+      // 点空白处(onSelection(null))才收工具栏。
+      setActiveAnnotation(record.cfi)
+      // 刚落笔的划线沿用选区的框:紧接着的编辑动作(改墨/朗读)都以它为锚。
+      setActiveAnnotationRect(selection.rect)
       scheduleSave()
     },
     [book.bookId, scheduleSave, selection],
+  )
+
+  /** 重绘已有划线:换墨不换锚点,划线在原地变色变形。 */
+  const restyleAnnotation = useCallback(
+    async (record: AnnotationRecord, color: string, style: AnnotationStyle): Promise<void> => {
+      await adapterRef.current?.removeAnnotation(record.id)
+      await adapterRef.current?.createAnnotation(
+        toDomainAnnotation({ ...record, color, style }, book.bookId),
+      )
+      setAnnotations((current) =>
+        current.map((item) =>
+          item.id === record.id
+            ? { ...item, color, style, updatedAt: new Date().toISOString() }
+            : item,
+        ),
+      )
+      setLastInk({ color, style })
+      scheduleSave()
+    },
+    [book.bookId, scheduleSave],
   )
 
   /**
@@ -1073,8 +1109,15 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     }
     const source = current.text
     const text = source.slice(0, TRANSLATE_MAX_CHARS)
-    const rect = { top: current.rect.top, left: current.rect.left }
-    setSelection(null)
+    // 卡片落点避开还开着的划词工具:工具在选区下方,卡片去工具底下(见
+    // selection-place 的三级退让),不再不管不顾地压在选区上。
+    const frame =
+      document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
+      windowFrame(window.innerWidth, window.innerHeight)
+    const rect = {
+      top: placeCompanionCard(frame, anchorFromRect(current.rect), TRANSLATE_CARD_HEIGHT).top,
+      left: current.rect.left,
+    }
     setTranslation({
       rect,
       lang: null,
@@ -1156,6 +1199,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       id: crypto.randomUUID(),
       cfi: draft.cfi,
       color: draft.color,
+      style: draft.style,
       excerpt: draft.excerpt.slice(0, EXCERPT_MAX_CHARS),
       updatedAt: new Date().toISOString(),
       ...(trimmed === '' ? {} : { note: trimmed }),
@@ -1173,6 +1217,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     readonly cfi: string
     readonly excerpt?: string | null
     readonly color: string
+    readonly style?: AnnotationStyle
     readonly note?: string | null
   }): void =>
     setNoteDraft({
@@ -1180,6 +1225,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       cfi: source.cfi,
       excerpt: source.excerpt ?? '',
       color: source.color,
+      style: source.style ?? 'highlight',
       note: source.note ?? '',
     })
 
@@ -1199,17 +1245,118 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     scheduleSave()
   }
 
-  const removeHighlight = async (): Promise<void> => {
-    const record = annotations.find((a) => a.cfi === activeAnnotation)
-    if (record === undefined) return
-    await removeAnnotation(record.id)
+  /**
+   * 选区笔记的落点:还没有划线,所以先按当前墨水下笔(划线是笔记的载体,
+   * 见 ColorReader 同款约定),再写 note。传 null = 只要划线,不写笔记。
+   */
+  const commitSelectionNote = async (note: string | null): Promise<void> => {
+    if (selection === null) return
+    const adapter = adapterRef.current
+    if (!adapter) return
+    const record: AnnotationRecord = {
+      id: crypto.randomUUID(),
+      cfi: selection.cfi,
+      color: lastInk.color,
+      style: lastInk.style,
+      excerpt: selection.text.slice(0, EXCERPT_MAX_CHARS),
+      updatedAt: new Date().toISOString(),
+      ...(note === null ? {} : { note }),
+    }
+    await adapter.createAnnotation(toDomainAnnotation(record, book.bookId))
+    setAnnotations((current) => [...current, record])
+    // 同 addHighlight:笔记落笔后工具栏留着,转入这条划线的编辑模式。
+    setActiveAnnotation(record.cfi)
+    setActiveAnnotationRect(selection.rect)
+    scheduleSave()
+  }
+
+  /** 改已有划线的 note(null = 清回纯划线)。与 commitNote 的既有分支同一约定。 */
+  const updateAnnotationNote = async (id: string, note: string | null): Promise<void> => {
+    setAnnotations((current) =>
+      current.map((record) => {
+        if (record.id !== id) return record
+        const stripped = { ...record }
+        // 空串 = 清回纯划线:必须真的删掉这个键,否则旧 note 会被摊平留下。
+        delete stripped.note
+        return {
+          ...stripped,
+          updatedAt: new Date().toISOString(),
+          ...(note === null ? {} : { note }),
+        }
+      }),
+    )
+    scheduleSave()
+  }
+
+  const removeAnnotationNote = async (id: string): Promise<void> => {
+    await updateAnnotationNote(id, null)
   }
 
   const copySelection = async (): Promise<void> => {
     if (selection === null) return
     await navigator.clipboard.writeText(selection.text)
-    setSelection(null)
+    // 工具栏不关:复制之后常常还想翻译/划线,收起等于逼用户重新划一次。
   }
+
+  /**
+   * 朗读选中的这一段:走 TTS 管线(Edge 合成),从划线所在的那一句起连播。
+   *
+   * 不再用系统 speechSynthesis:音质与速度都不受读者控制,而 TTS 抽屉本就挂在阅读器里
+   * (音色、语速、进度、跟词高亮都是现成的)——为一句话再搭一套系统合成才是重复建轮子。
+   *
+   * 编辑模式(点中的是已有划线、没有伴随选区)也能读:文本取划线的 excerpt,
+   * 起点仍由 locateSpeechUnit 在正文里现找 —— 划线在屏幕上,excerpt 就一定能
+   * 落回当前章的某一句。
+   *
+   * 起播机制:先开 TTS 面板(抽屉随即安装),选区文本存进 pendingSpeak;
+   * drawer 挂载后 effect 经 ref 调 speakFromText,起始句由它定位。
+   */
+  const speakSelection = useCallback((): void => {
+    // 选区的文本与偏移优先;编辑模式回退到划线自己的 excerpt(没有偏移,
+    // 起点由 TtsDrawer 里的文本匹配现找)。
+    const source =
+      selection?.text ?? annotations.find((a) => a.cfi === activeAnnotation)?.excerpt ?? ''
+    const text = source.trim()
+    if (text === '') return
+    // 音频解锁必须在这次点击里:WebKit 只认手势内创建/恢复的 AudioContext,
+    // 而首个 clip 的合成在两次 await 之后(章节文本 + 供应商往返),手势早已
+    // 过期。不在这里解锁,用户看到的就是「点了朗读没反应,再点播放才响」。
+    primeTtsAudio()
+    // 不关选区:播放控制在 TTS 面板里,选区留给声音定位。
+    setTtsMinimized(false)
+    setOpenPanel('tts')
+    setPendingSpeak({ text, start: selection?.start ?? null })
+  }, [selection, annotations, activeAnnotation])
+
+  /** 问 AI:带上选区打开抽屉。scope 由读者在抽屉里切,这里只负责送上下文。 */
+  const askAboutSelection = useCallback((): void => {
+    if (selection === null) return
+    setOpenPanel('ai')
+    // 不关 selection:AiDrawer 的 selection 作用域要读它。
+  }, [selection])
+
+  /** 在本书中搜索选中文本:复用侧栏搜索那套结果,填进输入框直接搜。 */
+  const searchSelectionInBook = useCallback((): void => {
+    if (selection === null) return
+    const query = selection.text.trim().slice(0, 60)
+    if (query === '') return
+    if (searchInputRef.current !== null) searchInputRef.current.value = query
+    setOpenPanel('toc')
+    setSearchState('searching')
+    void adapterRef.current
+      ?.search(query)
+      .then((results) => {
+        setSearchTruncated(results.length > MAX_SHOWN_SEARCH_RESULTS)
+        setSearchResults(
+          results
+            .slice(0, MAX_SHOWN_SEARCH_RESULTS)
+            .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
+        )
+        setSearchState('done')
+      })
+      .catch(() => setSearchState('done'))
+    // 工具栏不关:搜索结果在侧栏,选区的墨水/笔记还能接着用。
+  }, [selection])
 
   const isGzip = (data: Uint8Array): boolean => data[0] === 0x1f && data[1] === 0x8b
 
@@ -1437,8 +1584,14 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       .trim()
       .replace(/^[^\w\u4e00-\u9fff]+|[^\w\u4e00-\u9fff]+$/g, '')
       .slice(0, 40)
-    const rect = { top: selection.rect.top, left: selection.rect.left }
-    setSelection(null)
+    // 词典卡与翻译卡同套避让(工具条现在不关),选区也留给后续动作。
+    const frame =
+      document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
+      windowFrame(window.innerWidth, window.innerHeight)
+    const rect = {
+      top: placeCompanionCard(frame, anchorFromRect(selection.rect), LOOKUP_CARD_HEIGHT).top,
+      left: selection.rect.left,
+    }
     if (!word) return
     setLookupLoading(true)
     setLookup({ word, rect, results: [] })
@@ -1580,7 +1733,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
         onPointerDown={() => showChrome()}
       >
-        <div ref={hostRef} className="reader-host" />
+        {/* data-reading-content:划词工具按这个矩形夹取位置 —— 面板属于 chrome,
+            必须留在阅读区里,而不是挂到窗口边(窗口比阅读卡片宽,圆角处会露头)。 */}
+        <div ref={hostRef} className="reader-host" data-reading-content />
 
         {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
         <button
@@ -2371,50 +2526,44 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           />
         )}
 
-        {selection !== null && (
-          <div
-            className="selection-toolbar"
-            style={{
-              top: Math.max(12, selection.rect.top - 52),
-              left: Math.max(12, Math.min(selection.rect.left, window.innerWidth - 260)),
+        {(selection !== null || activeRecord !== undefined) && (
+          <SelectionToolbar
+            rect={selection?.rect ?? activeAnnotationRect ?? { top: 0, left: 0, height: 0 }}
+            text={selection?.text ?? activeRecord?.excerpt ?? ''}
+            annotation={activeRecord ?? null}
+            defaultColor={lastInk.color}
+            defaultStyle={lastInk.style}
+            onCopy={() => void copySelection()}
+            onLookup={() => void runLookup()}
+            onTranslate={() => void runTranslate()}
+            onAsk={askAboutSelection}
+            onSpeak={speakSelection}
+            onSearch={searchSelectionInBook}
+            onHighlight={(color, style) => void addHighlight(color, style)}
+            onRestyle={(color, style) => {
+              if (activeRecord !== undefined) void restyleAnnotation(activeRecord, color, style)
             }}
-          >
-            <button type="button" onClick={() => void copySelection()} title="复制">
-              <Copy size={16} weight="regular" aria-hidden />
-            </button>
-            {HIGHLIGHT_PALETTE.map((option) => (
-              <button
-                key={option.color}
-                type="button"
-                className="highlight-swatch"
-                style={{ background: option.color }}
-                onClick={() => void addHighlight(option.color)}
-                title={`${option.label}划线`}
-                aria-label={`${option.label}划线`}
-              />
-            ))}
-            <button
-              type="button"
-              onClick={() =>
-                startNote({
-                  cfi: selection.cfi,
-                  excerpt: selection.text.slice(0, EXCERPT_MAX_CHARS),
-                  color: HIGHLIGHT_COLOR,
-                })
+            onNote={(note) => {
+              if (selection !== null) {
+                // 选区的笔记:还没有划线,先按当前墨水下笔,再写/清 note。
+                void commitSelectionNote(note)
+                return
               }
-              title="写笔记"
-            >
-              <Note size={16} weight="regular" aria-hidden />
-            </button>
-            <button type="button" onClick={() => void runTranslate()} title="翻译">
-              <Translate size={16} weight="regular" aria-hidden />
-            </button>
-            {selection.text.trim().length <= 40 && (
-              <button type="button" onClick={() => void runLookup()} title="查词典">
-                <BookOpen size={16} weight="regular" aria-hidden />
-              </button>
-            )}
-          </div>
+              if (activeRecord === undefined) return
+              if (note === null) {
+                void removeAnnotationNote(activeRecord.id)
+                return
+              }
+              void updateAnnotationNote(activeRecord.id, note)
+            }}
+            onDelete={() => {
+              if (activeRecord !== undefined) void removeAnnotation(activeRecord.id)
+            }}
+            onClose={() => {
+              setSelection(null)
+              setActiveAnnotation(null)
+            }}
+          />
         )}
 
         {noteDraft !== null && noteDraft.id === undefined && (
@@ -2433,10 +2582,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             className="lookup-card translate-card"
             aria-label="翻译"
             style={{
-              top: Math.min(
-                Math.max(64, (translation.rect.top ?? 100) - 12),
-                window.innerHeight - 300,
-              ),
+              // rect.top 已是避开划词工具算好的落点(见 runTranslate),这里只做
+              // 视口兜底;卡片 max-height 由 CSS 管,流式变高时自己滚。
+              top: Math.min(Math.max(64, translation.rect.top ?? 100), window.innerHeight - 300),
               left: Math.max(12, Math.min(translation.rect.left ?? 100, window.innerWidth - 340)),
             }}
           >
@@ -2506,8 +2654,9 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           <div
             className="lookup-card"
             style={{
+              // 同翻译卡:rect.top 已是避开工具条算好的落点,这里只做视口兑底。
               top: Math.min(
-                Math.max(64, (lookup?.rect.top ?? selection?.rect.top ?? 100) - 12),
+                Math.max(64, lookup?.rect.top ?? selection?.rect.top ?? 100),
                 window.innerHeight - 260,
               ),
               left: Math.max(12, Math.min(lookup?.rect.left ?? 100, window.innerWidth - 320)),
@@ -2558,34 +2707,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             aria-live="polite"
           >
             {notice.text}
-          </div>
-        )}
-
-        {activeAnnotation !== null && (
-          <div className="selection-toolbar annotation-toolbar">
-            {activeRecord !== undefined && (
-              <button
-                type="button"
-                onClick={() =>
-                  startNote({
-                    id: activeRecord.id,
-                    cfi: activeRecord.cfi,
-                    excerpt: activeRecord.excerpt,
-                    color: activeRecord.color,
-                    note: activeRecord.note,
-                  })
-                }
-                title="写笔记"
-              >
-                <Note size={16} weight="regular" aria-hidden />
-              </button>
-            )}
-            <button type="button" onClick={() => void removeHighlight()} title="删除划线">
-              <Trash size={16} weight="regular" aria-hidden />
-            </button>
-            <button type="button" onClick={() => setActiveAnnotation(null)} title="关闭">
-              <X size={16} weight="regular" aria-hidden />
-            </button>
           </div>
         )}
       </div>

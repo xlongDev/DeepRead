@@ -20,6 +20,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps, RefObject } from 'react'
 import { invokeCommand } from '../../lib/ipc'
+import { resetSharedAudioForTests } from './tts/audio'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 
 type TtsDrawerProps = ComponentProps<typeof TtsDrawer>
@@ -61,6 +62,9 @@ class FakeSource {
   started = false
   stopped = false
   onended: (() => void) | null = null
+  /** 起播时宿主上下文是否挂起 —— WebKit 的静默失败:start() 照常调用,
+   *  喇叭没声,还没有任何报错。 */
+  host: FakeAudioContext | null = null
 
   constructor() {
     FakeSource.instances.push(this)
@@ -70,6 +74,9 @@ class FakeSource {
   readonly disconnect = (): void => {}
   readonly start = (): void => {
     this.started = true
+    if (this.host !== null && this.host.state !== 'running') {
+      this.host.startedWhileSuspended += 1
+    }
   }
   readonly stop = (): void => {
     this.stopped = true
@@ -93,13 +100,32 @@ class FakeSource {
 /** 可手工驱动的 AudioContext:`currentTime` 由用例推进,rAF 由排空器驱动。 */
 class FakeAudioContext {
   static latest: FakeAudioContext | null = null
+  /** WebKit 模式:手势之外构造 = 挂起,手势之外 resume 无效(静默)。
+   *  默认关 —— 只有显式建模 WebKit 的用例打开。 */
+  static strictGestures = false
+  static gestureDepth = 0
+  /** 把一段同步代码包进「用户手势」里(WebKit 的 UserGestureIndicator)。 */
+  static withGesture<T>(fn: () => T): T {
+    FakeAudioContext.gestureDepth += 1
+    try {
+      return fn()
+    } finally {
+      FakeAudioContext.gestureDepth -= 1
+    }
+  }
 
   state: 'running' | 'suspended' = 'running'
   currentTime = 0
   readonly destination = {}
+  /** 在挂起的上下文上起播的源数 —— 恒为 0 才算真有声。 */
+  startedWhileSuspended = 0
 
   constructor() {
     FakeAudioContext.latest = this
+    this.state =
+      FakeAudioContext.strictGestures && FakeAudioContext.gestureDepth === 0
+        ? 'suspended'
+        : 'running'
   }
 
   createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer {
@@ -113,7 +139,9 @@ class FakeAudioContext {
   }
 
   createBufferSource(): AudioBufferSourceNode {
-    return new FakeSource() as unknown as AudioBufferSourceNode
+    const source = new FakeSource()
+    source.host = this
+    return source as unknown as AudioBufferSourceNode
   }
 
   decodeAudioData(): Promise<AudioBuffer> {
@@ -121,7 +149,9 @@ class FakeAudioContext {
   }
 
   resume(): Promise<void> {
-    this.state = 'running'
+    if (!FakeAudioContext.strictGestures || FakeAudioContext.gestureDepth > 0) {
+      this.state = 'running'
+    }
     return Promise.resolve()
   }
 
@@ -233,6 +263,11 @@ beforeEach(() => {
   vi.useFakeTimers()
   FakeSource.instances.length = 0
   FakeAudioContext.latest = null
+  FakeAudioContext.strictGestures = false
+  FakeAudioContext.gestureDepth = 0
+  // 共享音频上下文是模块级状态:每个用例都从「没有上下文」开始,否则上一个
+  // 用例的(可能已挂起的)上下文会渗进来。
+  resetSharedAudioForTests()
   rafQueue.clear()
   rafId = 0
   vi.stubGlobal('AudioContext', FakeAudioContext)
@@ -289,6 +324,25 @@ describe('待机与播放', () => {
       end: SENTENCE_1.length,
       color: '#f5d76e',
     })
+  })
+
+  it('播放钮必须在手势内解锁音频:WebKit 模式下首源起播时上下文是 running', async () => {
+    // WebKit 只认手势内创建/恢复的 AudioContext。首次播放时上下文是在
+    // 合成 IPC 返回之后才创建的 —— 那时点击的手势早已过期,不在这点击里
+    // 先解锁,「界面说在播、喇叭没声」就复现(读者只能暂停再继续才听得见)。
+    FakeAudioContext.strictGestures = true
+    const props = makeProps()
+    render(<TtsDrawer {...props} />)
+    await flush()
+    FakeAudioContext.withGesture(() => {
+      fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    })
+    await flush()
+
+    // 「真有声」= 源真的排上了,且起播时上下文在跑。
+    expect(FakeSource.instances.filter((source) => source.started).length).toBeGreaterThan(0)
+    expect(FakeAudioContext.latest!.state).toBe('running')
+    expect(FakeAudioContext.latest!.startedWhileSuspended).toBe(0)
   })
 
   it('预取下一单元:起播即合成 AHEAD 范围内的后续句', async () => {
@@ -509,6 +563,78 @@ describe('多段章节(换行不污染洗色)', () => {
       end: 24,
       color: '#f5d76e',
     })
+  })
+})
+
+/** 划词工具的「朗读此处」:handle.speakFromText。两次用户回归都出在这条
+ *  路径上(点了没反应 / 从章首念),它是 TtsDrawer 对外的第二个入口。 */
+describe('speakFromText(划词工具入口)', () => {
+  it('从包含该文本的那一句起播,不等用户按播放', async () => {
+    const props = makeProps()
+    const ref: RefObject<TtsDrawerHandle | null> = { current: null }
+    render(<TtsDrawer ref={ref} {...props} />)
+    await flush()
+
+    act(() => {
+      ref.current?.speakFromText(SENTENCE_2, null)
+    })
+    await flush()
+
+    // 起播即合成第二句:第一句连预取都不该发生(origin 就是第二句)。
+    expect(synthTexts()).toContain(SENTENCE_2)
+    expect(synthTexts()).not.toContain(SENTENCE_1)
+    expect(currentSentence()).toBe(SENTENCE_2)
+    expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
+  })
+
+  it('选区盖住半句:从包含选区开头的那一句起播', async () => {
+    const props = makeProps()
+    const ref: RefObject<TtsDrawerHandle | null> = { current: null }
+    render(<TtsDrawer ref={ref} {...props} />)
+    await flush()
+
+    // 第二句中间的一小节(前 8 字落在第二句内)。
+    const middle = SENTENCE_2.slice(100, 140)
+    act(() => {
+      ref.current?.speakFromText(middle, null)
+    })
+    await flush()
+
+    expect(currentSentence()).toBe(SENTENCE_2)
+  })
+
+  it('有字符偏移时按偏移走:文本匹配会错定的重复句也不跑偏', async () => {
+    // 章内 SENTENCE_2 出现两次,选区划的是第二次 —— 文本匹配(整句覆盖)
+    // 只能找到第一次,内核报来的偏移是 exact 的。
+    const repeated = SENTENCE_2 + SENTENCE_1 + SENTENCE_2
+    const props = makeProps({ getSectionText: vi.fn(async () => repeated) })
+    const ref: RefObject<TtsDrawerHandle | null> = { current: null }
+    render(<TtsDrawer ref={ref} {...props} />)
+    await flush()
+
+    act(() => {
+      ref.current?.speakFromText(SENTENCE_2, SENTENCE_2.length + SENTENCE_1.length)
+    })
+    await flush()
+
+    expect(currentSentence()).toBe(SENTENCE_2)
+    // 从第一次出现起播才会把中间那句也合成进去。
+    expect(synthTexts()).not.toContain(SENTENCE_1)
+  })
+
+  it('匹配不到(选区跨章/文本被改)时从章首起播,而不是不出声', async () => {
+    const props = makeProps()
+    const ref: RefObject<TtsDrawerHandle | null> = { current: null }
+    render(<TtsDrawer ref={ref} {...props} />)
+    await flush()
+
+    act(() => {
+      ref.current?.speakFromText('完全不在本章里的一句话', null)
+    })
+    await flush()
+
+    expect(currentSentence()).toBe(SENTENCE_1)
+    expect(synthTexts()).toContain(SENTENCE_1)
   })
 })
 

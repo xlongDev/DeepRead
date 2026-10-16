@@ -21,12 +21,7 @@ import type {
   SearchResult,
   TocItem,
 } from '@deepread/reader-core'
-import type {
-  EngineCallbacks,
-  EngineLocation,
-  EngineSelection,
-  TapZone,
-} from '@deepread/reader-adapter'
+import type { EngineCallbacks, EngineLocation, EngineSelection } from '@deepread/reader-adapter'
 
 export interface FakeFoliateOptions {
   readonly metadata?: Partial<BookMetadata>
@@ -84,6 +79,13 @@ export class FakeFoliateAdapter {
   readonly setFontFaces = vi.fn<(css: string) => Promise<void>>()
   readonly createAnnotation = vi.fn<(annotation: Annotation) => Promise<void>>()
   readonly removeAnnotation = vi.fn<(annotationId: string) => Promise<void>>()
+  /** 编辑模式工具条的锚点:CFI → 实测选区框。解不出回 null(真内核同约)。 */
+  readonly rectOfAnnotation =
+    vi.fn<(cfi: string) => { top: number; left: number; height: number } | null>()
+  /** TTS 跟词高亮:真内核把区间画回当前 section(见 engine.ts)。 */
+  readonly setTTSHighlightByOffset =
+    vi.fn<(start: number, end: number, color: string) => Promise<void>>()
+  readonly clearTTSHighlight = vi.fn<() => Promise<void>>()
   readonly replaceSource = vi.fn<(text: string) => Promise<void>>()
   readonly rebuildChapters = vi.fn<(rules: readonly ChapterRule[] | null) => Promise<number>>()
 
@@ -123,6 +125,9 @@ export class FakeFoliateAdapter {
     this.setFontFaces.mockResolvedValue(undefined)
     this.createAnnotation.mockResolvedValue(undefined)
     this.removeAnnotation.mockResolvedValue(undefined)
+    this.rectOfAnnotation.mockReturnValue(null)
+    this.setTTSHighlightByOffset.mockResolvedValue(undefined)
+    this.clearTTSHighlight.mockResolvedValue(undefined)
     this.replaceSource.mockResolvedValue(undefined)
     this.rebuildChapters.mockResolvedValue(sections.length)
   }
@@ -139,10 +144,6 @@ export class FakeFoliateAdapter {
 
   emitShowAnnotation(cfi: string): void {
     this.callbacks.onShowAnnotation?.(cfi)
-  }
-
-  emitTapZone(zone: TapZone): void {
-    this.callbacks.onTapZone?.(zone)
   }
 
   emitKeyDown(event: KeyboardEvent): void {

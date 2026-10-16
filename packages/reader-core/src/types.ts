@@ -60,12 +60,17 @@ export interface SearchResult {
   readonly excerpt: string
 }
 
+/** 墨水样式:与 Rust `StoredAnnotation.style` / zod `ANNOTATION_STYLES` 同集合。 */
+export type AnnotationStyle = 'highlight' | 'underline' | 'squiggly'
+
 export interface Annotation extends EntityBase {
   readonly bookId: string
   readonly range: TextRange
   readonly selectedText: string
   /** Highlight color token; palette owned by the design system. */
   readonly color: string
+  /** 装饰样式;缺省 = 背景高亮(与协议层默认值同一个约定)。 */
+  readonly style?: AnnotationStyle
   readonly note?: string
 }
 

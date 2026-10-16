@@ -83,6 +83,10 @@ declare module 'foliate-js/view.js' {
     next(distance?: number): Promise<void>
     prev(distance?: number): Promise<void>
     getContents(): { doc: Document; index: number; overlayer?: Overlayer }[]
+    /** The paginator is an HTMLElement: `create-overlayer` is dispatched on
+     *  it (not on the view — the event does not bubble), which is how section
+     *  reloads are observed for annotation replay. */
+    addEventListener(type: string, listener: (event: Event) => void): void
     destroy(): void
   }
 

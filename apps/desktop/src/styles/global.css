@@ -174,7 +174,9 @@ button:disabled {
 .settings-panel,
 .modal-panel {
   position: fixed;
-  z-index: 10;
+  /* 划词工具压在一切 chrome 之上:选区时它才是当前任务,抽屉/播放条都得让位。
+     阅读区 iframe 的 z-index 是 auto,所以任何正数都够;40 与它自己的规则一致。 */
+  z-index: 40;
   background:
     linear-gradient(135deg, var(--color-highlight), transparent 42%), var(--color-surface-glass);
   backdrop-filter: var(--glass-blur);
@@ -2621,38 +2623,260 @@ button:disabled {
   font-size: var(--font-size-sm);
 }
 
+/* ---------- 划词工具「墨条」(InkBar) ----------
+   几何(贴边/翻转/夹取)在 selection-place.ts,这里只负责长相和入场。
+   视觉语言与其它 chrome 同族:玻璃底 + 发丝边 + 透明图标钮 + hover 染
+   accent + 全局 press(见 .chrome-button / .reader-top)。两条带:
+   动作带(图标钮一行)与墨带(内嵌托盘,左样式右颜色)。 */
+
 .selection-toolbar {
+  position: fixed;
+  z-index: 40;
   display: flex;
-  gap: 2px;
-  padding: 4px;
-  border-radius: var(--radius-full);
-  animation: scale-pop var(--duration-fast) var(--ease-emphasized);
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  animation: toolbar-enter var(--duration-base) var(--ease-emphasized);
 }
 
-.annotation-toolbar {
-  top: 12px;
-  right: 12px;
-  left: auto;
+/* 动作带:全宽铺开 justify-between;阅读区比九个图标还窄时才换行。 */
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1px;
+  padding: 0 1px;
 }
 
-.selection-toolbar button {
+/* 墨带:一层内嵌表面,把「选墨」和「动作」分开 —— 比一条分隔线更整体。
+   两端对齐(样式在左、颜色在右);发丝线绝对居中,把两群之间的留白对半分,
+   读起来是「两边一种选择」,而不是右边秃了一块。 */
+.selection-ink {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+.selection-ink-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 形状与颜色之间的发丝线:竖直、低调,跟着阅读主题走,夹在两群正中间。 */
+.selection-ink-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+}
+
+/* ---- 动作带图标钮:.chrome-button 的配方,小一号 ---- */
+.sel-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
-  color: inherit;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
-.selection-toolbar button:hover {
+.sel-icon:hover:not(:disabled) {
   background: var(--color-accent-soft);
   color: var(--color-accent);
+}
+
+/* 记笔记展开中:唯一需要「按住」状态的图标钮。 */
+.sel-icon.is-on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* 复制成功的对勾:accent 一亮,和 hover 同一套色。 */
+.sel-icon-accent {
+  color: var(--color-accent);
+}
+
+/* 关闭钮比别的钮退一级,不抢动作。 */
+.sel-icon-quiet {
+  color: var(--color-text-tertiary);
+}
+
+/* 删除只在编辑模式出现,hover 才染危险色 —— 平时不红着吓人。 */
+.sel-icon-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+/* ---- 墨带:样式钮 ---- */
+.sel-style {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.sel-style:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+/* 选中的样式是一枚实心chip:在托盘上浮起来,一眼看到当前墨。 */
+.sel-style.is-on {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-soft);
+}
+
+/* 样式预览:一抹底色 / 一条直线 / 一道波浪,都用当前墨的颜色画 —— 色板
+   预览的是「这个组合」,不只是形状。 */
+.sel-swatch-wash {
+  display: block;
+  width: 18px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.sel-swatch-line {
+  display: block;
+  width: 18px;
+  border-top: 2px solid;
+}
+
+.sel-swatch-wave {
+  display: block;
+  width: 18px;
+  height: 6px;
+}
+
+/* ---- 墨带:色点 ---- */
+.sel-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sel-dot-core {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--radius-full);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.sel-dot:hover:not(:disabled) .sel-dot-core {
+  transform: scale(1.2);
+}
+
+/* 选中:外环是墨自己的颜色(currentColor 由组件按 hex 注入),内圈留一圈
+   面板底色把环「咬」出来 —— 五颗色点里哪颗在用,不用猜。 */
+.sel-dot.is-on {
+  box-shadow:
+    0 0 0 1.5px var(--color-surface),
+    0 0 0 3px currentColor;
+}
+
+.sel-dot.is-on .sel-dot-core {
+  transform: scale(1.1);
+}
+
+/* ---- 就地笔记 ---- */
+.selection-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-top: 2px;
+}
+
+.selection-note-input {
+  min-height: 56px;
+}
+
+.selection-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.note-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.note-action:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.note-action.is-danger {
+  color: var(--color-text-tertiary);
+}
+
+.note-action.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+.selection-note-hint {
+  margin-left: auto;
+  padding-right: 2px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+/* ---- 入场:从面板将落的那一侧滑入(data-placement 由 layout effect 写) ---- */
+.selection-toolbar[data-placement='above'] {
+  animation-name: toolbar-enter-above;
+}
+
+@keyframes toolbar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+@keyframes toolbar-enter-above {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
 }
 
 /* ---------- Highlights & annotation notes ---------- */

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { findRangeByCharOffset, walkSectionText } from './engine'
+import { charOffsetOfRangeStart, findRangeByCharOffset, walkSectionText } from './engine'
 
 /** 造一个 section body(用 div 承载,语义等价于 doc.body)。 */
 function bodyOf(html: string): Element {
@@ -72,5 +72,34 @@ describe('findRangeByCharOffset', () => {
     // Range 的 toString 会把块间的虚拟换行还原成 ''(DOM 里没有这个字符),
     // 所以比较去掉换行后的文本。
     expect(range!.toString().replace(/\n/g, '')).toBe(trimmed.replace(/\n/g, ''))
+  })
+})
+
+describe('charOffsetOfRangeStart', () => {
+  /** 在 body 里按「第几个文本节点的第几个字符」造一个选区起点。 */
+  function rangeAt(body: Element, nodeIndex: number, offset: number): Range {
+    const node = walkSectionText(body).nodes[nodeIndex]!.node
+    const range = body.ownerDocument.createRange()
+    range.setStart(node, offset)
+    return range
+  }
+
+  it('文本节点里的起点:偏移与 walkSectionText 同一坐标系', () => {
+    const body = bodyOf('<p>平野晶又说了一遍。</p><p>她转身走了。</p>')
+    // 第二个文本节点的开头 = 第一句 9 字 + 块间换行 1 = 10。
+    expect(charOffsetOfRangeStart(body, rangeAt(body, 1, 0))).toBe(10)
+  })
+
+  it('节点内的字符偏移照加', () => {
+    const body = bodyOf('<p>平野晶又说了一遍。</p><p>她转身走了。</p>')
+    // 第二句的「走」= 10 + 3。
+    expect(charOffsetOfRangeStart(body, rangeAt(body, 1, 3))).toBe(13)
+  })
+
+  it('元素容器(三击整段)解不出:回 null,调用方退回文本匹配', () => {
+    const body = bodyOf('<p>甲。</p><p>乙。</p>')
+    const range = body.ownerDocument.createRange()
+    range.setStart(body, 0)
+    expect(charOffsetOfRangeStart(body, range)).toBeNull()
   })
 })

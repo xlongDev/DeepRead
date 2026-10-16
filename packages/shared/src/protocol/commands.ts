@@ -523,10 +523,15 @@ export const appInfoSchema = z.object({
 /** Book file hashes are lowercase SHA-256 hex strings (frontend computes via WebCrypto). */
 const bookHash = z.string().regex(/^[a-f0-9]{64}$/, 'must be a SHA-256 hex digest')
 
+const ANNOTATION_STYLES = ['highlight', 'underline', 'squiggly'] as const
+
 const annotationRecordSchema = z.object({
   id: z.string().min(1).max(128),
   cfi: z.string().min(1).max(2048),
   color: z.string().min(1).max(32),
+  // 墨水样式。缺省 = 背景高亮:预 v8 的行和手写请求都按这个收口,与 Rust
+  // `default_annotation_style` 和渲染层的兜底是同一个约定。
+  style: z.enum(ANNOTATION_STYLES).default('highlight'),
   note: z.string().max(4000).optional(),
   excerpt: z.string().max(2000).optional(),
   updatedAt: iso8601.optional(),

@@ -32,7 +32,15 @@ import {
 import { invokeCommand } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { useTts } from './tts/useTts'
-import { CHARS_PER_SECOND, formatClock, sentencesOf, voicesForLanguage } from './tts-plan'
+import { primeTtsAudio, suspendTtsAudio } from './tts/audio'
+import {
+  CHARS_PER_SECOND,
+  formatClock,
+  locateSpeechUnit,
+  sentencesOf,
+  unitAtOffset,
+  voicesForLanguage,
+} from './tts-plan'
 
 type Engine = 'edge' | 'system' | 'cloud'
 
@@ -170,6 +178,10 @@ export interface TtsDrawerHandle {
   /** 真正停止播放并清空内部状态 — 父层调一次,TtsDrawer 会通过
    *  onPlayingChange 反馈 idle,自然触发卸载。 */
   readonly stop: () => void
+  /** 从选区所在的那一句起连播整章(划词工具的「朗读此处」)。
+   *  `start` 是选区起点在章节文本里的字符偏移(内核随选区报来):有它
+   *  就精确定位,没有(编辑模式的 excerpt)才退回文本匹配。 */
+  readonly speakFromText: (text: string, start: number | null) => void
 }
 
 /** 歌词页的一行。memo 化:600 句的长章里,切句只重画两行(current/past 翻转),
@@ -366,9 +378,34 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('keydown', onKey)
-      stopFlagRef.current = true
-      ttsStop()
-      clearTimer()
+    }
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** 真卸载才停播 —— 停播动作延后一个宏任务,且被下一次 setup 取消。
+   *
+   *  StrictMode 的模拟重挂也会跑 cleanup。同步置停播标志会把父层刚发起的
+   *  起播静默拦掉:划词「朗读此处」正是这个时序 —— 父层 effect 在抽屉挂载
+   *  的同一次提交里经 ref 起播,异步 step() 刚从 getSectionText 返回,标志
+   *  已被 cleanup 置上,用户看到的就是「点了朗读没反应,面板停在待机」;
+   *  手动按播放却又好的(那时早过了挂载,没人再置标志)。
+   *
+   *  延后 + setup 取消,两头都要:只延后不取消,定时器照样在起播之后的
+   *  宏任务里补刀(播放起来一瞬间被杀,面板回到待机 —— 与不延后同样
+   *  致命,只是死得晚一拍);setup 里的 clearTimeout 让模拟重挂的第二次
+   *  setup 取消第一次 cleanup 排的停播,真卸载没有下一次 setup,停播
+   *  落地(音频本身已由 useTts 自己的 cleanup 同步停掉,这里只防异步
+   *  step() 把播放复活)。 */
+  const pendingStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => {
+    clearTimeout(pendingStopRef.current)
+    return () => {
+      clearTimeout(pendingStopRef.current)
+      pendingStopRef.current = setTimeout(() => {
+        stopFlagRef.current = true
+        clearTimer()
+        ttsStop()
+      }, 0)
     }
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -404,12 +441,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     sectionTokenRef.current += 1
     clearTimer()
     ttsStop()
+    // 真停才挂起上下文省电(暂停走 ttsPause,它自己会挂)。恢复留给下一次
+    // 起播点击里的 primeTtsAudio —— WebKit 不认手势外的 resume,挂在别的
+    // 时机意味着下一次起播要么再点一次才有声,要么永远没声。
+    suspendTtsAudio()
     setUnits([])
     unitsRef.current = []
     setProgress(0)
   }, [clearTimer, ttsStop])
-
-  useImperativeHandle(ref, () => ({ stop }), [stop])
 
   const armTimer = useCallback((): void => {
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -421,7 +460,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   }, [stop])
 
   /**
-   * 从 `fromUnit` 起连播整章;章末按连读开关与定时模式决定去留。
+   * 从 `fromUnit`(或 `fromText` 定位到的句)起连播整章;章末按连读开关与
+   * 定时模式决定去留。`fromText` 是划词工具「朗读此处」的入口。
    *
    * 播放本身在引擎层(`useTts` + `clipEngine`:预取、跟词、变速),这里只做
    * 编排:取章节文本 → 切单元 → 起播 → 章末回调里决定连读/停止。文本**不
@@ -429,12 +469,23 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
    * 头部空白会让整章高亮偏一格。
    */
   const run = useCallback(
-    (opts: { readonly fromUnit?: number; readonly stopAtChapterEnd?: boolean } = {}): void => {
+    (
+      opts: {
+        readonly fromUnit?: number
+        readonly fromText?: string
+        /** 选区起点在章节文本里的字符偏移(内核实测):有它就不猜。 */
+        readonly fromStart?: number | null
+        readonly stopAtChapterEnd?: boolean
+      } = {},
+    ): void => {
       sectionTokenRef.current += 1
       const token = sectionTokenRef.current
       stopFlagRef.current = false
       armTimer()
       let fromUnit = opts.fromUnit ?? 0
+      // 「从选区起播」的两个参数都用一次即弃:连读下一章时从章首开始。
+      let fromText = opts.fromText
+      let fromStart = opts.fromStart ?? null
       let stopAtEnd = opts.stopAtChapterEnd ?? false
       let previous = ''
       const step = async (): Promise<void> => {
@@ -450,7 +501,15 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         setRoles(speakerRoles(plan))
         // 新一轮句子计划:进度提交到新章起点(累加字符空间),歌词页的当前行
         // 由引擎报回的新单元接管。
-        const from = Math.max(0, Math.min(fromUnit, plan.length - 1))
+        // 起点优先级:选区字符偏移(内核实测,exact)> 选区/excerpt 文本
+        // 匹配 > 显式下标。选区可能盖住半句、横跨三句,匹配算术在 tts-plan
+        // 里单测;偏移解不出(元素边界起的选区)才走文本。
+        let from: number
+        if (fromStart !== null) from = unitAtOffset(plan, fromStart)
+        else if (fromText !== undefined) from = locateSpeechUnit(plan, fromText)
+        else from = Math.max(0, Math.min(fromUnit, plan.length - 1))
+        fromStart = null
+        fromText = undefined
         setProgress(queuePosition(plan, from).spoken)
         ttsPlay(plan, from, () => {
           if (stopFlagRef.current || sectionTokenRef.current !== token) return
@@ -477,7 +536,27 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     [getSectionText, jumpSection, armTimer, ttsPlay, stop],
   )
 
+  /** 划词工具的「朗读此处」:从选区所在的那一句起连播整章。起点优先用
+   *  内核随选区报来的字符偏移(unitAtOffset,exact);编辑模式没有选区,
+   *  只有划线存下的 excerpt,才退回 locateSpeechUnit 的文本匹配。
+   *
+   *  音频解锁不在这里:调用方(父层 effect)早已离开起播那次点击的手势,
+   *  WebKit 不认手势外的 resume —— 解锁在 `ReaderScreen.speakSelection`
+   *  的点击里完成(见 tts/audio.ts)。 */
+  const speakFromText = useCallback(
+    (text: string, start: number | null): void => {
+      void run({ fromText: text, fromStart: start })
+    },
+    [run],
+  )
+
+  useImperativeHandle(ref, () => ({ stop, speakFromText }), [stop, speakFromText])
+
   const play = useCallback((): void => {
+    // 音频解锁必须在这次点击里完成:首个 clip 的合成在两次 await 之后
+    // (章节文本 + 供应商往返),手势早过期 —— 不在这里解锁,WebKit 里就是
+    // 「点了播放没声音,再点一下才有」。见 tts/audio.ts 的说明。
+    primeTtsAudio()
     if (phaseRef.current === 'paused') {
       ttsResume()
       armTimer()
@@ -665,6 +744,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     (delta: number): void => {
       const wasActive = phaseRef.current !== 'idle'
       stop()
+      // stop() 把上下文挂起了,而重启在 jumpSection 的 await 之后 —— 解锁必须
+      // 在这次点击里补上,否则 WebKit 里「点了切章没声,再点一下才有」。
+      primeTtsAudio()
       void jumpSection(delta).then((moved) => {
         if (moved && wasActive) void run({ fromUnit: 0 })
       })

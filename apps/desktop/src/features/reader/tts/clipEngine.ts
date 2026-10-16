@@ -29,6 +29,7 @@ import type { SpeechBoundary, SpeechStatus, WordCue } from '@deepread/reader-cor
 import { wordCues } from '@deepread/reader-core'
 import { invokeCommand } from '../../../lib/ipc'
 import { timeStretch } from './timeStretch'
+import { existingTtsAudio, ttsAudio } from './audio'
 
 /** One decoded utterance, ready to play. */
 interface Ready {
@@ -127,12 +128,32 @@ async function synthesizeCloud(text: string, voice: string, configId: string): P
 /**
  * Waits for a context to actually be live before a source is scheduled.
  *
- * A stop leaves the context suspended to save power, and `resume()` is
- * asynchronous — scheduling a source against a suspend that has not landed yet
- * produces silence with no error, so the wait is not optional.
+ * A pause leaves the context suspended, and `resume()` is asynchronous —
+ * scheduling a source against a suspend that has not landed yet produces
+ * silence with no error, so the wait is not optional.
+ *
+ * WebKit refuses `resume()` outside a user gesture, so a context that was
+ * never unlocked on the click that started playback (the OS suspending it
+ * while the app sat in the background is the usual way) still comes back dead
+ * here. The last resort is the next gesture the reader makes: silence with no
+ * error is the one failure they cannot diagnose for themselves. The normal
+ * path never gets here with a dead context — `primeTtsAudio` unlocked it on
+ * the click, see `tts/audio.ts`.
  */
 async function live(ctx: AudioContext): Promise<void> {
   if (ctx.state !== 'running') await ctx.resume()
+  if (ctx.state === 'running') return
+  await new Promise<void>((resolve) => {
+    const unlock = (): void => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+      // Resolves either way: a gesture that still cannot unlock must not
+      // wedge the queue — the source plays into silence, as it did before.
+      void ctx.resume().then(resolve, resolve)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+  })
 }
 
 /**
@@ -146,11 +167,9 @@ export function createClipEngine(
   synthesize: (text: string, voice: string) => Promise<Clip>,
   events: ClipEvents,
 ): ClipEngine {
-  let context: AudioContext | null = null
   let source: AudioBufferSourceNode | null = null
   let frame = 0
   let generation = 0
-
   let texts: readonly string[] = []
   let origin = 0
   let trim = 0
@@ -163,15 +182,14 @@ export function createClipEngine(
   const inflight = new Map<number, Promise<boolean>>()
   let startedAt = 0
 
-  /** Built on first play, which is inside the reader's own click: a context
-   *  created outside a gesture starts suspended and would play nothing. */
-  function audio(): AudioContext {
-    context ??= new AudioContext()
-    return context
-  }
-
   const voiceFor = (index: number): string => voiceOf?.(index) ?? voice
 
+  /** Tears down whatever is playing, deliberately leaving the context in
+   *  whatever power state it is in: every restart goes through here (`play`
+   *  included), and WebKit only resumes a suspended context inside a user
+   *  gesture — a restart is never inside one. Suspending to save power is the
+   *  session's business (`suspendTtsAudio`, called when the reader truly
+   *  stops), not the teardown's. */
   function stop(): void {
     generation += 1
     cancelAnimationFrame(frame)
@@ -190,7 +208,6 @@ export function createClipEngine(
     inflight.clear()
     texts = []
     onFinish = undefined
-    if (context?.state === 'running') void context.suspend()
   }
 
   /** Synthesises one unit, redoing the request if the voice map moved while it
@@ -209,7 +226,7 @@ export function createClipEngine(
         // Re-resolved, not cached: a voice change that landed while this
         // request was in flight invalidates the clip it was made for.
         if (voiceFor(index) !== wanted) continue
-        const buffer = await audio().decodeAudioData(clip.audio)
+        const buffer = await ttsAudio().decodeAudioData(clip.audio)
         if (generation !== current) return false
         ready.set(index, {
           buffer,
@@ -270,7 +287,7 @@ export function createClipEngine(
     let last = -1
     const step = (): void => {
       if (generation !== current) return
-      const ctx = context
+      const ctx = existingTtsAudio()
       if (!ctx || source === null) return
       const at = (ctx.currentTime - startedAt) * tempo
       let hit = -1
@@ -314,7 +331,7 @@ export function createClipEngine(
     for (let c = 0; c < clip.buffer.numberOfChannels; c += 1) {
       channels.push(timeStretch(clip.buffer.getChannelData(c), clip.buffer.sampleRate, tempo))
     }
-    const out = audio().createBuffer(
+    const out = ttsAudio().createBuffer(
       clip.buffer.numberOfChannels,
       Math.max(...channels.map((channel) => channel.length)),
       clip.buffer.sampleRate,
@@ -332,7 +349,7 @@ export function createClipEngine(
       settle()
       return
     }
-    const ctx = audio()
+    const ctx = ttsAudio()
     await live(ctx)
     if (generation !== current) return
     // Read once and carried through the rest of this clip: a rate changed while
@@ -382,13 +399,14 @@ export function createClipEngine(
   }
 
   function pause(): void {
+    const context = existingTtsAudio()
     if (context === null || context.state !== 'running') return
     void context.suspend()
     events.status('paused')
   }
 
   function resume(): void {
-    void audio().resume()
+    void ttsAudio().resume()
     events.status('playing')
   }
 

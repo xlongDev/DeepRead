@@ -30,6 +30,7 @@ import {
 import type { FoliateAnnotation, FoliateTocItem, View, ViewLocation } from 'foliate-js/view.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
 import { isSupported } from './format'
+import { AnnotationRegistry } from './annotation-registry'
 import { buildMobiBook } from './books/mobi-book'
 import { buildMarkdownBook } from './books/markdown-book'
 import { buildTextBook, decodeText } from './books/text-book'
@@ -41,6 +42,25 @@ const MAX_SELECTION_TEXT = 2000
 const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
 /** overlayer 的 key:TTS 洗色与用户批注共用 overlayer,但不能共用 key 空间。 */
 const TTS_HIGHLIGHT_KEY = 'deepread-tts'
+
+/**
+ * 墨水样式 → 内核装饰函数。取值集合与 Rust `StoredAnnotation.style`、zod
+ * `ANNOTATION_STYLES`、前端墨水行三处约定一致;任何其他值(含空串)按背景
+ * 高亮收口,所以旧行和手写请求都能画出来。
+ *
+ * `strikethrough` / `outline` 内核也支持,但墨水行不提供 —— 删除线在阅读
+ * 场景里没有语义,描边是开发期调试用的。
+ */
+export function overlayFuncForStyle(style: string | undefined): typeof Overlayer.highlight {
+  switch (style) {
+    case 'underline':
+      return Overlayer.underline
+    case 'squiggly':
+      return Overlayer.squiggly
+    default:
+      return Overlayer.highlight
+  }
+}
 
 /**
  * 块级元素集合 —— 与 foliate-js `tts.js` 的 `blockTags` 一致,另补 `ul`
@@ -165,6 +185,28 @@ export function findRangeByCharOffset(
   return range
 }
 
+/**
+ * Range 起点在 {@link walkSectionText} 文本里的字符偏移 —— 与
+ * `getSectionText` / `SpeechUnit.start` 同一个坐标系,划词起播由此精确
+ * 定位到选区所在的那一句。纯文本匹配做不到这一点:选区开头若是「了。天」
+ * 这样的两字,更早的句子句尾同样包含它,会定位错到上一句;章内重复的句子
+ * 更只能定位到第一次出现。
+ *
+ * 选区起点在文本节点里(拖选、双击选词的常见形态)才给得出;元素容器
+ * (三击整段之类)与树外节点回 null,调用方还有文本匹配兜底。
+ *
+ * @internal 导出仅为单测;产品代码走选区回调。
+ */
+export function charOffsetOfRangeStart(body: Element, range: Range): number | null {
+  const container = range.startContainer
+  if (container.nodeType !== Node.TEXT_NODE) return null
+  for (const entry of walkSectionText(body).nodes) {
+    if (entry.node !== container) continue
+    return entry.start + Math.min(range.startOffset, entry.node.data.length)
+  }
+  return null
+}
+
 export interface EngineLocation {
   readonly cfi: string | undefined
   readonly fraction: number | undefined
@@ -177,11 +219,13 @@ export interface EngineLocation {
 export interface EngineSelection {
   readonly cfi: string
   readonly text: string
+  /** 选区起点在 section 文本里的字符偏移({@link walkSectionText} 坐标系,
+   *  与 `SpeechUnit.start` 同一个空间);`null` = 解不出(选区从元素边界
+   *  开始等),调用方退回文本匹配。TTS「从选区起播」用它精确定位。 */
+  readonly start: number | null
   /** Selection bounding box in viewport coordinates, for the toolbar anchor. */
   readonly rect: { readonly top: number; readonly left: number; readonly height: number }
 }
-
-export type TapZone = 'left' | 'right' | 'center'
 
 export interface EngineCallbacks {
   /** 书内 iframe 的键盘事件转发(iframe 获焦时父层 window 收不到)。 */
@@ -190,7 +234,6 @@ export interface EngineCallbacks {
   onRelocate?: (location: EngineLocation) => void
   onSelection?: (selection: EngineSelection | null) => void
   onShowAnnotation?: (cfi: string) => void
-  onTapZone?: (zone: TapZone) => void
 }
 
 /**
@@ -267,7 +310,13 @@ export class FoliateAdapter implements ReaderEngine {
   #view: View | null = null
   readonly #host: HTMLElement
   readonly #callbacks: EngineCallbacks
-  readonly #annotationCfis = new Map<string, string>()
+  /** 标注注册表:翻页会卸载/重建 section 的 overlayer,而内核只回放搜索
+   *  结果、不回放标注 —— 每次 create-overlayer 都要按 index 把这一章的
+   *  标的重画一遍,否则「翻页回来划线还在」只剩运气。 */
+  readonly #annotations = new AnnotationRegistry()
+  /** 已经挂上 create-overlayer 监听的 renderer:view.open 每次都换一个新的
+   *  paginator,WeakSet 按实例去重,不会在同一个上挂两条。 */
+  readonly #watchedRenderers = new WeakSet<object>()
   #theme: ReaderTheme | null = null
   #layout: {
     fontSize?: number
@@ -297,7 +346,6 @@ export class FoliateAdapter implements ReaderEngine {
       )
     }
   }
-  #tapTimer: ReturnType<typeof setTimeout> | undefined
   #destroyed = false
   #adapterBuiltText: { format: 'txt' | 'md'; title: string; text: string } | null = null
   /** 用户章节规则(空 = 只用内置规则);rebuildChapters 时整体替换。 */
@@ -344,25 +392,15 @@ export class FoliateAdapter implements ReaderEngine {
       doc.addEventListener('keydown', (domEvent) => {
         this.#callbacks.onKeyDown?.(domEvent)
       })
-      doc.addEventListener('pointerup', (domEvent) => {
+      doc.addEventListener('pointerup', () => {
         const selection = doc.getSelection()
+        // 空选区的这一下只当作「点空白」:收起划词工具条/面板。翻页不走
+        // 点击——只认翻页按钮、键盘与触控板滑动(点按翻页误触太多:关工具
+        // 条、点已有划线,都会被 250ms 延迟的判定翻走页)。
         if (!selection || selection.isCollapsed) {
           this.#callbacks.onSelection?.(null)
-          // Page-turn zones: taps in the outer thirds of reflowable pages turn
-          // the page, a tap in the middle toggles the reading chrome. The zone
-          // action is deferred so a double-click word selection cancels it.
-          const target = domEvent.target
-          const interactive =
-            target instanceof Element && target.closest('a, button, input, [role="button"]')
-          if (!interactive && doc.defaultView) {
-            const ratio = domEvent.clientX / Math.max(1, doc.defaultView.innerWidth)
-            const zone = ratio < 0.3 ? 'left' : ratio > 0.7 ? 'right' : 'center'
-            clearTimeout(this.#tapTimer)
-            this.#tapTimer = setTimeout(() => this.#callbacks.onTapZone?.(zone), 250)
-          }
           return
         }
-        clearTimeout(this.#tapTimer)
         const range = selection.getRangeAt(0)
         const text = selection.toString().slice(0, MAX_SELECTION_TEXT)
         if (!text.trim()) {
@@ -378,6 +416,9 @@ export class FoliateAdapter implements ReaderEngine {
         this.#callbacks.onSelection?.({
           cfi: this.#requireView().getCFI(index, range),
           text,
+          // 与 getSectionText 同一套偏移模型:起播定位用,解不出时调用方
+          // 退回文本匹配。
+          start: charOffsetOfRangeStart(doc.body, range),
           rect: {
             top: rect.top + offsetY,
             left: rect.left + offsetX,
@@ -391,7 +432,12 @@ export class FoliateAdapter implements ReaderEngine {
         draw: (func: typeof Overlayer.highlight, opts?: { color?: string }) => void
         annotation: FoliateAnnotation
       }
-      draw(Overlayer.highlight, { color: annotation.color ?? DEFAULT_HIGHLIGHT_COLOR })
+      // annotation 是内核回传的原始对象,style 走索引签名(unknown)——
+      // 渲染层按字符串收口,非三态一律当背景高亮。
+      const style = typeof annotation.style === 'string' ? annotation.style : undefined
+      draw(overlayFuncForStyle(style), {
+        color: annotation.color ?? DEFAULT_HIGHLIGHT_COLOR,
+      })
     })
     view.addEventListener('show-annotation', (event) => {
       const { value } = (event as CustomEvent).detail as { value: string }
@@ -461,6 +507,7 @@ export class FoliateAdapter implements ReaderEngine {
     }
     if (this.#destroyed) return
     const view = this.#requireView()
+    this.#watchSectionReload(view)
     this.#applyStyles()
     // The paginator only renders on explicit navigation (kernel contract), so
     // land on the book's reading start; persisted-position restore then
@@ -495,6 +542,7 @@ export class FoliateAdapter implements ReaderEngine {
         ? buildMarkdownBook(text, built.title)
         : buildTextBook(text, built.title)
     await view.open(book)
+    this.#watchSectionReload(view)
     this.#adapterBuiltText = { ...built, text }
     this.#bookCharStatsComputed = false
     this.#applyStyles()
@@ -518,6 +566,7 @@ export class FoliateAdapter implements ReaderEngine {
         chapterRules: this.#chapterRules,
       }),
     )
+    this.#watchSectionReload(view)
     this.#applyStyles()
     this.#bookCharStatsComputed = false
     await view.goTo('s0')
@@ -526,7 +575,9 @@ export class FoliateAdapter implements ReaderEngine {
 
   async close(): Promise<void> {
     this.#view?.close()
-    this.#annotationCfis.clear()
+    // overlayer 随 view 一起销毁,登记不摘的话下次开书会试图重放上一本书
+    // 的标注(CFI 在新书里解析不出来,一条条 catch 里空转)。
+    this.#annotations.clear()
     // overlayer 随 view 一起销毁,引用不摘的话下次 #clearTtsWash 会
     // 在已卸载的 SVG group 上 remove。
     this.#ttsOverlayer = null
@@ -534,7 +585,6 @@ export class FoliateAdapter implements ReaderEngine {
 
   async destroy(): Promise<void> {
     this.#destroyed = true
-    clearTimeout(this.#tapTimer)
     window.removeEventListener('resize', this.#onWindowResize)
     await this.close()
     this.#view?.remove()
@@ -662,6 +712,38 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
+   * 已有划线的选区框(宿主窗口坐标系)—— 编辑模式划词工具的锚点。
+   *
+   * 点中的划线没有伴随文本选区(内核只报 `show-annotation` 的 CFI),工具条
+   * 因此没有 rect 可贴;这里把 CFI 解回 Range 现测一个。解不出、或所在
+   * section 没挂载(翻去别的章)时回 null,调用方自行回退。
+   *
+   * 与 {@link EngineSelection.rect} 同一套坐标系:Range 测自 section iframe,
+   * 加 iframe 边框偏移换算到宿主窗口。
+   */
+  rectOfAnnotation(cfi: string): EngineSelection['rect'] | null {
+    try {
+      const view = this.#requireView()
+      const resolved = view.resolveCFI(cfi)
+      const content = view.renderer.getContents().find((item) => item.index === resolved.index)
+      if (!content) return null
+      const anchor = resolved.anchor(content.doc)
+      if (typeof anchor.getBoundingClientRect !== 'function') return null
+      const rect = anchor.getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) return null
+      const frame = content.doc.defaultView?.frameElement?.getBoundingClientRect()
+      return {
+        top: rect.top + (frame?.y ?? 0),
+        left: rect.left + (frame?.x ?? 0),
+        height: rect.height,
+      }
+    } catch {
+      // CFI 解不动(锚点失效、书被外部改动):不是错误,只是这一条没有锚点。
+      return null
+    }
+  }
+
+  /**
    * 解析 TTS 该作用在哪个已挂载 content 上:优先最近一次取文本的
    * section,退化到第一个挂载项。返回 undefined 表示一个都没挂载。
    */
@@ -745,15 +827,67 @@ export class FoliateAdapter implements ReaderEngine {
       throw new AppError(ErrorCodes.systemValidation, '批注缺少 CFI 锚点,无法由内核定位。')
     }
     const view = this.#requireView()
-    await view.addAnnotation({ value: cfi, color: annotation.color })
-    this.#annotationCfis.set(annotation.id, cfi)
+    // style 随 annotation 进内核:翻页时 draw-annotation 凭它选装饰函数,
+    // 所以这里少带一个字段,划线在下一页就变回纯高亮。
+    const placed = await view.addAnnotation({
+      value: cfi,
+      color: annotation.color,
+      style: annotation.style,
+    })
+    // 内核回执的 section index 是重放的钥匙:create-overlayer 响时只有
+    // 这一章的标注需要重画。内核总给回执(见 view.js addAnnotation 的
+    // return),万一带不上 index,这条就只画在当前章、不参与重放。
+    this.#annotations.set(annotation.id, {
+      cfi,
+      color: annotation.color,
+      style: annotation.style,
+      ...(typeof placed?.index === 'number' ? { index: placed.index } : {}),
+    })
   }
 
   async removeAnnotation(annotationId: string): Promise<void> {
-    const cfi = this.#annotationCfis.get(annotationId)
+    const cfi = this.#annotations.cfiOf(annotationId)
     if (cfi === undefined) return
     await this.#requireView().deleteAnnotation({ value: cfi })
-    this.#annotationCfis.delete(annotationId)
+    this.#annotations.delete(annotationId)
+  }
+
+  /**
+   * 把属于 `index` 这一章的标注重画一遍(内核新建 overlayer 之后调用)。
+   *
+   * 单个 CFI 定位失败(书被外部改动、锚点失效)只跳过那一条 —— 其余划线
+   * 照常重放,一条坏锚点不该抹掉整章的画。
+   */
+  async #replayAnnotations(index: number): Promise<void> {
+    const view = this.#view
+    if (!view) return
+    for (const entry of this.#annotations.forSection(index)) {
+      try {
+        await view.addAnnotation({ value: entry.cfi, color: entry.color, style: entry.style })
+      } catch {
+        // 锚点失效:内核 resolveNavigation 已经自己 log 过,这里安静跳过。
+      }
+    }
+  }
+
+  /**
+   * 盯住 section 的重建:renderer 每建一个新 overlayer(翻页走远又回来、
+   *  首次加载),就把那一章的标的重放上去。
+   *
+   * 挂在 `view.renderer` 而不是 view 元素上:`create-overlayer` 由 paginator
+   *  派发且不冒泡,view 自己的监听是内核内部用的(只负责 attach),挂错了
+   *  地方永远等不到事件。view.open 每次换新 paginator,所以按实例去重。
+   */
+  #watchSectionReload(view: View): void {
+    const renderer = view.renderer as unknown as {
+      addEventListener?: (type: string, listener: (event: Event) => void) => void
+    } | null
+    if (!renderer?.addEventListener || this.#watchedRenderers.has(renderer)) return
+    this.#watchedRenderers.add(renderer)
+    renderer.addEventListener('create-overlayer', (event) => {
+      const detail = (event as CustomEvent).detail as { index?: number } | null
+      if (typeof detail?.index === 'number') void this.#replayAnnotations(detail.index)
+    })
   }
 
   /**

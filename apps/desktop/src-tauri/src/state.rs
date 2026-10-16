@@ -34,13 +34,21 @@ pub struct StoredProgress {
     pub fraction: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
+/// 划线样式:预迁移行(v7 及更早)没有这一列,读出来统一当背景高亮。
+/// 取值集合由前端墨水行和三处渲染路径共同约定:highlight / underline / squiggly。
+pub fn default_annotation_style() -> String {
+    "highlight".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAnnotation {
     pub id: String,
     pub cfi: String,
     pub color: String,
+    #[serde(default = "default_annotation_style")]
+    pub style: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,7 +139,7 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
         })?;
 
     let mut statement = conn
-        .prepare("SELECT id, cfi, color, note, excerpt, updated_at, deleted FROM annotations WHERE book_hash = ?1 ORDER BY rowid")
+        .prepare("SELECT id, cfi, color, style, note, excerpt, updated_at, deleted FROM annotations WHERE book_hash = ?1 ORDER BY rowid")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query annotations").with_cause(err))?;
     let annotations = statement
         .query_map([hash], |row| {
@@ -139,10 +147,19 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
                 id: row.get(0)?,
                 cfi: row.get(1)?,
                 color: row.get(2)?,
-                note: row.get(3)?,
-                excerpt: row.get(4)?,
-                updated_at: row.get(5)?,
-                deleted: row.get(6)?,
+                // 迁移前的行 style 为空串,归一回 highlight(渲染层同样只认三种)。
+                style: {
+                    let style: String = row.get(3)?;
+                    if style.is_empty() {
+                        default_annotation_style()
+                    } else {
+                        style
+                    }
+                },
+                note: row.get(4)?,
+                excerpt: row.get(5)?,
+                updated_at: row.get(6)?,
+                deleted: row.get(7)?,
             })
         })
         .map_err(|err| {
@@ -228,12 +245,13 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
     }
     for annotation in &state.annotations {
         tx.execute(
-            "INSERT INTO annotations (id, book_hash, cfi, color, note, excerpt, updated_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO annotations (id, book_hash, cfi, color, style, note, excerpt, updated_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 annotation.id,
                 hash,
                 annotation.cfi,
                 annotation.color,
+                annotation.style,
                 annotation.note,
                 annotation.excerpt,
                 annotation.updated_at,
@@ -967,6 +985,7 @@ mod tests {
                 id: "a1".into(),
                 cfi: "epubcfi(/6/4!2/2)".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: None,
                 excerpt: Some("被高亮的句子".into()),
                 updated_at: Some("2026-09-09T00:00:00Z".into()),
@@ -1045,6 +1064,7 @@ mod tests {
                 id: "a1".into(),
                 cfi: "cfi-1".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: Some("我自己写的".into()),
                 excerpt: Some("原文一".into()),
                 updated_at: Some("2026-09-09T00:00:00Z".into()),
@@ -1054,6 +1074,7 @@ mod tests {
                 id: "a2".into(),
                 cfi: "cfi-2".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: None,
                 excerpt: Some("原文二".into()),
                 updated_at: Some("2026-09-10T00:00:00Z".into()),
@@ -1063,6 +1084,7 @@ mod tests {
                 id: "a3".into(),
                 cfi: "cfi-3".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: None,
                 excerpt: Some("删掉的".into()),
                 updated_at: Some("2026-09-11T00:00:00Z".into()),
@@ -1078,6 +1100,7 @@ mod tests {
             id: "b1".into(),
             cfi: "cfi-b1".into(),
             color: "#a5d6f5".into(),
+            style: "underline".into(),
             note: None,
             excerpt: Some("另一本的摘录".into()),
             updated_at: None,
@@ -1113,6 +1136,7 @@ mod tests {
                 id: "a1".into(),
                 cfi: "cfi-1".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: Some("我自己写的".into()),
                 excerpt: Some("原文一".into()),
                 updated_at: Some("2026-09-09T00:00:00Z".into()),
@@ -1122,6 +1146,7 @@ mod tests {
                 id: "a3".into(),
                 cfi: "cfi-3".into(),
                 color: "#f5d76e".into(),
+                style: "highlight".into(),
                 note: None,
                 excerpt: Some("删掉的".into()),
                 updated_at: Some("2026-09-11T00:00:00Z".into()),

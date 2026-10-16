@@ -141,6 +141,13 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE books ADD COLUMN publisher TEXT;
     ALTER TABLE books ADD COLUMN language TEXT;
     "#,
+    // v8 — annotation ink style (highlight / underline / squiggly): the selection
+    // toolbar's ink row paints one of three decorations, so the mark carries its
+    // style the same way it carries its colour. Existing rows are background
+    // highlights, which is also what the renderer assumes for an empty style.
+    r#"
+    ALTER TABLE annotations ADD COLUMN style TEXT NOT NULL DEFAULT 'highlight';
+    "#,
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), AppError> {

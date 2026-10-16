@@ -5,7 +5,7 @@ import { mergeBookState, mergeLibrary } from './sync'
 const HASH = 'a'.repeat(64)
 
 function annotation(id: string, overrides: Partial<AnnotationRecord> = {}): AnnotationRecord {
-  return { id, cfi: `epubcfi(${id})`, color: '#f5d76e', ...overrides }
+  return { id, cfi: `epubcfi(${id})`, color: '#f5d76e', style: 'highlight', ...overrides }
 }
 
 function state(overrides: Partial<ReaderStatePayload> & { updatedAt: string }): ReaderStatePayload {

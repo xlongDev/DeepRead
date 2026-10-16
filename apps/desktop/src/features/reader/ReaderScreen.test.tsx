@@ -143,6 +143,33 @@ async function renderReader(options: FakeFoliateOptions = {}) {
   return { onBack, view, adapter: latestAdapter() }
 }
 
+/** 恢复一条已有划线(reader.state.get)。编辑模式的用例都靠它:
+ *  activeRecord 由 annotations 按 CFI 找,不恢复就进不了编辑模式。 */
+function withOneAnnotation(): void {
+  invokeMock.mockImplementation((command) => {
+    if (command === 'reader.state.get') {
+      return Promise.resolve({
+        state: {
+          progress: null,
+          annotations: [
+            {
+              id: 'a1',
+              cfi: 'epubcfi(/6/4!/4/2)',
+              color: '#86c98a',
+              style: 'highlight',
+              excerpt: '第一章被划的那句',
+              updatedAt: '2026-10-12T00:00:00Z',
+            },
+          ],
+          bookmarks: [],
+          updatedAt: '2026-10-12T00:00:00Z',
+        },
+      }) as never
+    }
+    return Promise.resolve(respond(command)) as never
+  })
+}
+
 beforeEach(() => {
   resetFakeAdapters()
   localStorage.clear()
@@ -367,6 +394,7 @@ describe('阅读动作接到内核', () => {
 const SELECTION = {
   cfi: 'epubcfi(/6/4!/4/2)',
   text: '被划的那一句。',
+  start: 12,
   rect: { top: 140, left: 80, height: 20 },
 } as const
 
@@ -409,25 +437,57 @@ describe('批注:多色划线 / 笔记 / 列表面板', () => {
     const { adapter } = await renderReader()
     const toolbar = await selectText(adapter)
 
-    fireEvent.click(within(toolbar).getByTitle('写笔记'))
+    // 就地笔记:记笔记 在面板里展开字段,不用去侧边浮层。
+    fireEvent.click(within(toolbar).getByTitle('记笔记'))
     const textarea = await screen.findByLabelText('笔记内容')
     fireEvent.change(textarea, { target: { value: '这句要抄下来' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存笔记' }))
 
     await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
     expect(adapter.createAnnotation.mock.calls[0]?.[0]).toMatchObject({ note: '这句要抄下来' })
   })
 
-  it('笔记留空保存 = 只要划线,不带 note', async () => {
+  it('笔记留空且本来就没有:保存是空操作,不建空划线', async () => {
     const { adapter } = await renderReader()
     const toolbar = await selectText(adapter)
-    fireEvent.click(within(toolbar).getByTitle('写笔记'))
-    await screen.findByLabelText('笔记内容')
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    fireEvent.click(within(toolbar).getByTitle('记笔记'))
+    const save = await screen.findByRole('button', { name: '保存笔记' })
+    // 字段还说着已存的内容(都空)→ 没改过就不写,按钮也应是禁用态。
+    expect(save).toBeDisabled()
+    fireEvent.click(save)
 
-    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
-    // 领域模型的 note 是该字段的"没有"态(undefined),存下来就是纯划线。
-    expect(adapter.createAnnotation.mock.calls[0]?.[0]?.note).toBeUndefined()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(adapter.createAnnotation).not.toHaveBeenCalled()
+  })
+
+  it('编辑模式:墨水行给三种样式,点样式把 style 交给内核', async () => {
+    // 已有划线(绿色 + 背景高亮)→ 点「直线」应该重绘成 underline。
+    withOneAnnotation()
+    const { adapter } = await renderReader()
+    // 点中已有划线(内核回传 CFI)→ 编辑模式工具栏。
+    adapter.emitShowAnnotation('epubcfi(/6/4!/4/2)')
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('编辑工具栏没出现')
+      return node
+    })
+
+    // 三种样式都在,直线是当前未选中的那个。
+    const styles = [...toolbar.querySelectorAll('button[aria-label]')].filter((b) =>
+      ['背景高亮', '直线', '波浪线'].includes(b.getAttribute('aria-label') ?? ''),
+    )
+    expect(styles.map((b) => b.getAttribute('aria-label'))).toEqual(['背景高亮', '直线', '波浪线'])
+    fireEvent.click(within(toolbar).getByLabelText('直线'))
+
+    // 重绘 = 删旧的 + 建新的(同 CFI,新样式)。
+    await waitFor(() => expect(adapter.removeAnnotation).toHaveBeenCalledWith('a1'))
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalled())
+    const last = adapter.createAnnotation.mock.calls.at(-1)?.[0]
+    expect(last).toMatchObject({
+      color: '#86c98a',
+      style: 'underline',
+      range: { start: { cfi: 'epubcfi(/6/4!/4/2)' } },
+    })
   })
 
   it('批注页签列出摘录与笔记,点条目按 CFI 回到原文', async () => {
@@ -803,18 +863,170 @@ describe('划选翻译', () => {
     expect(request.configId).toBe('cfg-1')
     expect(JSON.stringify(request.messages)).toContain('被划的那一句。')
 
-    const card = await screen.findByLabelText('翻译')
+    // 工具条不自动关了,上面那颗「翻译」按钮还在 —— 查卡片类。
+    const card = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.translate-card')
+      if (node === null) throw new Error('翻译卡没出现')
+      return node
+    })
     expect(within(card).getByText('The wick crackled.')).toBeInTheDocument()
     // 成本诚实:谁出的译文、用的哪个模型,直接写在卡片上。
     expect(within(card).getByText('DeepSeek · deepseek-chat')).toBeInTheDocument()
     expect(within(card).getByText('源语言 zh-CN')).toBeInTheDocument()
   })
 
+  it('点完动作工具条不自动关闭:复制之后还能接着划', async () => {
+    // jsdom 没有 clipboard,补一个写入写出的存根。
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn(async () => undefined) },
+      configurable: true,
+    })
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('复制'))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(SELECTION.text))
+    // 历史回归:复制后工具条留着,不自动收起。
+    expect(document.querySelector('.selection-toolbar')).not.toBeNull()
+  })
+
+  it('应用高亮后工具条留着,并转入这条划线的编辑模徟', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('应用背景高亮'))
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(1))
+    // 不关:还能接着改色。
+    expect(document.querySelector('.selection-toolbar')).not.toBeNull()
+    // 编辑模式:多出一颗「取消标注」,再点色板是改这条而不是叠新的。
+    await waitFor(() => expect(within(toolbar).queryByTitle('取消标注')).not.toBeNull())
+    fireEvent.click(within(toolbar).getByLabelText('蓝色划线'))
+    await waitFor(() => expect(adapter.removeAnnotation).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(adapter.createAnnotation).toHaveBeenCalledTimes(2))
+    expect(adapter.createAnnotation.mock.calls[1]?.[0]).toMatchObject({ color: '#86b6f0' })
+  })
+
+  it('翻译后工具条不关,翻译卡落在工具下方', async () => {
+    invokeMock.mockImplementation((command) => {
+      if (command === 'ai.config.list') return Promise.resolve({ providers: [PROVIDER] }) as never
+      return Promise.resolve(respond(command)) as never
+    })
+    withStreamOutput('LANG:zh-CN\n---\nThe wick crackled.')
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('翻译'))
+    const card = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.translate-card')
+      if (node === null) throw new Error('翻译卡没出现')
+      return node
+    })
+    // 工具条还在(选区没被清),且卡片落在它下方。
+    expect(document.querySelector('.selection-toolbar')).not.toBeNull()
+    const toolbarBox = toolbar.getBoundingClientRect()
+    const cardBox = card.getBoundingClientRect()
+    expect(cardBox.top).toBeGreaterThanOrEqual(toolbarBox.bottom)
+  })
+
+  it('朗读此处走 TTS 管线:开朗读面板,选匾留给声音定位', async () => {
+    const { adapter } = await renderReader()
+    const toolbar = await selectText(adapter)
+
+    fireEvent.click(within(toolbar).getByTitle('朗读此处'))
+    // 面板打开(TtsDrawer 在测试里是替身,看到它就算接线成功)。
+    expect(await screen.findByTestId('tts')).toBeInTheDocument()
+    // 选区不清:声音起播后工具条还能改龙色/写笔记。
+    expect(document.querySelector('.selection-toolbar')).not.toBeNull()
+    expect(adapter.createAnnotation).not.toHaveBeenCalled()
+  })
+
+  it('编辑模式:工具条锚在划线的实测框,不落左上角', async () => {
+    withOneAnnotation()
+    const { adapter } = await renderReader()
+    // jsdom 的 getBoundingClientRect 恒为 0,不给阅读区一个真实矩形就分不出
+    // 「锚在划线」和「锚在 (0,0)」——两者都被夹成同一处。
+    const host = document.querySelector<HTMLElement>('[data-reading-content]')
+    expect(host).not.toBeNull()
+    vi.spyOn(host as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+      top: 100,
+      left: 50,
+      right: 900,
+      bottom: 700,
+      width: 850,
+      height: 600,
+      x: 50,
+      y: 100,
+    } as DOMRect)
+    adapter.rectOfAnnotation.mockReturnValue({ top: 400, left: 300, height: 20 })
+
+    adapter.emitShowAnnotation('epubcfi(/6/4!/4/2)')
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('编辑工具栏没出现')
+      return node
+    })
+
+    // 锚点是内核把 CFI 解回 Range 现测的,CFI 原样交给它。
+    expect(adapter.rectOfAnnotation).toHaveBeenCalledWith('epubcfi(/6/4!/4/2)')
+    // 落点按 selection-place 的算术:横向以选区居中夹进阅读区,垂直贴选区下方。
+    // 旧行为(rect 回落 0,0)会把面板钉在阅读区左上角(62px / 112px)。
+    expect(toolbar.style.left).toBe('114px')
+    expect(toolbar.style.top).toBe('422px')
+  })
+
+  it('编辑模式点朗读:用划线自己的文本开 TTS 面板', async () => {
+    withOneAnnotation()
+    const { adapter } = await renderReader()
+    adapter.emitShowAnnotation('epubcfi(/6/4!/4/2)')
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('编辑工具栏没出现')
+      return node
+    })
+
+    // 历史回归:编辑模式没有伴随选区,speakSelection 曾经直接 return,
+    // 点朗读毫无反应,只能手动去面板里按播放(从章首念)。
+    fireEvent.click(within(toolbar).getByTitle('朗读此处'))
+    expect(await screen.findByTestId('tts')).toBeInTheDocument()
+  })
+
+  it('点空白关掉划词工具条:不翻页', async () => {
+    const { adapter } = await renderReader()
+    await selectText(adapter)
+
+    // 点空白(内核报空选区)——工具条收起。翻页只认按钮/键盘/触控板,
+    // 点按内容永远不翻页(曾经的怪 bug:关工具条的那一下会翻页)。
+    adapter.emitSelection(null)
+    await waitFor(() => {
+      expect(document.querySelector('.selection-toolbar')).toBeNull()
+    })
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+  })
+
+  it('点已有划线开出工具条:不翻页', async () => {
+    withOneAnnotation()
+    const { adapter } = await renderReader()
+    // 真实顺序:pointerup 先报空选区,内核再派发 click → show-annotation。
+    adapter.emitSelection(null)
+    adapter.emitShowAnnotation('epubcfi(/6/4!/4/2)')
+
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('编辑工具栏没出现')
+      return node
+    })
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+    expect(toolbar).not.toBeNull()
+  })
+
   it('没配 AI 服务时说明原因,而不是给出假的译文', async () => {
     const { adapter } = await renderReader()
     const toolbar = await selectText(adapter)
     fireEvent.click(within(toolbar).getByTitle('翻译'))
-    await waitFor(() => expect(screen.queryByLabelText('翻译')).not.toBeInTheDocument())
+    // 没有译文卡片(工具栏上那颗「翻译」按钮本身也叫这个名,所以查卡片类)。
+    await waitFor(() => expect(document.querySelector('.translate-card')).toBeNull())
     expect(streamMock).not.toHaveBeenCalled()
     expect(await screen.findByText(/还没有配置 AI 服务/)).toBeInTheDocument()
   })

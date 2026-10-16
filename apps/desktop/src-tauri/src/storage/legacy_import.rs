@@ -107,13 +107,17 @@ fn import_one_reader_state(conn: &Connection, hash: &str, value: &Value) -> Resu
     if let Some(annotations) = value.get("annotations").and_then(|v| v.as_array()) {
         for a in annotations {
             conn.execute(
-                "INSERT OR REPLACE INTO annotations (id, book_hash, cfi, color, note, excerpt)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR REPLACE INTO annotations (id, book_hash, cfi, color, style, note, excerpt)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     a.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                     hash,
                     a.get("cfi").and_then(|v| v.as_str()).unwrap_or_default(),
                     a.get("color").and_then(|v| v.as_str()).unwrap_or_default(),
+                    // 旧格式没有 style,一律按背景高亮入账。
+                    a.get("style")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("highlight"),
                     a.get("note").and_then(|v| v.as_str()),
                     a.get("excerpt").and_then(|v| v.as_str()),
                 ],

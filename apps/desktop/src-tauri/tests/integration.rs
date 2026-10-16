@@ -47,6 +47,7 @@ fn sample_state() -> ReaderState {
             id: "note-1".into(),
             cfi: "epubcfi(/6/6)".into(),
             color: "yellow".into(),
+            style: "highlight".into(),
             note: Some("我的笔记".into()),
             excerpt: Some("正文内容。".into()),
             updated_at: None,

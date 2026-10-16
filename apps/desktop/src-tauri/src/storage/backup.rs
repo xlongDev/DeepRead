@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tauri::Manager as _;
 
 use crate::error::{AppError, ErrorCode};
+use crate::state::default_annotation_style;
 
 use super::Db;
 use super::migrations::migrate;
@@ -195,6 +196,9 @@ struct WebAnnotation {
     id: String,
     cfi: String,
     color: String,
+    /// 旧备份没有这一列:缺省即背景高亮(与迁移 v8 同一约定)。
+    #[serde(default = "default_annotation_style")]
+    style: String,
     #[serde(default)]
     note: Option<String>,
     #[serde(default)]
@@ -351,13 +355,14 @@ pub fn import_json_snapshot(
         for annotation in &state.annotations {
             tx.execute(
                 "INSERT OR REPLACE INTO annotations \
-                 (id, book_hash, cfi, color, note, excerpt, updated_at, deleted) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (id, book_hash, cfi, color, style, note, excerpt, updated_at, deleted) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     annotation.id,
                     state.hash,
                     annotation.cfi,
                     annotation.color,
+                    annotation.style,
                     annotation.note,
                     annotation.excerpt,
                     annotation.updated_at,
@@ -597,6 +602,7 @@ mod tests {
                 "progress": { "cfi": "epubcfi(/6/4)", "fraction": 0.42 },
                 "annotations": [{
                     "id": "n1", "cfi": "epubcfi(/6/6)", "color": "yellow",
+                    "style": "highlight",
                     "note": "我的笔记", "excerpt": "原文"
                 }],
                 "bookmarks": [],
