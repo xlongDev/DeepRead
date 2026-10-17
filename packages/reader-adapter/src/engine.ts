@@ -27,7 +27,13 @@ import {
   type TextRange,
   type TocItem,
 } from '@deepread/reader-core'
-import type { FoliateAnnotation, FoliateTocItem, View, ViewLocation } from 'foliate-js/view.js'
+import type {
+  FoliateAnnotation,
+  FoliateRenderer,
+  FoliateTocItem,
+  View,
+  ViewLocation,
+} from 'foliate-js/view.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
 import { isSupported } from './format'
 import { AnnotationRegistry } from './annotation-registry'
@@ -350,6 +356,8 @@ export class FoliateAdapter implements ReaderEngine {
   #adapterBuiltText: { format: 'txt' | 'md'; title: string; text: string } | null = null
   /** 用户章节规则(空 = 只用内置规则);rebuildChapters 时整体替换。 */
   #chapterRules: readonly ChapterRule[] = []
+  /** 已装 renderer 守卫的 view:按实例只装一次(双适配器共用时后者重装亦无害)。 */
+  #guardedViews = new WeakSet<View>()
 
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.#host = host
@@ -363,6 +371,33 @@ export class FoliateAdapter implements ReaderEngine {
     view.renderer.setStyles?.(
       buildReaderCSS(this.#theme, this.#layout, this.#flow, this.#fontFaces),
     )
+  }
+
+  /**
+   * 把「当前 renderer 一定挂着 `animated`」变成不变量。
+   *
+   * foliate 的 view.open() 每次开书都新建 paginator 并赋给 view.renderer,
+   * 后到的 open 会把先到者挂上的属性一起换掉。两个适配器共用一个 view
+   * (StrictMode 双挂载的采用路径)时两次 open 并发,竞态胜出的那次开书
+   * 会留下一个没有 animated 的 paginator:内核 `#turnPage` 的 wait(100)
+   * debounce 复活,「翻页闪一下」跟着复活(Chromium 实测复现率约 1/3,
+   * 只在 open() 里事后补挂补不及这个竞态)。在实例上拦 renderer 赋值,
+   * 换谁给谁补挂。
+   */
+  #guardRendererAnimated(view: View): void {
+    if (this.#guardedViews.has(view)) return
+    this.#guardedViews.add(view)
+    let current: FoliateRenderer | undefined = view.renderer
+    Object.defineProperty(view, 'renderer', {
+      configurable: true,
+      get: () => current,
+      set: (renderer: FoliateRenderer | undefined) => {
+        current = renderer
+        renderer?.setAttribute('animated', '')
+      },
+    })
+    // 采用孤儿 view(它已经开过书)时,给手上的这个补挂。
+    current?.setAttribute('animated', '')
   }
 
   #requireView(): View {
@@ -444,6 +479,7 @@ export class FoliateAdapter implements ReaderEngine {
       this.#callbacks.onShowAnnotation?.(value)
     })
     this.#view = view
+    this.#guardRendererAnimated(view)
     if (!existing) this.#host.append(view)
     return view
   }
@@ -655,12 +691,40 @@ export class FoliateAdapter implements ReaderEngine {
     }
   }
 
-  async nextPage(): Promise<void> {
-    await this.#requireView().next()
+  async nextPage(options?: { animate?: boolean }): Promise<void> {
+    const view = this.#requireView()
+    await this.#turnPage(view, () => view.next(), options)
   }
 
-  async previousPage(): Promise<void> {
-    await this.#requireView().prev()
+  async previousPage(options?: { animate?: boolean }): Promise<void> {
+    const view = this.#requireView()
+    await this.#turnPage(view, () => view.prev(), options)
+  }
+
+  /**
+   * 翻页的动画开关。foliate-paginator 的 `animated` 布尔属性控制两件事:
+   * ① `#turnPage` 末尾的 `wait(100)` debounce —— 不挂属性时每次翻页都
+   *    强制空等 100ms,宿主动画(WAAPI 两段式)夹着这 100ms 空窗,用户看到
+   *    的就是「翻页闪一下」;② `#scrollTo` 的 smooth 分支 —— 挂上后内核
+   *    自己播 300ms easeOutQuad 滑动,是 iframe 内的真实内容运动。
+   * 调用方传 `animate: false`(宿主自己包动画)时临时摘下属性、翻完恢复,
+   * 不影响之后的触摸滑动 snap。
+   */
+  async #turnPage(
+    view: View,
+    turn: () => Promise<void>,
+    options?: { animate?: boolean },
+  ): Promise<void> {
+    const animate = options?.animate ?? true
+    view.renderer?.toggleAttribute('animated', animate)
+    try {
+      await turn()
+    } finally {
+      // 恢复默认态(挂上),不恢复进场时捕获的旧值:翻页期间 renderer 可能被
+      // 并发开书换掉,拿旧值恢复会把已经丢失的属性永久留在 false。默认态
+      // 就是 animated,见 #guardRendererAnimated。
+      view.renderer?.toggleAttribute('animated', true)
+    }
   }
 
   /** Total kernel spine sections (TTS 听书 uses this to detect book end). */

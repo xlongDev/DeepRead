@@ -35,8 +35,13 @@ export interface ReaderEngine {
 
   getCurrentLocation(): Promise<ReadingLocation>
   goTo(location: ReadingLocation): Promise<void>
-  nextPage(): Promise<void>
-  previousPage(): Promise<void>
+  /**
+   * 翻页。`animate: false` 时内核必须瞬间完成翻页(调用方自己包了动画) —
+   * foliate 的翻页默认带 100ms debounce,那段空窗露在动画中间就是用户
+   * 看到的「翻页闪一下」。默认 true(内核自带的 animated 滑动)。
+   */
+  nextPage(options?: { animate?: boolean }): Promise<void>
+  previousPage(options?: { animate?: boolean }): Promise<void>
 
   search(query: string): Promise<readonly SearchResult[]>
   getText(range?: TextRange): Promise<string>

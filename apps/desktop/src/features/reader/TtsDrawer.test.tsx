@@ -214,6 +214,9 @@ async function flush(): Promise<void> {
   })
 }
 
+/** 形态切换退场窗口(TtsDrawer 的 LEAVE_MS)+ 一点余量。 */
+const LEAVE_TEST_MS = 250
+
 /** 推进真实定时器(seek 60ms / ticker 60ms)与 rAF 跟词循环。
  *  先冲刷 rAF:跟词循环报回的词边界是 ticker 的输入,顺序反了 ticker 读到的
  *  还是上一个位置的旧值。 */
@@ -646,8 +649,10 @@ describe('取消与收起', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(props.onMinimize).toHaveBeenCalledTimes(1)
 
-    // 父层按 minimized=true 重渲染 → 迷你条;点开走 onExpand。
+    // 父层按 minimized=true 重渲染:先播 190ms 完整抽屉退场,然后换迷你条。
     view.rerender(<TtsDrawer {...props} minimized />)
+    await advance(LEAVE_TEST_MS)
+    // 点开走 onExpand(迷你条上两个展开入口:标题区与展开钮)。
     fireEvent.click(screen.getByTitle('展开播放器'))
     expect(props.onExpand).toHaveBeenCalledTimes(1)
   })

@@ -8,6 +8,8 @@ import { ReaderScreen } from './features/reader/ReaderScreen'
 export function App() {
   const [backend, setBackend] = useState<AppInfo | null>(null)
   const [book, setBook] = useState<OpenedBook | null>(null)
+  /** 阅读器隐藏而非卸载:TTS 还在播时退到书架,听书跨屏继续。 */
+  const [readerHidden, setReaderHidden] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -52,9 +54,31 @@ export function App() {
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- runs once per mount
   }, [])
 
+  // 从书架开书:显示阅读器;若上一本还藏在后面听书,连书带播放一起换掉。
+  const openBook = (next: OpenedBook): void => {
+    setBook(next)
+    setReaderHidden(false)
+  }
+
+  // 返回书架:TTS 在播(含暂停)→ 隐藏阅读器保留播放;否则卸载收内存。
+  // # ponytail: 隐藏期间整本书的 iframe 仍驻留内存(数十 MB 量级),
+  //   换来的是听书跨屏连读 —— 若以后要省内存,在章末停播即可。
+  const backToLibrary = (ttsPlaying: boolean): void => {
+    if (ttsPlaying) setReaderHidden(true)
+    else setBook(null)
+  }
+
   return book === null ? (
-    <LibraryScreen onOpenBook={setBook} backend={backend} />
+    <LibraryScreen onOpenBook={openBook} backend={backend} />
   ) : (
-    <ReaderScreen key={book.bookId} book={book} onBack={() => setBook(null)} />
+    <div hidden={readerHidden}>
+      <ReaderScreen
+        key={book.bookId}
+        book={book}
+        onBack={backToLibrary}
+        hidden={readerHidden}
+        onRequestShow={() => setReaderHidden(false)}
+      />
+    </div>
   )
 }

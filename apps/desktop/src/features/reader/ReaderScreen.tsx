@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ArrowLeft,
   ArrowRight,
@@ -101,6 +102,7 @@ import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { anchorFromRect, placeCompanionCard, windowFrame } from './selection-place'
+import { animatePageTurn } from './page-turn'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 import { primeTtsAudio } from './tts/audio'
 import type { OpenedBook } from '../../lib/book-import'
@@ -118,7 +120,15 @@ const LOOKUP_CARD_HEIGHT = 280
 
 interface ReaderScreenProps {
   readonly book: OpenedBook
-  readonly onBack: () => void
+  /**
+   * 返回书架。`ttsPlaying` = TTS 仍在播(含暂停):宿主应隐藏而不是卸载,
+   * 让听书跨屏继续;没有在播就正常卸载收内存。
+   */
+  readonly onBack: (ttsPlaying: boolean) => void
+  /** 阅读器被宿主隐藏(退到书架但听书继续)时为 true。 */
+  readonly hidden?: boolean
+  /** 隐藏期间用户点迷你条「展开」:请宿主切回阅读器。 */
+  readonly onRequestShow?: () => void
 }
 
 type Phase = 'opening' | 'reading' | 'error'
@@ -188,7 +198,7 @@ function toAnnotationStyle(style: string | undefined): AnnotationStyle {
 
 const ttsCoverCache = new Map<string, string>()
 
-export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
+export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: ReaderScreenProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const adapterRef = useRef<FoliateAdapter | null>(null)
   const callbacksRef = useRef<EngineCallbacks>({})
@@ -218,8 +228,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     pageMargin: storedTypography.pageMargin ?? 72,
     paragraphMargin: storedTypography.paragraphMargin,
   })
-  /** 进行中的 View Transition 计数:连翻两页时根节点的动画属性不能提前清掉。 */
-  const vtDepthRef = useRef(0)
   /** True while the progress slider is being dragged or key-stepped. */
   const scrubbingRef = useRef(false)
 
@@ -292,6 +300,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
   const [ttsMinimized, setTtsMinimized] = useState(false)
   const [ttsActive, setTtsActive] = useState(false)
+  /**
+   * TTS 会话开关:从「朗读此处」到真正出声之间有个 idle 间隙(取章节文本 +
+   * 合成请求都还没回来,ttsActive 仍为 false),只靠 ttsActive 挂载抽屉会在
+   * 这个间隙把它卸掉 —— 起播闭包随卸载作废,用户看到「点了朗读没反应」。
+   * 会话开启后只有停止并关闭(×)才熄灭。
+   */
+  const [ttsSession, setTtsSession] = useState(false)
   const ttsDrawerRef = useRef<TtsDrawerHandle>(null)
   /** 划词工具的「朗读此处」:选区文本 + 起点偏移等在这,等 TTS 抽屉挂载
    *  后起播。「开面板」和「起播」必须分两步 —— ref 在抽屉挂载前是 null。
@@ -300,6 +315,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     readonly text: string
     readonly start: number | null
   } | null>(null)
+  /**
+   * TTS 抽屉是否挂着(portal 到 body 的那一个)。三态任一为真即挂着:
+   * 面板开着 / 在播(含暂停)/ 会话进行中(起播间隙)。
+   * Escape 的归属看它:抽屉在时 Esc 归抽屉(收起成迷你条),
+   * ReaderScreen 若也清 openPanel,抽屉连最小化那一帧都画不出来就被卸载。
+   */
+  const ttsMounted = openPanel === 'tts' || ttsActive || ttsSession
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
   )
@@ -655,16 +677,16 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [book])
 
   // 「朗读此处」的第二拍:抽屉挂载后(ref 就位)把等的文本交给它。
-  // 面板开着 + 有待播文本才动手;文本在调用瞬间就被清掉,重复渲染不会
-  // 重放同一段( StrictMode 的双调 effect 也只会播一次)。
+  // 有待播文本就动手(迷你条形态直接起播);文本在调用瞬间就被清掉,
+  // 重复渲染不会重放同一段(StrictMode 的双调 effect 也只会播一次)。
   useEffect(() => {
-    if (pendingSpeak === null || openPanel !== 'tts') return
+    if (pendingSpeak === null) return
     const drawer = ttsDrawerRef.current
     if (drawer === null) return
     const { text, start } = pendingSpeak
     setPendingSpeak(null)
     drawer.speakFromText(text, start)
-  }, [pendingSpeak, openPanel])
+  }, [pendingSpeak])
 
   // One bounded snippet of the current section, refreshed when the drawer
   // opens — enough context for explanations without shipping the whole book.
@@ -841,49 +863,41 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }, [chromeVisible, openPanel, selection, activeAnnotation, noteDraft])
 
   /**
-   * 翻页动画(View Transitions):内核瞬时换页,浏览器对书页层做新旧快照
-   * 分层过渡(.reader-host 携带 view-transition-name,顶栏/底栏/面板静止)。
-   * 旧方案的"整体 host 加 class 再翻页"在时序上脆弱且背景一起动,被感知为
-   * 整页重绘闪烁;VT 由内核截图,没有时序问题。不支持 VT 的内核(旧
-   * WKWebView/webkitgtk)、"无"动画档或滚动模式退化为瞬时翻页。
+   * 翻页动画分两条路:
+   * - 「滑动」档(默认)借内核自带的 animated 翻页:foliate-paginator 挂上
+   *   `animated` 后自己播 300ms easeOutQuad 滑动,是 iframe 内的**真实内容
+   *   运动**,全程无空窗。旧实现(宿主 WAAPI 两段动画夹一次内核翻页)中间
+   *   必露一段空窗 ——  foliate `#turnPage` 默认每次翻页强制 `wait(100)`
+   *   debounce,旧页滑出后屏幕只剩纸色 ~100ms 再滑入新页,这就是用户看到
+   *   的「翻页闪一下」。且 transform 动在 iframe 的祖先层,WKWebView 下
+   *   还有提层瞬间的栅格闪烁风险。
+   * - 「覆盖/仿真/淡入」档走宿主 WAAPI 两段动画(见 page-turn.ts),这时
+   *   内核必须**瞬间**翻页(传 animate:false 摘下 debounce),空窗由 page-turn
+   *   的「停车」钉在不可见状态。
    * 翻页不唤起工具栏:沉浸阅读时翻页不应打断 chrome 的显隐节奏。
    */
   const turnPage = useCallback(
     async (dir: 'next' | 'prev'): Promise<void> => {
       const adapter = adapterRef.current
       if (!adapter) return
-      const flip = (): Promise<void> =>
-        dir === 'next' ? adapter.nextPage() : adapter.previousPage()
-      const documentVt = document as unknown as {
-        startViewTransition?: (update: () => Promise<void> | void) => { finished: Promise<unknown> }
-      }
-      const startViewTransition = documentVt.startViewTransition
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      const animate =
-        pageTurnStyle !== 'none' &&
-        startViewTransition !== undefined &&
-        !reducedMotion &&
-        viewMode !== 'scroll'
-      if (animate) {
-        const root = document.documentElement
-        root.dataset.turnStyle = pageTurnStyle
-        root.dataset.turnDir = dir
-        vtDepthRef.current += 1
-        try {
-          const transition = startViewTransition(flip)
-          await transition.finished.catch(() => {})
-        } catch {
-          await flip()
-        } finally {
-          vtDepthRef.current -= 1
-          if (vtDepthRef.current === 0) {
-            delete root.dataset.turnStyle
-            delete root.dataset.turnDir
-          }
+      const animated = pageTurnStyle !== 'none' && !reducedMotion && viewMode !== 'scroll'
+      // 滑动档 = 内核动画;其余档位 = 宿主动画(内核瞬间翻)。
+      const kernelAnimated = animated && pageTurnStyle === 'slide'
+      const flip = (): Promise<void> =>
+        dir === 'next'
+          ? adapter.nextPage({ animate: kernelAnimated })
+          : adapter.previousPage({ animate: kernelAnimated })
+      if (animated && pageTurnStyle !== 'slide') {
+        const host = hostRef.current
+        if (host !== null && typeof host.animate === 'function') {
+          // 动画失败(内核翻页抛错等)不向调用方冒泡 —— 按钮的 void 调用
+          // 会把 rejection 变成 unhandled,而翻页失败不值得打断阅读。
+          await animatePageTurn(host, pageTurnStyle, dir, flip).catch(() => {})
+          return
         }
-      } else {
-        await flip()
       }
+      await flip().catch(() => {})
     },
     [pageTurnStyle, viewMode],
   )
@@ -899,6 +913,8 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   // 方向键切页:window 与书内 iframe 两个入口共用同一处理。
   const handleReaderKey = useCallback(
     (event: KeyboardEvent): void => {
+      // 隐藏态(退到书架听书):按键属于书架界面,别在背后偷偷翻页/关面板。
+      if (hidden) return
       const action = readerKeyAction(event)
       if (action === null) return
       // 除全屏外,内核未就绪时不处理按键。
@@ -917,6 +933,10 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         void turnPage('next')
       } else if (action === 'prev') {
         void turnPage('prev')
+      } else if (ttsMounted) {
+        // Esc 归 TtsDrawer:它把自己收起成迷你条(播放不中断)。这里若跟着
+        // 清 openPanel,抽屉在「最小化动画第一帧」就被卸载,用户看到的是
+        // 「按 Esc 面板直接关了,没有小条」。
       } else {
         setOpenPanel(null)
         setSelection(null)
@@ -924,7 +944,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         setNoteDraft(null)
       }
     },
-    [turnPage, toggleFullscreen],
+    [turnPage, toggleFullscreen, hidden, ttsMounted],
   )
 
   useEffect(() => {
@@ -1229,10 +1249,14 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
       note: source.note ?? '',
     })
 
-  /** 删除划线(列表 / 点中的划线两条路同一处收敛)。 */
+  /** 删除划线(列表 / 点中的划线两条路同一处收敛)。
+   *
+   *  乐观更新:先把 UI 收掉(墓碑落 state + scheduleSave),再交内核删绘制
+   *  —— 以前的顺序等内核返回才动 UI,而内核删除要解析 CFI,锚点偶尔解析
+   *  失败抛错,后面那句 setActiveAnnotation 永远跑不到,用户看到的就是
+   *  「点删除没反应」。墓碑本来就落库(跨设备也不复活),内核失败只少画
+   *  一帧,不值得让按钮装死。 */
   const removeAnnotation = async (id: string): Promise<void> => {
-    await adapterRef.current?.removeAnnotation(id)
-    // Keep a tombstone so other devices never resurrect this annotation.
     setAnnotations((current) =>
       current.map((record) =>
         record.id === id
@@ -1242,7 +1266,13 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     )
     setNoteDraft((current) => (current?.id === id ? null : current))
     setActiveAnnotation(null)
+    setActiveAnnotationRect(null)
     scheduleSave()
+    try {
+      await adapterRef.current?.removeAnnotation(id)
+    } catch {
+      // 墓碑已落:重开会书不会重建这条划线,内核残留的绘制随重开消失。
+    }
   }
 
   /**
@@ -1308,8 +1338,10 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
    * 起点仍由 locateSpeechUnit 在正文里现找 —— 划线在屏幕上,excerpt 就一定能
    * 落回当前章的某一句。
    *
-   * 起播机制:先开 TTS 面板(抽屉随即安装),选区文本存进 pendingSpeak;
-   * drawer 挂载后 effect 经 ref 调 speakFromText,起始句由它定位。
+   * 起播形态:直接落到**迷你播放条**(合成中带波形动画),不开整块抽屉 ——
+   * 划词朗读是「读这一段」的轻动作,全屏抽屉把正文遮掉一半太重。选区文本
+   * 存进 pendingSpeak;drawer 挂载后 effect 经 ref 调 speakFromText。
+   * 划词工具条随朗读关闭:播放控制在迷你条上,留着它只会遮住正文。
    */
   const speakSelection = useCallback((): void => {
     // 选区的文本与偏移优先;编辑模式回退到划线自己的 excerpt(没有偏移,
@@ -1322,9 +1354,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     // 而首个 clip 的合成在两次 await 之后(章节文本 + 供应商往返),手势早已
     // 过期。不在这里解锁,用户看到的就是「点了朗读没反应,再点播放才响」。
     primeTtsAudio()
-    // 不关选区:播放控制在 TTS 面板里,选区留给声音定位。
-    setTtsMinimized(false)
-    setOpenPanel('tts')
+    setSelection(null)
+    setActiveAnnotation(null)
+    setActiveAnnotationRect(null)
+    setTtsMinimized(true)
+    setOpenPanel(null)
+    setTtsSession(true)
     setPendingSpeak({ text, start: selection?.start ?? null })
   }, [selection, annotations, activeAnnotation])
 
@@ -1657,11 +1692,20 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
   }
 
   const theme = READER_THEMES[themeIndex] ?? READER_THEMES[0]!
+  /** 阅读主题变量:阅读器根层与 TTS 播放器的 portal 外壳共用同一份 ——
+   *  播放器 portal 到 body 后就离开了 .reader-scope,变量得随身带。 */
+  const readerVars = {
+    '--reader-bg': theme.theme.background,
+    '--reader-fg': theme.theme.foreground,
+    '--reader-panel': withAlpha(theme.theme.background, 0.86),
+    '--reader-panel-solid': theme.theme.background,
+  } as React.CSSProperties
   const liveBookmarks = bookmarks.filter((b) => !b.deleted)
   const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
   const liveAnnotations = annotations.filter((a) => !a.deleted)
-  /** 当前点中的那条划线(CFI 是内核回传的锚点)。 */
-  const activeRecord = annotations.find((a) => a.cfi === activeAnnotation)
+  /** 当前点中的那条划线(CFI 是内核回传的锚点;墓碑不算数,否则刚删完的
+   *  划线会在工具条上残留一帧「还在编辑」的假象)。 */
+  const activeRecord = annotations.find((a) => a.cfi === activeAnnotation && !a.deleted)
   /** 「本章」= 当前页 CFI 所在的那一节;解析不出就按全书给,好过给个错的。 */
   const currentChapter = progress.cfi === null ? null : cfiChapter(progress.cfi)
   const shownAnnotations =
@@ -1706,17 +1750,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
     ))
 
   return (
-    <div
-      className="reader-scope"
-      style={
-        {
-          '--reader-bg': theme.theme.background,
-          '--reader-fg': theme.theme.foreground,
-          '--reader-panel': withAlpha(theme.theme.background, 0.86),
-          '--reader-panel-solid': theme.theme.background,
-        } as React.CSSProperties
-      }
-    >
+    <div className="reader-scope" style={readerVars}>
       {/* 浏览器端导入阅读字体用(桌面端走 openFileDialog,不会碰它)。 */}
       <input
         ref={fontInputRef}
@@ -1737,10 +1771,12 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             必须留在阅读区里,而不是挂到窗口边(窗口比阅读卡片宽,圆角处会露头)。 */}
         <div ref={hostRef} className="reader-host" data-reading-content />
 
-        {/* 左右悬浮翻页钮:贴近边缘悬停时浮现。 */}
+        {/* 左右悬浮翻页钮:常驻低透明度胶囊,悬停浮现;按下不冒泡 ——
+            点翻页不该顺带唤起顶栏/底栏(每次点击「闪一下」的来源)。 */}
         <button
           type="button"
           className="page-flip page-flip-left"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={() => void turnPage('prev')}
           title="上一页"
           aria-label="上一页"
@@ -1750,6 +1786,7 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         <button
           type="button"
           className="page-flip page-flip-right"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={() => void turnPage('next')}
           title="下一页"
           aria-label="下一页"
@@ -1763,14 +1800,24 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
         {phase === 'error' && (
           <div className="reader-error" role="alert">
             <p>{error}</p>
-            <button type="button" className="reader-error-button" onClick={onBack}>
+            <button type="button" className="reader-error-button" onClick={() => onBack(false)}>
               返回书架
             </button>
           </div>
         )}
 
         <header className="reader-top">
-          <button type="button" className="chrome-button" onClick={onBack} title="返回书架">
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={() => {
+              // 听书还在播时收成迷你条再退场:宿主会隐藏(而非卸载)阅读器,
+              // 朗读跨屏继续;没在播就直接走。
+              setTtsMinimized(true)
+              onBack(ttsActive)
+            }}
+            title="返回书架"
+          >
             <ArrowLeft size={18} weight="regular" aria-hidden />
           </button>
           <span className="reader-title">{title}</span>
@@ -2477,45 +2524,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           />
         )}
 
-        {(openPanel === 'tts' || ttsActive) && (
-          <TtsDrawer
-            ref={ttsDrawerRef}
-            bookHash={book.hash}
-            bookTitle={title}
-            bookLanguage={bookLanguage}
-            coverUrl={ttsCoverUrl}
-            sectionLabel={sectionLabel}
-            minimized={ttsMinimized || openPanel !== 'tts'}
-            onPlayingChange={setTtsActive}
-            getSectionText={ttsGetSectionText}
-            jumpSection={ttsJumpSection}
-            onHighlight={(highlight) => {
-              const adapter = adapterRef.current
-              if (!adapter) return
-              if (highlight === null) {
-                void adapter.clearTTSHighlight()
-                return
-              }
-              void adapter.setTTSHighlightByOffset(highlight.start, highlight.end, highlight.color)
-            }}
-            onExpand={() => {
-              setTtsMinimized(false)
-              setOpenPanel('tts')
-            }}
-            onMinimize={() => setTtsMinimized(true)}
-            onClose={() => {
-              // 真正停止播放:TtsDrawer 的 stop() 会走 onPlayingChange(false),
-              // 父层 ttsActive 同步置 false,TtsDrawer 因此卸载。原先只切面板
-              // 状态,而 mini 的触发条件是 ttsMinimized || openPanel !== 'tts',
-              // 单独 setTtsMinimized(false) 不改 openPanel 仍判定为 mini —
-              // 用户看到的就是「点 × 没反应」。
-              ttsDrawerRef.current?.stop()
-              setTtsMinimized(false)
-              setOpenPanel((panel) => (panel === 'tts' ? null : panel))
-            }}
-          />
-        )}
-
         {openPanel === 'learning' && (
           <LearningDrawer
             bookHash={book.hash}
@@ -2525,7 +2533,6 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
             onClose={() => setOpenPanel(null)}
           />
         )}
-
         {(selection !== null || activeRecord !== undefined) && (
           <SelectionToolbar
             rect={selection?.rect ?? activeAnnotationRect ?? { top: 0, left: 0, height: 0 }}
@@ -2710,6 +2717,60 @@ export function ReaderScreen({ book, onBack }: ReaderScreenProps) {
           </div>
         )}
       </div>
+
+      {/* TTS 播放器:portal 到 body —— 退到书架听书时阅读器整体隐藏,
+          播放条必须活在那层隐藏之外。.reader-scope 外壳(display:contents)
+          带阅读主题变量,毛玻璃与文字色在任何阅读主题下都跟书走;它必须在
+          portal 里面 —— 包在 createPortal 外面的话,变量壳会留在阅读器树里
+          当空壳,播放条在 body 上直接裸奔(夜间白底深字,书名看不见)。 */}
+      {ttsMounted &&
+        createPortal(
+          <div className="reader-scope" style={readerVars}>
+            <TtsDrawer
+              ref={ttsDrawerRef}
+              bookHash={book.hash}
+              bookTitle={title}
+              bookLanguage={bookLanguage}
+              coverUrl={ttsCoverUrl}
+              sectionLabel={sectionLabel}
+              minimized={ttsMinimized || openPanel !== 'tts'}
+              onPlayingChange={setTtsActive}
+              getSectionText={ttsGetSectionText}
+              jumpSection={ttsJumpSection}
+              onHighlight={(highlight) => {
+                const adapter = adapterRef.current
+                if (!adapter) return
+                if (highlight === null) {
+                  void adapter.clearTTSHighlight()
+                  return
+                }
+                void adapter.setTTSHighlightByOffset(
+                  highlight.start,
+                  highlight.end,
+                  highlight.color,
+                )
+              }}
+              onExpand={() => {
+                setTtsMinimized(false)
+                setOpenPanel('tts')
+                // 在书架展开完整播放器 = 想回到这本书。
+                if (hidden) onRequestShow?.()
+              }}
+              onMinimize={() => setTtsMinimized(true)}
+              onClose={() => {
+                // 真正停止播放:TtsDrawer 的 stop() 会走 onPlayingChange(false),
+                // 父层 ttsActive 同步置 false,TtsDrawer 因此卸载。会话标志一并
+                // 熄灭 —— 只清 ttsActive 的话,「×」后 ttsSession 还开着,抽屉
+                // 会以待机形态赖着不走(用户看到的就是「点 × 没反应」)。
+                ttsDrawerRef.current?.stop()
+                setTtsSession(false)
+                setTtsMinimized(false)
+                setOpenPanel((panel) => (panel === 'tts' ? null : panel))
+              }}
+            />
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

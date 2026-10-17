@@ -66,7 +66,17 @@ vi.mock('./reader-options', async (importOriginal) => {
 })
 
 vi.mock('./AiDrawer', () => ({ AiDrawer: () => <div data-testid="ai" /> }))
-vi.mock('./TtsDrawer', () => ({ TtsDrawer: () => <div data-testid="tts" /> }))
+// 替身播放器留一个「上报播放态」的钩子:onPlayingChange 是 ReaderScreen
+// 判断「TTS 会话是否活着」的唯一来源(返回书架时决定卸载还是隐藏)。
+vi.mock('./TtsDrawer', () => ({
+  TtsDrawer: ({ onPlayingChange }: { onPlayingChange: (playing: boolean) => void }) => (
+    <div data-testid="tts">
+      <button type="button" onClick={() => onPlayingChange(true)}>
+        fake-play
+      </button>
+    </div>
+  ),
+}))
 vi.mock('./LearningDrawer', () => ({ LearningDrawer: () => <div data-testid="learning" /> }))
 
 const invokeMock = vi.mocked(invokeCommand)
@@ -244,6 +254,17 @@ describe('顶栏 10 键', () => {
     const { onBack } = await renderReader()
     fireEvent.click(screen.getByTitle('返回书架'))
     expect(onBack).toHaveBeenCalledTimes(1)
+    // 没在听书:false = 让 App 卸载阅读器收内存。
+    expect(onBack).toHaveBeenCalledWith(false)
+  })
+
+  it('听书播放中「返回书架」带 true:App 隐藏而非卸载,小播放条跨屏续播', async () => {
+    const { onBack } = await renderReader()
+    fireEvent.click(screen.getByTitle('朗读 / 听书'))
+    // 替身播放器上报「非 idle」→ ReaderScreen 的 ttsActive 置真。
+    fireEvent.click(within(screen.getByTestId('tts')).getByText('fake-play'))
+    fireEvent.click(screen.getByTitle('返回书架'))
+    expect(onBack).toHaveBeenCalledWith(true)
   })
 })
 
@@ -352,6 +373,18 @@ describe('Escape 关面板', () => {
     expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+  })
+
+  it('TTS 抽屉在时 Escape 不关面板:收起归抽屉自己(迷你条那帧要能画出来)', async () => {
+    await renderReader()
+    fireEvent.click(screen.getByTitle('朗读 / 听书'))
+    expect(await screen.findByTestId('tts')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    // ReaderScreen 不清 openPanel:抽屉(真实现里收起成迷你条)保持挂载。
+    // 这里替身没有最小化视觉,锁的是「Escape 不会把 TTS 会话整个关掉」。
+    expect(screen.getByTestId('tts')).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByTestId('tts')).toBeInTheDocument()
   })
 })
 
@@ -906,6 +939,33 @@ describe('划选翻译', () => {
     expect(adapter.createAnnotation.mock.calls[1]?.[0]).toMatchObject({ color: '#86b6f0' })
   })
 
+  it('编辑模式点「取消标注」:先收 UI 再交内核,内核慢也不卡界面', async () => {
+    // 回归:旧实现 await 内核 removeAnnotation 后才动 UI,IPC 一慢(或挂起)
+    // 用户看到的就是「点了删除没反应」。现在 UI 先收敛,内核后台补交。
+    withOneAnnotation()
+    const { adapter } = await renderReader()
+    adapter.emitShowAnnotation('epubcfi(/6/4!/4/2)')
+    const toolbar = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('编辑工具栏没出现')
+      return node
+    })
+
+    let release: () => void = () => {}
+    adapter.removeAnnotation.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    fireEvent.click(within(toolbar).getByTitle('取消标注'))
+
+    // 工具条当即收起,不等内核回包。
+    await waitFor(() => expect(document.querySelector('.selection-toolbar')).toBeNull())
+    expect(adapter.removeAnnotation).toHaveBeenCalledWith('a1')
+    release()
+  })
+
   it('翻译后工具条不关,翻译卡落在工具下方', async () => {
     invokeMock.mockImplementation((command) => {
       if (command === 'ai.config.list') return Promise.resolve({ providers: [PROVIDER] }) as never
@@ -928,15 +988,17 @@ describe('划选翻译', () => {
     expect(cardBox.top).toBeGreaterThanOrEqual(toolbarBox.bottom)
   })
 
-  it('朗读此处走 TTS 管线:开朗读面板,选匾留给声音定位', async () => {
+  it('朗读此处走 TTS 管线:落到迷你播放条,划词工具条随之关闭', async () => {
     const { adapter } = await renderReader()
     const toolbar = await selectText(adapter)
 
     fireEvent.click(within(toolbar).getByTitle('朗读此处'))
-    // 面板打开(TtsDrawer 在测试里是替身,看到它就算接线成功)。
+    // 播放器挂载(TtsDrawer 在测试里是替身,看到它就算接线成功)。
     expect(await screen.findByTestId('tts')).toBeInTheDocument()
-    // 选区不清:声音起播后工具条还能改龙色/写笔记。
-    expect(document.querySelector('.selection-toolbar')).not.toBeNull()
+    // 划词工具条自动关闭:播放控制在迷你条上,留着它只会遮正文。
+    await waitFor(() => {
+      expect(document.querySelector('.selection-toolbar')).toBeNull()
+    })
     expect(adapter.createAnnotation).not.toHaveBeenCalled()
   })
 

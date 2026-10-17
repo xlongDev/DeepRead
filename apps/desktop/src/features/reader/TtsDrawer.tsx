@@ -15,6 +15,7 @@ import {
   CaretLeft,
   CaretRight,
   Check,
+  CornersOut,
   Highlighter,
   Pause,
   Play,
@@ -241,6 +242,20 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       return DEFAULT_SETTINGS
     }
   })
+  /**
+   * 形态切换动画:完整播放器 ↔ 迷你条不是瞬时互换 —— 旧形态先播一段退场
+   * (`is-leaving`),再挂新形态(自带入场)。`shown` 是当前在画的形态,
+   * `minimized` 是目标形态;两者不一致的间隙就是退场动画的窗口。
+   */
+  const LEAVE_MS = 190
+  const [shown, setShown] = useState<'mini' | 'full'>(minimized ? 'mini' : 'full')
+  useEffect(() => {
+    const target = minimized ? 'mini' : 'full'
+    if (target === shown) return
+    const timer = setTimeout(() => setShown(target), LEAVE_MS)
+    return () => clearTimeout(timer)
+  }, [minimized, shown])
+  const leaving = (minimized ? 'mini' : 'full') !== shown
   const [view, setView] = useState<'player' | 'voices'>('player')
   /** 语音面板的两栏:叙述者 / 角色。没有角色时只显示叙述者。 */
   const [voiceTab, setVoiceTab] = useState<'narrator' | 'roles'>('narrator')
@@ -795,10 +810,12 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           ? '全书结束'
           : `${settings.timerMinutes} 分钟`
 
-  // 迷你播放条:悬浮在底栏上方,不打断阅读;点击展开,× 停止。
-  if (minimized) {
+  // 迷你播放条:悬浮在底栏上方,不打断阅读。快捷键位:上一句 / 播放(强调) /
+  // 下一句 / 展开完整播放器 / 停止关闭。合成中第二行给波形动画,出错给错误行,
+  // 平时是进度条。点击整体区域展开。
+  if (shown === 'mini') {
     return (
-      <section className="tts-mini" aria-label="朗读迷你条">
+      <section className={`tts-mini${leaving ? ' is-leaving' : ''}`} aria-label="朗读迷你条">
         {coverUrl ? (
           <img src={coverUrl} className="tts-mini-cover" alt="" />
         ) : (
@@ -808,27 +825,73 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         )}
         <button type="button" className="tts-mini-open" onClick={onExpand} title="展开播放器">
           <span className="tts-mini-title">{bookTitle}</span>
-          <span className="tts-mini-progress">
-            <span
-              ref={miniFillRef}
-              className="tts-mini-progress-fill"
-              style={{ width: `${sentenceProgress * 100}%` }}
-            />
-          </span>
+          {error !== null ? (
+            <span className="tts-mini-error">{error}</span>
+          ) : phase === 'loading' ? (
+            <span className="tts-mini-wave" aria-label="正在合成语音" aria-live="polite">
+              <span aria-hidden />
+              <span aria-hidden />
+              <span aria-hidden />
+            </span>
+          ) : (
+            <span className="tts-mini-progress">
+              <span
+                ref={miniFillRef}
+                className="tts-mini-progress-fill"
+                style={{ width: `${sentenceProgress * 100}%` }}
+              />
+            </span>
+          )}
         </button>
         <button
           type="button"
           className="tts-mini-btn"
+          onClick={() => jumpSentences(-1)}
+          disabled={phase === 'idle'}
+          title="上一句"
+          aria-label="上一句"
+        >
+          <CaretLeft size={14} weight="bold" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="tts-mini-btn tts-mini-play"
           onClick={toggle}
           title={phase === 'playing' ? '暂停' : phase === 'paused' ? '继续' : '播放'}
+          aria-label={phase === 'playing' ? '暂停' : '播放'}
         >
           {phase === 'playing' ? (
-            <Pause size={15} weight="fill" aria-hidden />
+            <Pause size={17} weight="fill" aria-hidden />
           ) : (
-            <Play size={15} weight="fill" aria-hidden />
+            <Play size={17} weight="fill" aria-hidden />
           )}
         </button>
-        <button type="button" className="tts-mini-btn" onClick={onClose} title="停止并关闭">
+        <button
+          type="button"
+          className="tts-mini-btn"
+          onClick={() => jumpSentences(1)}
+          disabled={phase === 'idle'}
+          title="下一句"
+          aria-label="下一句"
+        >
+          <CaretRight size={14} weight="bold" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="tts-mini-btn"
+          onClick={onExpand}
+          title="展开完整播放器"
+          aria-label="展开完整播放器"
+        >
+          <CornersOut size={14} weight="regular" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="tts-mini-btn"
+          onClick={onClose}
+          title="停止并关闭"
+          aria-label="停止并关闭"
+        >
           <X size={14} weight="regular" aria-hidden />
         </button>
       </section>
@@ -836,7 +899,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   }
 
   return (
-    <aside className="ai-drawer tts-drawer" aria-label="语音播放器">
+    <aside
+      className={`ai-drawer tts-drawer${leaving ? ' is-leaving' : ''}`}
+      aria-label="语音播放器"
+    >
       {view === 'voices' ? (
         <div className="tts-voices">
           <div className="lookup-head">

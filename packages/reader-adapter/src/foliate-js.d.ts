@@ -78,6 +78,8 @@ declare module 'foliate-js/view.js' {
   export interface FoliateRenderer {
     setAttribute(name: string, value: string): void
     getAttribute(name: string): string | null
+    hasAttribute(name: string): boolean
+    toggleAttribute(name: string, force?: boolean): boolean
     setStyles?(css: string): void
     scrollToAnchor?(anchor: unknown, select?: boolean): Promise<void>
     next(distance?: number): Promise<void>
@@ -85,7 +87,9 @@ declare module 'foliate-js/view.js' {
     getContents(): { doc: Document; index: number; overlayer?: Overlayer }[]
     /** The paginator is an HTMLElement: `create-overlayer` is dispatched on
      *  it (not on the view — the event does not bubble), which is how section
-     *  reloads are observed for annotation replay. */
+     *  reloads are observed for annotation replay. The boolean `animated`
+     *  attribute also lives here: it switches the kernel's own page-turn
+     *  slide on/off (see FoliateAdapter.#turnPage). */
     addEventListener(type: string, listener: (event: Event) => void): void
     destroy(): void
   }
