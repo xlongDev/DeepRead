@@ -194,12 +194,20 @@ describe('开书流程', () => {
   it('把书名、格式与地址原样交给内核打开', async () => {
     const { adapter } = await renderReader()
     expect(adapter.open).toHaveBeenCalledTimes(1)
-    expect(adapter.open).toHaveBeenCalledWith({
-      bookId: BOOK.bookId,
-      format: 'epub',
-      url: BOOK.url,
-      name: BOOK.name,
-    })
+    expect(adapter.open).toHaveBeenCalledWith(
+      {
+        bookId: BOOK.bookId,
+        format: 'epub',
+        url: BOOK.url,
+        name: BOOK.name,
+      },
+      // 持久化排版随 open 一起下发(ReaderOpenInit):首节挂载时就要按偏好
+      // 的主题/布局量版,open 之后再补只会把首节留在原书几何里。
+      expect.objectContaining({
+        theme: expect.objectContaining({ name: 'Paper' }),
+        layout: expect.objectContaining({ flow: 'paginated', pageMode: 'single' }),
+      }),
+    )
   })
 
   it('打开后显示内核给的书名,而不是文件名', async () => {
@@ -265,6 +273,25 @@ describe('顶栏 10 键', () => {
     fireEvent.click(within(screen.getByTestId('tts')).getByText('fake-play'))
     fireEvent.click(screen.getByTitle('返回书架'))
     expect(onBack).toHaveBeenCalledWith(true)
+  })
+
+  /**
+   * 「对照阅读」只在宿主给了 onOpenParallel 时出现(并排中的一栏没有第三栏
+   * 可开,那条分支在 ParallelReader 里就没有这个 prop)。不能加进 TOP_KEYS:
+   * 那 10 键是单本阅读的契约,多一个键会让所有既有用例跟着动。
+   */
+  it('宿主支持对照阅读时多一个「对照阅读」键,选完书交给宿主', async () => {
+    const onOpenParallel = vi.fn()
+    render(<ReaderScreen book={BOOK} onBack={vi.fn()} onOpenParallel={onOpenParallel} />)
+    await waitFor(() => expect(document.querySelector('.reader-opening')).toBeNull())
+
+    expect(topKeyTitles()).toEqual([...TOP_KEYS.slice(0, -1), '对照阅读(两本书并排)', '目录与搜索'])
+
+    fireEvent.click(screen.getByTitle('对照阅读(两本书并排)'))
+    const picker = await screen.findByRole('region', { name: '选择对照的书' })
+    expect(picker).toBeInTheDocument()
+    // 书架上只有这本自己:不该出现在候选里,得说清楚。
+    expect(within(picker).getByText(/先导入第二本/)).toBeInTheDocument()
   })
 })
 

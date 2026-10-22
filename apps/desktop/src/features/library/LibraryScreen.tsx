@@ -122,10 +122,12 @@ type SettingsTab = (typeof SETTINGS_TABS)[number]
 
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
+  /** 并排打开两本(批量条里的「对照阅读」)。 */
+  readonly onOpenParallel: (primary: OpenedBook, secondary: OpenedBook) => void
   readonly backend: AppInfo | null
 }
 
-export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
+export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   /** 浏览器端「从备份恢复」的文件选择器。用持久 input 而不是临时 create +
    * click():那样用户一取消,等待 change 的 Promise 就永远悬着。 */
@@ -1340,6 +1342,27 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
   }
 
   /**
+   * 对照阅读:把选中的两本并排打开。左右顺序取**当前列表顺序**(不是点选
+   * 先后)—— 用户盯着的是列表,A 在左 B 在右要对得上他看到的上下关系。
+   */
+  const openParallel = (): void => {
+    const picked = visible.filter((item) => selected.has(item.hash))
+    if (picked.length !== 2) {
+      setProblem('对照阅读需要正好选两本书。')
+      return
+    }
+    const [left, right] = picked
+    if (left === undefined || right === undefined) return
+    setProblem(null)
+    void (async () => {
+      const urls = isTauriRuntime()
+        ? [undefined, undefined]
+        : await Promise.all([browserBookUrl(left.hash), browserBookUrl(right.hash)])
+      onOpenParallel(openedBookFromLibrary(left, urls[0]), openedBookFromLibrary(right, urls[1]))
+    })()
+  }
+
+  /**
    * 从笔记页打开一本书:带 CFI 就落到那条批注,不带就回上次读到的位置。
    * `sectionLabel` 来自跨书搜索的正文命中:阅读器按它在目录里定位(RAG
    * chunk 没有 CFI),找不到会如实告知。
@@ -1550,6 +1573,7 @@ export function LibraryScreen({ onOpenBook, backend }: LibraryScreenProps) {
                   onToggleSelecting={() => (selecting ? exitSelection() : setSelecting(true))}
                   onToggleSelected={toggleSelected}
                   onOpenBook={openBook}
+                  onOpenParallel={openParallel}
                   onToggleFavorite={toggleFavorite}
                   onEditInfo={openBookInfo}
                   onSetTags={(book, next) => void setBookTags(book, next)}

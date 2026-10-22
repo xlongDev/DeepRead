@@ -17,6 +17,7 @@ import type {
   SearchResult,
   TextRange,
   TocItem,
+  ZhConvertVariant,
 } from './types'
 
 export interface BookCharStats {
@@ -26,8 +27,24 @@ export interface BookCharStats {
   readonly cjk: number
 }
 
+/**
+ * open() 的第二参数:开书前就要生效的排版初值。
+ *
+ * 为什么需要它:folio 内核在**每个 section 挂载时**读文档的计算样式来定
+ * 竖排/横排(getDirection 跑在首帧绘制前),而 open() 内部紧接着就会导航到
+ * 书的起始位置。若调用方在 open() 之后才下发 setTheme/setLayout,首节已经
+ * 按原书自己的(通常横向)几何量版完成 —— 竖排书开篇那一页会停留在错误几何,
+ * 直到该节被重新加载。把持久化排版随 open 一起下发,首节加载时就是对的。
+ */
+export interface ReaderOpenInit {
+  readonly theme?: ReaderTheme
+  readonly layout?: ReaderLayout
+  /** 注入书籍文档的 @font-face 规则(内置 + 用户导入)。 */
+  readonly fontFaces?: string
+}
+
 export interface ReaderEngine {
-  open(source: BookSource): Promise<void>
+  open(source: BookSource, init?: ReaderOpenInit): Promise<void>
   close(): Promise<void>
 
   getMetadata(): Promise<BookMetadata>
@@ -57,6 +74,12 @@ export interface ReaderEngine {
 
   setTheme(theme: ReaderTheme): Promise<void>
   setLayout(layout: ReaderLayout): Promise<void>
+  /**
+   * 简繁转换档位。设置后由适配层在每次 section 挂载时应用(EPUB/TXT/MD
+   * 等重排格式);固定排版(PDF)不支持。切换档位后调用方需要重开书,
+   * 让已挂载的章节按新档位重新生成。
+   */
+  setChineseVariant(variant: ZhConvertVariant): Promise<void>
 
   destroy(): Promise<void>
 }

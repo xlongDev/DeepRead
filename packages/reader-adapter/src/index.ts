@@ -23,3 +23,4 @@ export {
   splitParagraphs,
 } from './books/text-book'
 export { buildMarkdownBook, markdownToHtml } from './books/markdown-book'
+export { convertSectionDocument, convertZhText, prepareZhConvert } from './zh-convert'

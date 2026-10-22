@@ -81,9 +81,21 @@ export interface ReaderTheme {
   readonly colorScheme: 'light' | 'dark'
 }
 
+/**
+ * 简繁转换档位(与 readest 的 simplecc 变体一致):
+ * s2t/t2s 基础互转;tw/hk 后缀按地区习惯;s2twp/tw2sp 额外做词汇转换。
+ */
+export type ZhConvertVariant =
+  'none' | 's2t' | 't2s' | 's2tw' | 's2hk' | 's2twp' | 'tw2s' | 'hk2s' | 'tw2sp'
+
 export interface ReaderLayout {
   readonly flow: 'paginated' | 'scrolled'
   readonly pageMode: 'single' | 'dual' | 'responsive'
+  /**
+   * 书写方向:'vertical-rl' = 竖排(传统中文从上到下、从右到左)。
+   * Omit to keep the book's own writing mode (原书排版优先).
+   */
+  readonly writingMode?: 'horizontal-tb' | 'vertical-rl'
   /** Page margin in px, when the flow is paginated. */
   readonly margin?: number
   /** Base font size in px for reflowable content (books keep their own fonts). */

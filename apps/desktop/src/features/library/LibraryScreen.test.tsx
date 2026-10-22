@@ -252,13 +252,16 @@ function mockBackend(books: readonly LibraryBook[], notes: readonly NoteEntry[] 
 async function renderLibrary(books: readonly LibraryBook[] = BOOKS) {
   mockBackend(books)
   const onOpenBook = vi.fn()
-  const view = render(<LibraryScreen onOpenBook={onOpenBook} backend={APP_INFO} />)
+  const onOpenParallel = vi.fn()
+  const view = render(
+    <LibraryScreen onOpenBook={onOpenBook} onOpenParallel={onOpenParallel} backend={APP_INFO} />,
+  )
   if (books.length > 0) {
     await waitFor(() => expect(document.querySelector('.shelf-toolbar')).not.toBeNull())
   } else {
     await waitFor(() => expect(document.querySelector('.shelf-skeleton')).toBeNull())
   }
-  return { onOpenBook, view }
+  return { onOpenBook, onOpenParallel, view }
 }
 
 /** 工具栏里所有按钮的可读标识,按 DOM 顺序 —— 顺序变了就是契约变了。 */

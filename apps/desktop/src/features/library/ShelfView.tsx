@@ -11,6 +11,7 @@ import {
   ArrowUp,
   Check,
   CheckSquare,
+  Columns,
   Export,
   DotsThree,
   ListBullets,
@@ -66,6 +67,8 @@ export interface ShelfViewProps {
   readonly onSetTags: (book: ShelfBook, tags: readonly string[]) => void
   /** 批量收藏:选中的一起变成收藏,或一起取消。 */
   readonly onFavoriteSelected: () => void
+  /** 对照阅读:正好选两本时并排打开。 */
+  readonly onOpenParallel: () => void
   /** 批量加常用标签:点一下就把这个标签应用到所有选中的书。 */
   readonly onTagPreset: (tag: string) => void
   /** 导出这本书的批注(.md)。 */
@@ -106,6 +109,7 @@ export function ShelfView({
   onEditInfo,
   onSetTags,
   onFavoriteSelected,
+  onOpenParallel,
   onTagPreset,
   onExportNotes,
   onImport,
@@ -627,6 +631,19 @@ export function ShelfView({
         <span className="shelf-bulk-count">已选 {selected.size} 本</span>
         <button type="button" className="btn btn-ghost" onClick={onSelectAll}>
           {selected.size === books.length ? '取消全选' : '全选'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          data-bulk-parallel
+          /* 两本才有对照可言:一本对照自己、三本没地方放。禁用而不是隐藏 ——
+             位置固定,用户能看见「差一本」这件事。 */
+          disabled={bulkBusy || selected.size !== 2}
+          title={selected.size === 2 ? '两本并排对照阅读' : '选正好两本书后可并排对照'}
+          onClick={onOpenParallel}
+        >
+          <Columns size={14} weight="regular" aria-hidden />
+          对照阅读
         </button>
         <button
           type="button"

@@ -9,18 +9,20 @@ import {
   useState,
 } from 'react'
 import {
-  CaretDown,
   CaretDoubleLeft,
   CaretDoubleRight,
+  CaretDown,
   CaretLeft,
   CaretRight,
   Check,
   CornersOut,
   Highlighter,
   Pause,
+  PictureInPicture,
   Play,
   X,
 } from '@phosphor-icons/react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { type AiProviderConfig } from '@deepread/shared'
 import {
   buildSpeechUnits,
@@ -30,10 +32,18 @@ import {
   washSpan,
   type SpeechUnit,
 } from '@deepread/reader-core'
-import { invokeCommand } from '../../lib/ipc'
+import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { useTts } from './tts/useTts'
 import { primeTtsAudio, suspendTtsAudio } from './tts/audio'
+import {
+  desktopBarDismiss,
+  desktopBarPublish,
+  desktopBarRevealMain,
+  desktopBarWatch,
+  onDesktopBarControl,
+  type TtsBarState,
+} from './tts/desktop-bar'
 import {
   CHARS_PER_SECOND,
   formatClock,
@@ -141,12 +151,17 @@ const DEFAULT_SETTINGS: TtsSettings = {
 interface TtsDrawerProps {
   readonly bookHash: string
   readonly bookTitle: string
+  /** 阅读主题变量:转发给面板里的下拉菜单(portal 到 body 后要随身带,否则
+     在羊皮等浅色背景下菜单会回落全局暗色,像一块深色补丁)。 */
+  readonly themeVars?: React.CSSProperties
   /** 书的语言(BCP-47),用于过滤语音列表。 */
   readonly bookLanguage?: string
   /** 封面缩略图(书架同源提取)。 */
   readonly coverUrl: string | null
   /** 当前章节名(阅读位置)。 */
   readonly sectionLabel: string | null
+  /** 阅读主题的明暗:桌面悬浮条跟着它走(深夜桌面不该顶一盏白灯)。 */
+  readonly colorScheme?: 'light' | 'dark'
   /** 迷你播放条形态(面板被收起或切到别的面板时)。 */
   readonly minimized: boolean
   /** 播放状态变化(用于父层决定是否保留迷你条)。 */
@@ -183,6 +198,10 @@ export interface TtsDrawerHandle {
    *  `start` 是选区起点在章节文本里的字符偏移(内核随选区报来):有它
    *  就精确定位,没有(编辑模式的 excerpt)才退回文本匹配。 */
   readonly speakFromText: (text: string, start: number | null) => void
+  /** 播放/暂停(桌面悬浮条的回调入口)。 */
+  readonly toggle: () => void
+  /** 切句(桌面悬浮条:上一句/下一句)。 */
+  readonly jumpSentences: (delta: number) => void
 }
 
 /** 歌词页的一行。memo 化:600 句的长章里,切句只重画两行(current/past 翻转),
@@ -221,7 +240,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     bookLanguage,
     coverUrl,
     sectionLabel,
+    colorScheme,
     minimized,
+    themeVars,
     onPlayingChange,
     getSectionText,
     jumpSection,
@@ -296,6 +317,12 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const voices = tts.systemVoices
 
   const phase: Phase = tts.status === 'idle' ? 'idle' : tts.loading ? 'loading' : tts.status
+  /**
+   * 起播准备期(取章节文本 + 切单元,还没到引擎的合成 loading):点下播放的
+   * 这一瞬就该有反馈,而不是干等两次 await 之后引擎才报 loading —— 否则
+   * 划词「朗读此处」点了之后迷你条上什么动静都没有。
+   */
+  const [booting, setBooting] = useState(false)
 
   // 播放循环比渲染活得久,实时值全部从镜像读取。
   const settingsRef = useRef(settings)
@@ -311,6 +338,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   // 60ms ticker 的直写出口:进度条/时钟绕过 React 更新(见 paintProgress),
   // React 状态 progress 只在跨句时提交,长章不再整抽屉重渲染。
   const miniFillRef = useRef<HTMLSpanElement | null>(null)
+  /** 桌面悬浮条要画的最新一份状态(60ms ticker 只写 DOM,这里补一个快照)。 */
+  const barStateRef = useRef<TtsBarState | null>(null)
+  /** 句内进度的实时比例: ticker 直写 DOM,React 只有跨句才提交。 */
+  const barPosRef = useRef<number | null>(null)
   const seekInputRef = useRef<HTMLInputElement | null>(null)
   const elapsedClockRef = useRef<HTMLSpanElement | null>(null)
   const remainingClockRef = useRef<HTMLSpanElement | null>(null)
@@ -331,6 +362,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const paintProgress = useCallback((pos: number): void => {
     const total = queuePosition(unitsRef.current, null).total
     const fraction = total > 0 ? Math.min(1, pos / total) : 0
+    // 桌面悬浮条(第二个 webview)没有 60ms ticker:句内进度的实时比例在
+    // 这里留一份镜像,状态快照时推给它。
+    barPosRef.current = fraction
     if (miniFillRef.current) miniFillRef.current.style.width = `${fraction * 100}%`
     if (seekInputRef.current) seekInputRef.current.value = String(Math.round(fraction * 1000))
     const cps = CHARS_PER_SECOND * settingsRef.current.rate
@@ -456,6 +490,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     sectionTokenRef.current += 1
     clearTimer()
     ttsStop()
+    setBooting(false)
     // 真停才挂起上下文省电(暂停走 ttsPause,它自己会挂)。恢复留给下一次
     // 起播点击里的 primeTtsAudio —— WebKit 不认手势外的 resume,挂在别的
     // 时机意味着下一次起播要么再点一次才有声,要么永远没声。
@@ -496,6 +531,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       sectionTokenRef.current += 1
       const token = sectionTokenRef.current
       stopFlagRef.current = false
+      setBooting(true)
       armTimer()
       let fromUnit = opts.fromUnit ?? 0
       // 「从选区起播」的两个参数都用一次即弃:连读下一章时从章首开始。
@@ -507,7 +543,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         if (stopFlagRef.current || sectionTokenRef.current !== token) return
         const text = await getSectionText()
         if (stopFlagRef.current || sectionTokenRef.current !== token) return
-        if (text.trim() === '' || text === previous) return
+        if (text.trim() === '' || text === previous) {
+          setBooting(false)
+          return
+        }
         previous = text
         const plan = buildSpeechUnits(text, knownNamesRef.current)
         if (stopFlagRef.current || sectionTokenRef.current !== token) return
@@ -526,6 +565,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         fromStart = null
         fromText = undefined
         setProgress(queuePosition(plan, from).spoken)
+        // 引擎接管:合成 loading 由 tts.loading 接棒,准备期结束。
+        setBooting(false)
         ttsPlay(plan, from, () => {
           if (stopFlagRef.current || sectionTokenRef.current !== token) return
           // 定时"本章结束",或跨章"上一句"只播上一章的尾部。
@@ -565,8 +606,6 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     [run],
   )
 
-  useImperativeHandle(ref, () => ({ stop, speakFromText }), [stop, speakFromText])
-
   const play = useCallback((): void => {
     // 音频解锁必须在这次点击里完成:首个 clip 的合成在两次 await 之后
     // (章节文本 + 供应商往返),手势早过期 —— 不在这里解锁,WebKit 里就是
@@ -591,6 +630,18 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     if (phaseRef.current === 'playing') pause()
     else play()
   }, [pause, play])
+
+  /**
+   * 迷你条上的「最小化到桌面」:主窗口退下去,听书交给桌面悬浮条 ——
+   * 悬浮条的去留由 desktop-bar 的 tick 接管(最小化即出现,回来即退场),
+   * 「回到阅读」的书本图标只在那条上存在,应用内迷你条不再重复。
+   */
+  const minimizeToDesktop = useCallback((): void => {
+    if (!isTauriRuntime()) return
+    void getCurrentWindow()
+      .minimize()
+      .catch(() => {})
+  }, [])
 
   /** 语速:引擎在播音侧直接拉伸(rate 不进合成请求),不重合成、不重启。 */
   useEffect(() => {
@@ -769,6 +820,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     [stop, jumpSection, run],
   )
 
+  // 父层/桌面悬浮条的控制入口。放在 jumpSentences 之后:两者都要引用。
+  useImperativeHandle(ref, () => ({ stop, speakFromText, toggle, jumpSentences }), [
+    stop,
+    speakFromText,
+    toggle,
+    jumpSentences,
+  ])
+
   // 切句时把当前句滚动到视口中央(歌词页)。
   const sentenceListRef = useRef<HTMLOListElement | null>(null)
   useEffect(() => {
@@ -783,6 +842,82 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const cps = CHARS_PER_SECOND * settings.rate
   const elapsed = totalChars > 0 ? progress / cps : 0
   const remaining = totalChars > 0 ? (totalChars - progress) / cps : 0
+
+  // ---------- 桌面悬浮条(主窗口不在眼前时的听书界面) ----------
+  // 会话活着(在播/暂停/合成中)就开着它;回到 idle 就关掉,顺手把第二个
+  // webview 收掉 —— 没有语音时它不该白占内存。
+  const sessionLive = phase !== 'idle'
+  useEffect(() => {
+    desktopBarWatch(sessionLive)
+  }, [sessionLive])
+
+  const publishBar = useCallback((): void => {
+    if (barStateRef.current === null) return
+    desktopBarPublish(barStateRef.current)
+  }, [])
+
+  // 状态快照:任何一样变了就推一份(切句、暂停、报错、换封面……)。
+  useEffect(() => {
+    barStateRef.current = {
+      title: bookTitle,
+      chapter: sectionLabel,
+      coverUrl,
+      playing: phase === 'playing',
+      loading: phase === 'loading',
+      progress: barPosRef.current ?? sentenceProgress,
+      remaining: formatClock(remaining),
+      error,
+      colorScheme: colorScheme ?? 'light',
+    }
+    publishBar()
+  }, [
+    bookTitle,
+    sectionLabel,
+    coverUrl,
+    phase,
+    sentenceProgress,
+    remaining,
+    error,
+    colorScheme,
+    publishBar,
+  ])
+
+  // 句内进度走 60ms ticker 直写 DOM,React 不知道 —— 每秒补推一次,
+  // 桌面条上的发丝进度才动得起来(桌面窗口没有那个 ticker)。
+  useEffect(() => {
+    const timer = setInterval(publishBar, 1000)
+    return () => clearInterval(timer)
+  }, [publishBar])
+
+  // 桌面条上的按钮:播放控制回到本抽屉的 handle,「回到阅读」额外把主窗口
+  // 从前台唤回(它八成是最小化状态)。
+  useEffect(
+    () =>
+      onDesktopBarControl((action) => {
+        switch (action) {
+          case 'toggle':
+            toggle()
+            break
+          case 'prev':
+            jumpSentences(-1)
+            break
+          case 'next':
+            jumpSentences(1)
+            break
+          case 'reveal':
+            void desktopBarRevealMain()
+            onExpand()
+            break
+          case 'dismiss':
+            desktopBarDismiss()
+            break
+          case 'stop':
+            onClose()
+            break
+        }
+      }, publishBar),
+    [toggle, jumpSentences, onExpand, onClose, publishBar],
+  )
 
   const voiceLabel =
     settings.engine === 'edge'
@@ -811,11 +946,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           : `${settings.timerMinutes} 分钟`
 
   // 迷你播放条:悬浮在底栏上方,不打断阅读。快捷键位:上一句 / 播放(强调) /
-  // 下一句 / 展开完整播放器 / 停止关闭。合成中第二行给波形动画,出错给错误行,
-  // 平时是进度条。点击整体区域展开。
+  // 下一句 / 展开完整播放器 / 最小化到桌面 / 停止关闭。合成中第二行给波形
+  // 动画,出错给错误行,平时是进度条。点击整体区域展开。
   if (shown === 'mini') {
     return (
-      <section className={`tts-mini${leaving ? ' is-leaving' : ''}`} aria-label="朗读迷你条">
+      <section
+        className={`tts-mini tts-mini-float${leaving ? ' is-leaving' : ''}`}
+        aria-label="朗读迷你条"
+      >
         {coverUrl ? (
           <img src={coverUrl} className="tts-mini-cover" alt="" />
         ) : (
@@ -827,7 +965,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           <span className="tts-mini-title">{bookTitle}</span>
           {error !== null ? (
             <span className="tts-mini-error">{error}</span>
-          ) : phase === 'loading' ? (
+          ) : phase === 'loading' || booting ? (
             <span className="tts-mini-wave" aria-label="正在合成语音" aria-live="polite">
               <span aria-hidden />
               <span aria-hidden />
@@ -885,6 +1023,20 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
         >
           <CornersOut size={14} weight="regular" aria-hidden />
         </button>
+        {/* 最小化到桌面:主窗口退下去,听书交给桌面悬浮条 —— 悬浮条的去留
+            由 desktop-bar 的 tick 接管(最小化即出现,回来即退场)。浏览器
+            运行时没有窗口可最小化,按钮干脆不画。 */}
+        {isTauriRuntime() && (
+          <button
+            type="button"
+            className="tts-mini-btn"
+            onClick={minimizeToDesktop}
+            title="最小化到桌面"
+            aria-label="最小化到桌面"
+          >
+            <PictureInPicture size={14} weight="regular" aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           className="tts-mini-btn"
@@ -978,6 +1130,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                     <DropdownMenu
                       className="tts-role-dropdown"
                       ariaLabel={`${role.name} 的音色`}
+                      themeVars={themeVars}
                       value={voiceForSpeaker(settings, role.name, settings.engine) ?? ''}
                       options={
                         settings.engine === 'edge'
@@ -1104,6 +1257,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               <strong className="tts-title">{bookTitle}</strong>
               <span className="tts-section">{sectionTitle || sectionLabel || '当前章节'}</span>
             </div>
+            {/* 收起 = 画中画:整块播放器缩成迷你条,播放不中断。关闭键左侧的
+                下拉箭头:语义是「收下去」,与旁边「×关掉」一眼可辨。 */}
             <button
               type="button"
               className="chrome-button"
@@ -1118,7 +1273,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           </div>
 
           <div className="tts-sentences" aria-live="polite">
-            {units.length === 0 && phase === 'loading' ? (
+            {units.length === 0 && (phase === 'loading' || booting) ? (
               <div className="tts-loading" aria-label="正在合成语音">
                 <div className="tts-loading-wave" aria-hidden>
                   <span />
@@ -1236,6 +1391,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             <DropdownMenu
               className="tts-card-dropdown"
               ariaLabel="语速选择"
+              themeVars={themeVars}
               value={settings.rate.toString()}
               options={RATE_KEYS.map((key) => ({
                 value: key,
@@ -1264,6 +1420,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             <DropdownMenu
               className="tts-card-dropdown"
               ariaLabel="定时关闭"
+              themeVars={themeVars}
               value={`${settings.timerKind}:${settings.timerMinutes}`}
               options={[
                 { value: 'off:30', label: '关闭' },
@@ -1324,6 +1481,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               ))}
             </div>
             <div className="tts-highlight-colors" aria-label="高亮颜色">
+              {/* 一行六个预设色点 + 自定义色芯片:点得到、看得见,不套
+                  二级菜单(收起来反而多一步)。 */}
               {HIGHLIGHT_PRESETS.map((preset) => (
                 <button
                   key={preset.color}

@@ -49,7 +49,6 @@ import {
   toolbarWidth,
   TOOLBAR_ENTRANCE_HEIGHT,
   TOOLBAR_GAP,
-  windowFrame,
   type ReadingFrame,
 } from './selection-place'
 import { HIGHLIGHT_PALETTE, withAlpha } from './reader-options'
@@ -72,6 +71,12 @@ function toInkStyle(style: string): AnnotationStyle {
 export interface SelectionToolbarProps {
   /** 选区框(宿主窗口坐标系)。 */
   readonly rect: { readonly top: number; readonly left: number; readonly height: number }
+  /**
+   * 取本阅读器的正文区矩形。由 ReaderScreen 给(它持有宿主 ref),不在这里
+   * `document.querySelector('[data-reading-content]')` —— 并行阅读时窗口里
+   * 有两个正文区,全局查永远量到第一栏,第二栏的工具条会被夹进别人的范围。
+   */
+  readonly readFrame: () => ReadingFrame
   /** 选中的文本。 */
   readonly text: string
   /** 编辑模式:点中的那条划线。null = 新建模式。 */
@@ -95,6 +100,7 @@ export interface SelectionToolbarProps {
 
 export function SelectionToolbar({
   rect,
+  readFrame,
   text,
   annotation,
   defaultColor,
@@ -166,9 +172,7 @@ export function SelectionToolbar({
   }
 
   // 水平定位:每次渲染都算(阅读区宽随窗口变)。垂直定位见下面的 layout effect。
-  const frame: ReadingFrame =
-    document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
-    windowFrame(window.innerWidth, window.innerHeight)
+  const frame: ReadingFrame = readFrame()
   const width = toolbarWidth(frame)
   const left = placeToolbarX(frame, rect.left, width)
   // 入场从哪侧滑入:贴近真相即可(定位本身是测量的),差几像素只影响偏移方向。
@@ -180,9 +184,7 @@ export function SelectionToolbar({
   useLayoutEffect(() => {
     const el = panel.current
     if (!el) return
-    const live: ReadingFrame =
-      document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
-      windowFrame(window.innerWidth, window.innerHeight)
+    const live: ReadingFrame = readFrame()
     const { top, above: landsAbove } = placeToolbarY(live, anchorFromRect(rect), el.offsetHeight)
     el.style.top = `${top}px`
     // 入场方向以测量结果为准,渲染时的近似只服务首帧之前的 CSS。

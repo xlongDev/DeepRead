@@ -77,6 +77,7 @@ export class FakeFoliateAdapter {
   readonly setTheme = vi.fn<(theme: ReaderTheme) => Promise<void>>()
   readonly setLayout = vi.fn<(layout: ReaderLayout) => Promise<void>>()
   readonly setFontFaces = vi.fn<(css: string) => Promise<void>>()
+  readonly setChineseVariant = vi.fn<(variant: string) => Promise<void>>()
   readonly createAnnotation = vi.fn<(annotation: Annotation) => Promise<void>>()
   readonly removeAnnotation = vi.fn<(annotationId: string) => Promise<void>>()
   /** 编辑模式工具条的锚点:CFI → 实测选区框。解不出回 null(真内核同约)。 */
@@ -123,6 +124,7 @@ export class FakeFoliateAdapter {
     this.setTheme.mockResolvedValue(undefined)
     this.setLayout.mockResolvedValue(undefined)
     this.setFontFaces.mockResolvedValue(undefined)
+    this.setChineseVariant.mockResolvedValue(undefined)
     this.createAnnotation.mockResolvedValue(undefined)
     this.removeAnnotation.mockResolvedValue(undefined)
     this.rectOfAnnotation.mockReturnValue(null)

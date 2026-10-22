@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepRead 朗读</title>
+    <style>
+      /* 悬浮条的窗口本身就是胶囊:页面不许有底色(窗口是透明的),
+         也不许有滚动条与选中。 */
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+      body {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+    </style>
+  </head>
+  <body class="tts-bar-body">
+    <div id="root"></div>
+    <script type="module" src="/src/mini.tsx"></script>
+  </body>
+</html>

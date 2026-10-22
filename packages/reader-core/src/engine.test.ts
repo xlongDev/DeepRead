@@ -80,6 +80,10 @@ class ContractProbe implements ReaderEngine {
     return Promise.resolve()
   }
 
+  setChineseVariant(): Promise<void> {
+    return Promise.resolve()
+  }
+
   destroy(): Promise<void> {
     return Promise.resolve()
   }

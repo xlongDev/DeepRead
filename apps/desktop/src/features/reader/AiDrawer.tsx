@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
+import { CaretDown, PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
 import { toAppError, type AiIndexPayload } from '@deepread/shared'
 import {
   buildChatBody,
@@ -64,6 +64,9 @@ interface AiDrawerProps {
   readonly title: string
   /** Raw adapter-built source text (TXT/MD); null for kernel books. */
   readonly sourceText: string | null
+  /** 阅读主题变量:转发给下拉菜单(portal 到 body 后要随身带,否则在羊皮等
+     浅色背景下菜单会回落全局暗色,像一块深色补丁)。 */
+  readonly themeVars?: React.CSSProperties
   readonly onReplaceSource: (text: string) => Promise<void>
   readonly onClose: () => void
 }
@@ -74,6 +77,15 @@ type ChatUiMessage = ChatMessage & { readonly streaming?: boolean }
 
 type StreamPhase = 'idle' | 'streaming' | 'error'
 
+/** 洞察芯片:名词做标签,点一次生成、再点一次重生成(有结果时打勾)。 */
+const INSIGHT_CHIPS = [
+  { kind: 'summary', label: '摘要', hint: '基于章节开头生成内容摘要' },
+  { kind: 'outline', label: '大纲', hint: '按章节提炼结构大纲' },
+  { kind: 'timeline', label: '时间线', hint: '抽取事件与它们的章节出处' },
+  { kind: 'concepts', label: '概念', hint: '抽取核心概念并解释' },
+  { kind: 'characters', label: '角色', hint: '抽取人物及其关系' },
+] as const
+
 export function AiDrawer({
   selection,
   contextText,
@@ -81,6 +93,7 @@ export function AiDrawer({
   bookHash,
   title,
   sourceText,
+  themeVars,
   onReplaceSource,
   onClose,
 }: AiDrawerProps) {
@@ -90,6 +103,8 @@ export function AiDrawer({
   const [phase, setPhase] = useState<StreamPhase>('idle')
   const [error, setError] = useState<string | null>(null)
   const [scope, setScope] = useState<AiScope>('chapter')
+  /** 本书洞察工具栏展开/收起;默认展开 —— 空面板里它是唯一的入口。 */
+  const [insightsOpen, setInsightsOpen] = useState(true)
   const [indexStatus, setIndexStatus] = useState<'unknown' | 'missing' | 'ready' | 'building'>(
     'unknown',
   )
@@ -97,6 +112,8 @@ export function AiDrawer({
   const [summary, setSummary] = useState<SummaryInsight | null>(null)
   const [outline, setOutline] = useState<OutlineInsight | null>(null)
   const [insightPhase, setInsightPhase] = useState<'idle' | 'streaming'>('idle')
+  /** 正在跑的那一项洞察(摘要/大纲/…):芯片只让这一颗显示「生成中」。 */
+  const [busyKind, setBusyKind] = useState<string | null>(null)
   const [characters, setCharacters] = useState<CharactersPayload | null>(null)
   const [timeline, setTimeline] = useState<TimelinePayload | null>(null)
   const [concepts, setConcepts] = useState<ConceptsPayload | null>(null)
@@ -294,6 +311,7 @@ export function AiDrawer({
               ? buildTimelineMessages(sections, title)
               : buildConceptsMessages(sections, title)
       setInsightPhase('streaming')
+      setBusyKind(kind)
       setError(null)
       let full = ''
       const parser = createSseParser((data) => {
@@ -355,6 +373,7 @@ export function AiDrawer({
         )
       } finally {
         setInsightPhase('idle')
+        setBusyKind(null)
       }
     },
     [activeId, insightPhase, persistArtifact, sections, title],
@@ -363,6 +382,7 @@ export function AiDrawer({
   const runAiRepair = useCallback(async (): Promise<void> => {
     if (sourceText === null || insightPhase === 'streaming') return
     setInsightPhase('streaming')
+    setBusyKind('repair')
     setError(null)
     try {
       const full = await streamChatText(buildRepairMessages(sourceText.slice(0, 6000), title))
@@ -380,6 +400,7 @@ export function AiDrawer({
       setError(toAppError(repairError).message)
     } finally {
       setInsightPhase('idle')
+      setBusyKind(null)
     }
   }, [insightPhase, sourceText, streamChatText, title])
 
@@ -414,6 +435,7 @@ export function AiDrawer({
     async (rule: ConversionRule): Promise<void> => {
       if (sourceText === null || insightPhase === 'streaming') return
       setInsightPhase('streaming')
+      setBusyKind(rule)
       setError(null)
       try {
         const full = await streamChatText(buildConvertMessages(sourceText.slice(0, 6000), rule))
@@ -434,6 +456,7 @@ export function AiDrawer({
         setError(toAppError(convertError).message)
       } finally {
         setInsightPhase('idle')
+        setBusyKind(null)
       }
     },
     [activeId, insightPhase, providers, sourceText, streamChatText],
@@ -455,6 +478,7 @@ export function AiDrawer({
   const generateCharacters = useCallback(async (): Promise<void> => {
     if (insightPhase === 'streaming' || sections.length === 0) return
     setInsightPhase('streaming')
+    setBusyKind('characters')
     setError(null)
     try {
       const full = await streamChatText(buildCharactersMessages(sections, title))
@@ -465,6 +489,7 @@ export function AiDrawer({
       setError(toAppError(charactersError).message)
     } finally {
       setInsightPhase('idle')
+      setBusyKind(null)
     }
   }, [insightPhase, persistArtifact, sections, streamChatText, title])
 
@@ -637,17 +662,33 @@ export function AiDrawer({
     }
   }, [])
 
+  const activeProvider = providers.find((provider) => provider.id === activeId)
+  /** 已生成的洞察数量:折叠状态下也能看出「里面有几份东西」。 */
+  const artifactCount = [summary, outline, timeline, concepts, characters].filter(
+    (artifact) => artifact !== null,
+  ).length
+
   return (
-    <aside className="ai-drawer" aria-label="AI 助手">
-      <div className="lookup-head">
-        <strong>
-          <Sparkle size={14} weight="fill" aria-hidden /> AI 助手
-        </strong>
+    <aside className="ai-drawer ai-chat" aria-label="AI 助手">
+      <header className="ai-head">
+        <span className="ai-head-icon" aria-hidden>
+          <Sparkle size={13} weight="fill" />
+        </span>
+        <div className="ai-head-text">
+          <strong>AI 助手</strong>
+          {/* 成本诚实:当前用哪个服务、哪个模型,永远在标题下面一行。 */}
+          <span className="ai-head-sub">
+            {activeProvider === undefined
+              ? '未配置服务 · 到「设置 → AI 服务」添加'
+              : `${activeProvider.name} · ${activeProvider.model}`}
+          </span>
+        </div>
         <div className="ai-head-actions">
           {providers.length > 0 && (
             <DropdownMenu
               className="dropdown-head"
               ariaLabel="选择 AI 服务"
+              themeVars={themeVars}
               value={activeId ?? ''}
               options={providers.map((provider) => ({
                 value: provider.id,
@@ -657,23 +698,27 @@ export function AiDrawer({
               onChange={(id) => setActiveId(id || null)}
             />
           )}
-          <button type="button" className="chrome-button" onClick={onClose} title="关闭">
+          <button
+            type="button"
+            className="ai-icon-btn"
+            onClick={onClose}
+            title="关闭"
+            aria-label="关闭"
+          >
             <X size={14} weight="regular" aria-hidden />
           </button>
         </div>
-      </div>
+      </header>
 
       <div className="ai-drawer-body">
         {providers.length === 0 && (
-          <div className="ai-setup-hint">
-            <p className="ai-privacy">
-              还没有可用的 AI 服务。请返回书架,在「设置 → AI 服务」里添加(支持 DeepSeek、Kimi、智谱
-              等任何 OpenAI 兼容服务,密钥只存本机钥匙串)。
-            </p>
-          </div>
+          <p className="ai-setup-hint">
+            配好任意 OpenAI 兼容服务(DeepSeek / Kimi / 智谱…)就能在这里问书、生成摘要与大纲。
+            密钥只存本机钥匙串,不经过阅读器。配置入口:书架侧栏 →「设置 → AI 服务」。
+          </p>
         )}
 
-        <div className="segmented ai-scope">
+        <div className="ai-scope" aria-label="上下文范围">
           <button
             type="button"
             className={scope === 'selection' ? 'is-active' : ''}
@@ -700,263 +745,266 @@ export function AiDrawer({
         </div>
 
         {scope === 'book' && (
-          <div className="settings-row">
-            <span className="settings-label">
+          <div className="ai-index-row">
+            <span>
               {indexStatus === 'ready'
                 ? '索引已就绪'
                 : indexStatus === 'building'
                   ? '正在建立索引…'
                   : indexStatus === 'missing'
-                    ? '尚无索引'
+                    ? '尚无索引 · 建好才能检索全书'
                     : '索引状态未知'}
             </span>
-            <div className="segmented">
-              <button
-                type="button"
-                onClick={() => void buildIndex()}
-                disabled={indexStatus === 'building'}
-              >
-                {indexStatus === 'building' ? '建立中' : '建立索引'}
-              </button>
-            </div>
+            <button
+              type="button"
+              className="ai-chip ai-chip-ghost"
+              onClick={() => void buildIndex()}
+              disabled={indexStatus === 'building'}
+            >
+              {indexStatus === 'building'
+                ? '建立中…'
+                : indexStatus === 'ready'
+                  ? '重建索引'
+                  : '建立索引'}
+            </button>
           </div>
         )}
 
-        <section className="ai-insights" aria-label="本书洞察">
-          <div className="settings-row">
-            <span className="settings-label">本书洞察(基于章节开头)</span>
-            <div className="segmented">
-              <button
-                type="button"
-                onClick={() => void generateInsight('summary')}
-                disabled={insightPhase === 'streaming'}
-              >
-                {insightPhase === 'streaming' && summary === null
-                  ? '生成中…'
-                  : summary === null
-                    ? '生成摘要'
-                    : '重新生成摘要'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void generateInsight('outline')}
-                disabled={insightPhase === 'streaming'}
-              >
-                {insightPhase === 'streaming' && outline === null
-                  ? '生成中…'
-                  : outline === null
-                    ? '生成大纲'
-                    : '重新生成大纲'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void generateInsight('timeline')}
-                disabled={insightPhase === 'streaming'}
-              >
-                {insightPhase === 'streaming' && timeline === null
-                  ? '生成中…'
-                  : timeline === null
-                    ? '抽取时间线'
-                    : '重新抽取时间线'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void generateInsight('concepts')}
-                disabled={insightPhase === 'streaming'}
-              >
-                {insightPhase === 'streaming' && concepts === null
-                  ? '生成中…'
-                  : concepts === null
-                    ? '抽取概念'
-                    : '重新抽取概念'}
-              </button>
+        {/* 本书洞察:五颗动作芯片折进一个可收起的块里 —— 聊天是主场,
+            洞察是工具栏;展开时也只占两行,不给面板撑出横向滚动。 */}
+        <button
+          type="button"
+          className="ai-insights-toggle"
+          onClick={() => setInsightsOpen((open) => !open)}
+          aria-expanded={insightsOpen}
+        >
+          <span className="ai-insights-title">本书洞察</span>
+          {artifactCount > 0 && <span className="ai-badge">{artifactCount}</span>}
+          <CaretDown
+            size={12}
+            weight="bold"
+            className={`ai-chevron${insightsOpen ? ' is-open' : ''}`}
+            aria-hidden
+          />
+        </button>
+
+        {insightsOpen && (
+          <section className="ai-tools" aria-label="本书洞察">
+            <div className="ai-chip-grid">
+              {INSIGHT_CHIPS.map((chip) => {
+                const done =
+                  chip.kind === 'summary'
+                    ? summary !== null
+                    : chip.kind === 'outline'
+                      ? outline !== null
+                      : chip.kind === 'timeline'
+                        ? timeline !== null
+                        : chip.kind === 'concepts'
+                          ? concepts !== null
+                          : characters !== null
+                const busy = busyKind === chip.kind
+                return (
+                  <button
+                    key={chip.kind}
+                    type="button"
+                    className={`ai-chip${done ? ' is-done' : ''}`}
+                    onClick={() => {
+                      if (chip.kind === 'characters') void generateCharacters()
+                      else void generateInsight(chip.kind)
+                    }}
+                    disabled={insightPhase === 'streaming'}
+                    title={done ? `已有${chip.label},再点一次重新生成` : chip.hint}
+                  >
+                    {busy ? `${chip.label}…` : chip.label}
+                  </button>
+                )
+              })}
             </div>
-          </div>
-          {/* 生成前就说清发送范围:模型只看得到前 N 章开头,不是全书。 */}
-          <p className="ai-privacy">
-            发送范围:前 {Math.min(sections.length, INSIGHT_MAX_CHAPTERS)} 章开头(每章最多{' '}
-            {INSIGHT_EXCERPT_CHARS} 字),并非全书内容。
-          </p>
-          {summary !== null && (
-            <div className="ai-insight">
-              <p className="ai-insight-overview">{summary.overview}</p>
-              <div className="ai-citations">
-                {summary.themes.map((theme) => (
-                  <span key={theme} className="ai-citation">
-                    {theme}
-                  </span>
-                ))}
-              </div>
-              <p className="ai-privacy">{summary.coverage}</p>
-            </div>
-          )}
-          {outline !== null && (
-            <div className="ai-insight">
-              {outline.chapters.map((chapter) => (
-                <p key={chapter.title} className="ai-insight-outline">
-                  <strong>{chapter.title}</strong> {chapter.gist}
-                </p>
-              ))}
-            </div>
-          )}
-          {timeline !== null && (
-            <div className="ai-insight">
-              {timeline.events.map((event) => (
-                <p key={`${event.chapterRef}-${event.event}`} className="ai-insight-outline">
-                  <span className="ai-citation">{event.chapterRef}</span>{' '}
-                  <strong>{event.event}</strong>
-                  {event.descriptions.length > 0 && ` — ${event.descriptions.join(';')}`}
-                </p>
-              ))}
-            </div>
-          )}
-          {concepts !== null && (
-            <div className="ai-insight">
-              {concepts.concepts.map((concept) => (
-                <p key={concept.name} className="ai-insight-outline">
-                  <strong>{concept.name}</strong>
-                  <span className="ai-citation">概念</span> {concept.explanation}
-                </p>
-              ))}
-            </div>
-          )}
-          {characters !== null && (
-            <div className="ai-insight">
-              {characters.characters.map((character) => (
-                <p key={character.name} className="ai-insight-outline">
-                  <strong>{character.name}</strong>
-                  <span className="ai-citation">{character.role}</span> {character.description}
-                </p>
-              ))}
-            </div>
-          )}
-          <div className="segmented">
-            <button
-              type="button"
-              onClick={() => void generateCharacters()}
-              disabled={insightPhase === 'streaming'}
-            >
-              {characters === null ? '抽取角色' : '重新抽取角色'}
-            </button>
-          </div>
-          {sourceText !== null && (
-            <div className="settings-row">
-              <span className="settings-label">AI 纠错</span>
-              <div className="segmented">
+            {sourceText !== null && (
+              <div className="ai-chip-row">
+                <span className="ai-chip-row-label">修整原文</span>
                 <button
                   type="button"
+                  className="ai-chip ai-chip-ghost"
                   onClick={() => void runAiRepair()}
                   disabled={insightPhase === 'streaming'}
                 >
-                  {insightPhase === 'streaming' ? '检查中…' : 'AI 检查'}
+                  {busyKind === 'repair' ? '检查中…' : 'AI 纠错'}
                 </button>
-              </div>
-            </div>
-          )}
-          {sourceText !== null && (
-            <div className="settings-row">
-              <span className="settings-label">繁简转换</span>
-              <div className="segmented">
                 <button
                   type="button"
+                  className="ai-chip ai-chip-ghost"
                   onClick={() => void runConvert('t2s')}
                   disabled={insightPhase === 'streaming'}
                 >
-                  繁→简
+                  {busyKind === 't2s' ? '转换中…' : '繁 → 简'}
                 </button>
                 <button
                   type="button"
+                  className="ai-chip ai-chip-ghost"
                   onClick={() => void runConvert('s2t')}
                   disabled={insightPhase === 'streaming'}
                 >
-                  简→繁
+                  {busyKind === 's2t' ? '转换中…' : '简 → 繁'}
                 </button>
               </div>
-            </div>
-          )}
-          {aiCorrections !== null && (
-            <div className="ai-insight">
-              {aiCorrections.proposals.map((proposal) => (
-                <label
-                  key={proposal.id}
-                  className="repair-item"
-                  aria-label={`应用纠错:${proposal.reason}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={aiCorrections.accepted.has(proposal.id)}
-                    onChange={() => toggleAiCorrection(proposal.id)}
-                  />
-                  <span className="repair-body">
-                    <span className="repair-rule">{proposal.reason}</span>
-                    <s className="repair-before">{proposal.find}</s>
-                    <span className="repair-after">{proposal.replace}</span>
-                  </span>
-                </label>
+            )}
+            {/* 生成前就说清发送范围:模型只看得到前 N 章开头,不是全书。 */}
+            <p className="ai-privacy">
+              发送范围:前 {Math.min(sections.length, INSIGHT_MAX_CHAPTERS)} 章开头(每章最多{' '}
+              {INSIGHT_EXCERPT_CHARS} 字),并非全书内容。
+            </p>
+          </section>
+        )}
+        {summary !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">内容摘要</p>
+            <p className="ai-insight-overview">{summary.overview}</p>
+            <div className="ai-citations">
+              {summary.themes.map((theme) => (
+                <span key={theme} className="ai-citation">
+                  {theme}
+                </span>
               ))}
-              <button
-                type="button"
-                className="reader-error-button"
-                onClick={() => void applyAiCorrectionsAccepted()}
-              >
-                应用已选({aiCorrections.accepted.size}/{aiCorrections.proposals.length})
-              </button>
             </div>
-          )}
-          {conversions !== null && (
-            <div className="ai-insight">
-              <p className="lookup-empty">
-                由当前 AI 提供商({conversions.providerLabel})生成
-                {conversionRuleLabel(conversions.rule)}提案,已逐条对照原文校验,仅应用勾选项。
-                单次上限 100 条,未覆盖的部分可再检查一次。
+            <p className="ai-privacy">{summary.coverage}</p>
+          </article>
+        )}
+        {outline !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">章节大纲</p>
+            {outline.chapters.map((chapter) => (
+              <p key={chapter.title} className="ai-insight-outline">
+                <strong>{chapter.title}</strong> {chapter.gist}
               </p>
-              {conversions.proposals.map((proposal) => (
-                <label
-                  key={proposal.id}
-                  className="repair-item"
-                  aria-label={`应用${conversionRuleLabel(proposal.rule)}转换`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={conversions.accepted.has(proposal.id)}
-                    onChange={() =>
-                      setConversions((current) => {
-                        if (!current) return current
-                        const accepted = new Set(current.accepted)
-                        if (accepted.has(proposal.id)) accepted.delete(proposal.id)
-                        else accepted.add(proposal.id)
-                        return { ...current, accepted }
-                      })
-                    }
-                  />
-                  <span className="repair-body">
-                    <span className="repair-rule">
-                      {conversionRuleLabel(proposal.rule)}
-                      {proposal.occurrences > 1 && ` · 命中 ${proposal.occurrences} 处`}
-                    </span>
-                    <s className="repair-before">{proposal.find}</s>
-                    <span className="repair-after">{proposal.replace}</span>
-                  </span>
-                </label>
-              ))}
-              <button
-                type="button"
-                className="reader-error-button"
-                onClick={() => void applyConversionsAccepted()}
+            ))}
+          </article>
+        )}
+        {timeline !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">事件时间线</p>
+            {timeline.events.map((event) => (
+              <p key={`${event.chapterRef}-${event.event}`} className="ai-insight-outline">
+                <span className="ai-citation">{event.chapterRef}</span>{' '}
+                <strong>{event.event}</strong>
+                {event.descriptions.length > 0 && ` — ${event.descriptions.join(';')}`}
+              </p>
+            ))}
+          </article>
+        )}
+        {concepts !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">核心概念</p>
+            {concepts.concepts.map((concept) => (
+              <p key={concept.name} className="ai-insight-outline">
+                <strong>{concept.name}</strong>
+                <span className="ai-citation">概念</span> {concept.explanation}
+              </p>
+            ))}
+          </article>
+        )}
+        {characters !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">人物角色</p>
+            {characters.characters.map((character) => (
+              <p key={character.name} className="ai-insight-outline">
+                <strong>{character.name}</strong>
+                <span className="ai-citation">{character.role}</span> {character.description}
+              </p>
+            ))}
+          </article>
+        )}
+        {aiCorrections !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">
+              纠错提案 · 已选 {aiCorrections.accepted.size}/{aiCorrections.proposals.length}
+            </p>
+            {aiCorrections.proposals.map((proposal) => (
+              <label
+                key={proposal.id}
+                className="repair-item"
+                aria-label={`应用纠错:${proposal.reason}`}
               >
-                应用已选({conversions.accepted.size}/{conversions.proposals.length})
-              </button>
-            </div>
-          )}
-        </section>
+                <input
+                  type="checkbox"
+                  checked={aiCorrections.accepted.has(proposal.id)}
+                  onChange={() => toggleAiCorrection(proposal.id)}
+                />
+                <span className="repair-body">
+                  <span className="repair-rule">{proposal.reason}</span>
+                  <s className="repair-before">{proposal.find}</s>
+                  <span className="repair-after">{proposal.replace}</span>
+                </span>
+              </label>
+            ))}
+            <button
+              type="button"
+              className="ai-apply"
+              onClick={() => void applyAiCorrectionsAccepted()}
+            >
+              应用已选({aiCorrections.accepted.size}/{aiCorrections.proposals.length})
+            </button>
+          </article>
+        )}
+        {conversions !== null && (
+          <article className="ai-result">
+            <p className="ai-result-label">
+              {conversionRuleLabel(conversions.rule)} · 已选 {conversions.accepted.size}/
+              {conversions.proposals.length}
+            </p>
+            <p className="ai-privacy">
+              由当前 AI 提供商({conversions.providerLabel})生成,已逐条对照原文校验,仅应用勾选项。
+              单次上限 100 条,未覆盖的部分可再检查一次。
+            </p>
+            {conversions.proposals.map((proposal) => (
+              <label
+                key={proposal.id}
+                className="repair-item"
+                aria-label={`应用${conversionRuleLabel(proposal.rule)}转换`}
+              >
+                <input
+                  type="checkbox"
+                  checked={conversions.accepted.has(proposal.id)}
+                  onChange={() =>
+                    setConversions((current) => {
+                      if (!current) return current
+                      const accepted = new Set(current.accepted)
+                      if (accepted.has(proposal.id)) accepted.delete(proposal.id)
+                      else accepted.add(proposal.id)
+                      return { ...current, accepted }
+                    })
+                  }
+                />
+                <span className="repair-body">
+                  <span className="repair-rule">
+                    {conversionRuleLabel(proposal.rule)}
+                    {proposal.occurrences > 1 && ` · 命中 ${proposal.occurrences} 处`}
+                  </span>
+                  <s className="repair-before">{proposal.find}</s>
+                  <span className="repair-after">{proposal.replace}</span>
+                </span>
+              </label>
+            ))}
+            <button
+              type="button"
+              className="ai-apply"
+              onClick={() => void applyConversionsAccepted()}
+            >
+              应用已选({conversions.accepted.size}/{conversions.proposals.length})
+            </button>
+          </article>
+        )}
 
         <div className="ai-messages">
           {messages.length === 0 && (
-            <p className="lookup-empty">
-              {selection
-                ? `已带入选中文本(${selection.length} 字)。问点什么,比如“解释这段”。`
-                : '向 AI 提问关于当前书籍的问题。可在目录抽屉选中文字后回来提问。'}
-            </p>
+            <div className="ai-empty">
+              <p className="ai-empty-title">{selection ? '已带入选中文本' : '向这本书提问'}</p>
+              <p className="ai-empty-hint">
+                {selection
+                  ? `${selection.length} 字上下文 · 问点什么,比如“解释这段”。`
+                  : '句子、章节、人物、观点 —— 答案只基于当前这本书的上下文。'}
+              </p>
+            </div>
           )}
           {messages.map((message, index) => (
             <div key={index} className={`ai-msg-wrap ai-msg-wrap-${message.role}`}>
@@ -984,10 +1032,11 @@ export function AiDrawer({
         )}
 
         {/* 三种图谱共用一个视图,按已生成的洞察给出入口。 */}
-        <div className="segmented">
+        <div className="ai-chip-row">
           {characters !== null && characters.characters.length > 0 && (
             <button
               type="button"
+              className="ai-chip ai-chip-ghost"
               onClick={() => setGraphSpec({ kind: 'characters', payload: characters })}
             >
               角色关系图
@@ -996,6 +1045,7 @@ export function AiDrawer({
           {timeline !== null && timeline.events.length > 0 && (
             <button
               type="button"
+              className="ai-chip ai-chip-ghost"
               onClick={() =>
                 setGraphSpec({
                   kind: 'timeline',
@@ -1010,6 +1060,7 @@ export function AiDrawer({
           {concepts !== null && concepts.concepts.length > 0 && (
             <button
               type="button"
+              className="ai-chip ai-chip-ghost"
               onClick={() => setGraphSpec({ kind: 'concepts', payload: concepts })}
             >
               概念关系图
@@ -1018,7 +1069,13 @@ export function AiDrawer({
         </div>
       </div>
 
-      <div className="ai-input-row">
+      <form
+        className="ai-composer"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void send()
+        }}
+      >
         <input
           className="ai-input"
           placeholder="输入问题,回车发送"
@@ -1034,27 +1091,27 @@ export function AiDrawer({
         {phase === 'streaming' ? (
           <button
             type="button"
-            className="chrome-button"
+            className="ai-send is-stop"
             onClick={() => void cancel()}
             title="停止"
           >
-            <X size={16} weight="regular" aria-hidden />
+            <X size={15} weight="bold" aria-hidden />
           </button>
         ) : (
           <button
-            type="button"
-            className="chrome-button"
-            onClick={() => void send()}
+            type="submit"
+            className="ai-send"
             disabled={
               (!activeId && !new URLSearchParams(window.location.search).has('mockKey')) ||
               input.trim().length === 0
             }
             title="发送"
+            aria-label="发送"
           >
-            <PaperPlaneRight size={16} weight="regular" aria-hidden />
+            <PaperPlaneRight size={15} weight="fill" aria-hidden />
           </button>
         )}
-      </div>
+      </form>
       {graphSpec !== null && <GraphView spec={graphSpec} onClose={() => setGraphSpec(null)} />}
     </aside>
   )

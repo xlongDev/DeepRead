@@ -6,6 +6,7 @@ import {
   BookmarkSimple,
   CaretLeft,
   CaretRight,
+  Columns,
   Copy,
   CornersOut,
   GraduationCap,
@@ -34,7 +35,7 @@ import {
   type DictionaryMeta,
   type ReadingFont,
 } from '@deepread/shared'
-import type { AnnotationStyle, TocItem } from '@deepread/reader-core'
+import type { AnnotationStyle, TocItem, ZhConvertVariant } from '@deepread/reader-core'
 import { localDayKey } from '@deepread/shared'
 import { countChars } from '@deepread/reader-core'
 import {
@@ -88,10 +89,13 @@ import {
   READER_THEMES,
   TRANSLATE_TARGETS,
   VIEW_MODE_OPTIONS,
+  WRITING_MODE_OPTIONS,
+  ZH_CONVERT_OPTIONS,
   withAlpha,
   type PageTurnStyle,
   type StatsSettings,
   type ViewMode,
+  type WritingModeChoice,
 } from './reader-options'
 import { buildReadingStats } from './reading-indicators'
 import { readerKeyAction } from './reader-keys'
@@ -101,7 +105,13 @@ import { AiDrawer } from './AiDrawer'
 import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
-import { anchorFromRect, placeCompanionCard, windowFrame } from './selection-place'
+import { ParallelPicker } from './ParallelPicker'
+import {
+  anchorFromRect,
+  placeCompanionCard,
+  windowFrame,
+  type ReadingFrame,
+} from './selection-place'
 import { animatePageTurn } from './page-turn'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 import { primeTtsAudio } from './tts/audio'
@@ -118,6 +128,25 @@ const TRANSLATE_CARD_HEIGHT = 300
 /** 词典卡的估计高度(max-height 300),同用于避让工具条。 */
 const LOOKUP_CARD_HEIGHT = 280
 
+/**
+ * 并行阅读时宿主塞给一栏的桥接。
+ *
+ * 一栏自己不知道对面存在 —— 它只管「我是不是活动栏」「对面要我跳到哪」
+ * 「我位置变了」,对位关系全部由 ParallelReader 持有。这样单本阅读时这个
+ * 桥接就是 undefined,组件里所有并行相关的分支都退化成空操作。
+ */
+export interface PaneBridge {
+  /** 活动栏:只有它能响应键盘。非活动栏的 chrome 由 CSS 收起。 */
+  readonly active: boolean
+  /** 用户在这一栏上按下(任何地方):切活动栏。 */
+  readonly onActivate: () => void
+  /** 对面要求本栏跳到这个进度(按全书比例)。`nonce` 区分「哪一次请求」。 */
+  readonly sync?: { readonly fraction: number; readonly nonce: number } | undefined
+  /** 本栏位置变了 —— 宿主持它去驱动对面。`cfi` 也带上:关掉对照时要能
+   *  立刻回到这一页,而不靠「刚写的进度是否比重新打开更快落地」这种赛跑。 */
+  readonly onRelocate?: ((fraction: number, cfi: string | undefined) => void) | undefined
+}
+
 interface ReaderScreenProps {
   readonly book: OpenedBook
   /**
@@ -129,9 +158,16 @@ interface ReaderScreenProps {
   readonly hidden?: boolean
   /** 隐藏期间用户点迷你条「展开」:请宿主切回阅读器。 */
   readonly onRequestShow?: () => void
+  /** 并行阅读:本栏的桥接;单本阅读时不传。 */
+  readonly pane?: PaneBridge
+  /** 顶栏「对照阅读」选定第二本书:请宿主并排打开。 */
+  readonly onOpenParallel?: ((other: OpenedBook) => void) | undefined
 }
 
 type Phase = 'opening' | 'reading' | 'error'
+
+/** 同一时刻只开一个浮层:它们共用顶栏按钮的激活态与「点空白关闭」逻辑。 */
+type OpenPanel = 'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | 'parallel'
 
 /**
  * 正在编辑的批注笔记。`id` 缺失 = 这条笔记还没有对应的划线,提交时新建;
@@ -198,7 +234,14 @@ function toAnnotationStyle(style: string | undefined): AnnotationStyle {
 
 const ttsCoverCache = new Map<string, string>()
 
-export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: ReaderScreenProps) {
+export function ReaderScreen({
+  book,
+  onBack,
+  hidden = false,
+  onRequestShow,
+  pane,
+  onOpenParallel,
+}: ReaderScreenProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const adapterRef = useRef<FoliateAdapter | null>(null)
   const callbacksRef = useRef<EngineCallbacks>({})
@@ -208,15 +251,15 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
   const lastChromeActivityRef = useRef(0)
   /** chrome 显隐函数的 ref:内核回调(constant closure)经它调用最新版本。 */
   const showChromeRef = useRef<() => void>(() => {})
+  /** 并排阅读的「激活我」:adapter 挂载时一次建成,回调要走 ref 才能拿到当次渲染的 pane。 */
+  const paneActivateRef = useRef<(() => void) | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   /** 浏览器端导入阅读字体的文件选择器(桌面端走 openFileDialog)。 */
   const fontInputRef = useRef<HTMLInputElement>(null)
   const progressRef = useRef<{ cfi: string; fraction: number } | null>(null)
   const annotationsRef = useRef<readonly AnnotationRecord[]>([])
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
-  const openPanelRef = useRef<'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null>(
-    null,
-  )
+  const openPanelRef = useRef<OpenPanel | null>(null)
   const storedTypography = loadTypography()
   const settingsRef = useRef({
     viewMode: storedTypography.viewMode ?? ('single' as ViewMode),
@@ -227,9 +270,30 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     themeIndex: storedTypography.themeIndex ?? 0,
     pageMargin: storedTypography.pageMargin ?? 72,
     paragraphMargin: storedTypography.paragraphMargin,
+    writingMode: storedTypography.writingMode,
+    zhConvert: storedTypography.zhConvert ?? ('none' as ZhConvertVariant),
   })
   /** True while the progress slider is being dragged or key-stepped. */
   const scrubbingRef = useRef(false)
+  /**
+   * 开书流程(恢复批次位置)走完之前,内核报的 relocate 是「程序在摆位置」,
+   * 不是用户翻页 —— 并行阅读不能拿它去拽对面那一栏,否则一开书两本就被强行
+   * 对到同一进度。
+   */
+  const readyRef = useRef(false)
+  /**
+   * ready 之后的第一条上报仍然要跳过:恢复进度是异步的,它的 relocate 常常
+   * 晚于 ready 才到(见 onRelocate 里的联动门)。只跳过一条 —— 重渲染的重复
+   * 上报即使漏过去,拖动的也是同一个位置,视觉上是空操作。
+   */
+  const openingReportSkippedRef = useRef(false)
+  /** 已经执行过的联动请求编号;重复渲染不该重复跳。 */
+  const appliedSyncRef = useRef(0)
+  /**
+   * 本栏是否是活动栏。单本阅读时 undefined(不是"非活动"),键盘门控要按
+   * `=== false` 判,不能用取反 —— 否则单本模式会退出所有快捷键。
+   */
+  const paneActive = pane?.active
 
   const [phase, setPhase] = useState<Phase>('opening')
   const [error, setError] = useState<string | null>(null)
@@ -274,6 +338,12 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
   const [fontWeight, setFontWeight] = useState<number | undefined>(
     () => storedTypography.fontWeight,
   )
+  const [writingMode, setWritingMode] = useState<WritingModeChoice | undefined>(
+    () => storedTypography.writingMode,
+  )
+  const [zhConvert, setZhConvert] = useState<ZhConvertVariant>(
+    () => storedTypography.zhConvert ?? 'none',
+  )
   const [themeIndex, setThemeIndex] = useState(() => storedTypography.themeIndex ?? 0)
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
@@ -292,10 +362,8 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     proposals: readonly RepairChange[]
     accepted: ReadonlySet<string>
   } | null>(null)
-  // 阅读器的面板互斥:同一时刻最多一个浮层(目录/排版/AI/朗读/学习)。
-  const [openPanel, setOpenPanel] = useState<
-    'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | null
-  >(null)
+  // 阅读器的面板互斥:同一时刻最多一个浮层(目录/排版/AI/朗读/学习/对照)。
+  const [openPanel, setOpenPanel] = useState<OpenPanel | null>(null)
   const [bookLanguage, setBookLanguage] = useState<string | undefined>(undefined)
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
   const [ttsMinimized, setTtsMinimized] = useState(false)
@@ -322,6 +390,10 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
    * ReaderScreen 若也清 openPanel,抽屉连最小化那一帧都画不出来就被卸载。
    */
   const ttsMounted = openPanel === 'tts' || ttsActive || ttsSession
+  /** mini 播放条(信息胶囊)此刻在场吗(会话活着、且没展开成完整面板)。
+   *  与传给抽屉的 minimized 是同一个式子 —— 两者严格同帧。胶囊悬浮在
+   *  底栏上方(见 global.css .tts-mini-float),不为它收缩或重排书页。 */
+  const ttsMiniVisible = ttsMounted && (ttsMinimized || openPanel !== 'tts')
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
   )
@@ -404,6 +476,8 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       themeIndex,
       pageMargin,
       paragraphMargin,
+      writingMode,
+      zhConvert,
     }
   }, [
     viewMode,
@@ -414,6 +488,8 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     themeIndex,
     pageMargin,
     paragraphMargin,
+    writingMode,
+    zhConvert,
   ])
 
   const saveNow = useCallback((): void => {
@@ -454,6 +530,10 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     return () => {
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
+      // 卸载前把最后一段进度落盘(「关闭对照」会立刻换掉这一栏)。
+      // 开书还没走完时不能写:那时 annotationsRef 还是空数组,一写就把
+      // 已经存下的批注清空了 —— 所以按 readyRef 守一道。
+      if (readyRef.current) flush()
     }
   }, [saveNow])
 
@@ -497,6 +577,17 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
           location: location.location,
         })
         scheduleSave()
+        // 并行阅读的联动:位置变了就报给宿主(由它决定要不要拽对面那一栏)。
+        if (readyRef.current) {
+          if (openingReportSkippedRef.current) {
+            pane?.onRelocate?.(fraction, cfi)
+          } else {
+            // 开书后的第一次上报是恢复/初始位置:每本书都有自己的进度,联动它
+            // 只会把对面那栏拽到本栏的开书位置上(实测:开书瞬间对面白跳一次)。
+            // 用户翻页、拖进度、点目录产生的上报才该联动。
+            openingReportSkippedRef.current = true
+          }
+        }
       },
       onSelection: (sel) => {
         // 书页内容在 iframe 里,父层收不到 pointerdown;任何书内交互都兼作
@@ -580,22 +671,54 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
   // double-mount and leaked a second kernel view into the host.
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    readyRef.current = false
+    openingReportSkippedRef.current = false
     const adapter = new FoliateAdapter(hostRef.current ?? document.body, {
       onRelocate: (location) => callbacksRef.current.onRelocate?.(location),
       onSelection: (sel) => callbacksRef.current.onSelection?.(sel),
       onShowAnnotation: (cfi) => callbacksRef.current.onShowAnnotation?.(cfi),
       onKeyDown: (event) => handleReaderKeyRef.current(event),
+      // 正文 iframe 上的指针活动转发:chrome 收起后鼠标在书上动一动就能
+      // 唤回顶栏/底栏(否则设置面板在沉浸模式下点不到)。
+      onPointerActivity: () => showChromeRef.current(),
+      // 在正文上按下 = 「这一栏归我」:并行阅读里两栏都挂着,只有活动栏响应
+      // 键盘、显示 chrome。iframe 内的按下不跨界,必须由内核转发。
+      onPointerDown: () => paneActivateRef.current?.(),
     })
     adapterRef.current = adapter
     let cancelled = false
     void (async () => {
       try {
-        await adapter.open({
-          bookId: book.bookId,
-          format: book.format,
-          url: book.url,
-          name: book.name,
-        })
+        // 简繁档位要先于 open 下发:wasm 预热是异步的,load 钩子里的转换
+        // 必须同步可用(见 FoliateAdapter#setChineseVariant)。zhConvert
+        // 在依赖里:切档位即整体重开书(位置由下方恢复逻辑拿回),已挂载
+        // 的 section 不会自动重转 —— 与 readest 的 recreateViewer 同语义。
+        await adapter.setChineseVariant(zhConvert)
+        // 持久化排版随 open 一起下发(见 ReaderOpenInit):内核在每个 section
+        // 挂载时读计算样式定竖排/横排,open 之后才下发 writing-mode 会把首节
+        // 留在原书几何里 —— 竖排书开篇那一页就是错的。
+        await adapter.open(
+          {
+            bookId: book.bookId,
+            format: book.format,
+            url: book.url,
+            name: book.name,
+          },
+          {
+            theme: READER_THEMES[settingsRef.current.themeIndex]?.theme ?? READER_THEMES[0]!.theme,
+            layout: {
+              flow: settingsRef.current.viewMode === 'scroll' ? 'scrolled' : 'paginated',
+              pageMode: settingsRef.current.viewMode === 'dual' ? 'dual' : 'single',
+              fontSize: settingsRef.current.fontSize,
+              lineHeight: settingsRef.current.lineHeight,
+              fontFamily: settingsRef.current.fontFamily,
+              fontWeight: settingsRef.current.fontWeight,
+              margin: settingsRef.current.pageMargin,
+              paragraphMargin: settingsRef.current.paragraphMargin,
+              writingMode: settingsRef.current.writingMode,
+            },
+          },
+        )
         const [metadata, tocItems] = await Promise.all([
           adapter.getMetadata(),
           adapter.getTableOfContents(),
@@ -616,6 +739,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
           fontWeight: settingsRef.current.fontWeight,
           margin: settingsRef.current.pageMargin,
           paragraphMargin: settingsRef.current.paragraphMargin,
+          writingMode: settingsRef.current.writingMode,
         })
 
         // 跨书搜索的正文命中:先按章节 label 定位。找不到那一章就照常
@@ -659,6 +783,8 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         }
         if (!cancelled) {
           setPhase('reading')
+          // 从这里起,内核报的位置才是用户读到的位置。
+          readyRef.current = true
           // 开书即进入常规节奏:工具栏短暂可见后自动收起。
           showChromeRef.current()
         }
@@ -674,7 +800,21 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       adapterRef.current = null
       void adapter.destroy()
     }
-  }, [book])
+  }, [book, zhConvert])
+
+  /**
+   * 并行阅读的联动:对面那一栏翻到了别处,本栏跟着跳。
+   *
+   * 用 nonce 判「是不是新请求」而不是比进度值:两本书进度可能恰好相同,
+   * 按值比较会把重复请求当成空操作,偶尔漏跳。也不要把它并到开书 effect 里
+   * —— 那个 effect 的依赖是 book,换书才该重跑。
+   */
+  const syncRequest = pane?.sync
+  useEffect(() => {
+    if (syncRequest === undefined || syncRequest.nonce === appliedSyncRef.current) return
+    appliedSyncRef.current = syncRequest.nonce
+    void adapterRef.current?.goTo({ progress: syncRequest.fraction }).catch(() => {})
+  }, [syncRequest])
 
   // 「朗读此处」的第二拍:抽屉挂载后(ref 就位)把等的文本交给它。
   // 有待播文本就动手(迷你条形态直接起播);文本在调用瞬间就被清掉,
@@ -790,7 +930,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       const target = event.target as HTMLElement | null
       if (
         target?.closest(
-          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-display,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
+          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-display,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
         )
       )
         return
@@ -830,6 +970,23 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
   useEffect(() => {
     showChromeRef.current = showChrome
   }, [showChrome])
+
+  // 无依赖数组:每次渲染都追平(ParallelReader 传的 onActivate 是新闭包)。
+  useEffect(() => {
+    paneActivateRef.current = pane?.onActivate ?? null
+  })
+
+  /**
+   * 本阅读器的正文区矩形(窗口坐标系)。划词工具、翻译卡、词典卡都靠它夹取
+   * 落点;并行阅读时窗口里有两个正文区,所以量**自己的宿主**,不全局查。
+   * 返回值在调用时才算,不是渲染期读 ref。
+   */
+  const readFrame = useCallback(
+    (): ReadingFrame =>
+      hostRef.current?.getBoundingClientRect() ??
+      windowFrame(window.innerWidth, window.innerHeight),
+    [],
+  )
 
   // chrome 自动隐藏:可见且无任何浮层(面板/选区/批注)时收起;指针活动
   // 会刷新计时。翻页不在此列——沉浸阅读不被翻页打断。
@@ -915,6 +1072,9 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     (event: KeyboardEvent): void => {
       // 隐藏态(退到书架听书):按键属于书架界面,别在背后偷偷翻页/关面板。
       if (hidden) return
+      // 并行阅读:两栏都挂 window 监听,只让活动栏响应 —— 否则按一次 → 两本
+      // 一起翻,想单翻一本就没办法了。
+      if (paneActive === false) return
       const action = readerKeyAction(event)
       if (action === null) return
       // 除全屏外,内核未就绪时不处理按键。
@@ -944,7 +1104,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         setNoteDraft(null)
       }
     },
-    [turnPage, toggleFullscreen, hidden, ttsMounted],
+    [turnPage, toggleFullscreen, hidden, ttsMounted, paneActive],
   )
 
   useEffect(() => {
@@ -962,6 +1122,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       fontWeight?: number | undefined
       pageMargin?: number
       paragraphMargin?: number | undefined
+      writingMode?: WritingModeChoice | undefined
     }): void => {
       // `in` checks, not ?? merges: an explicit undefined means "reset to the
       // book's own typography" and must win over the previous setting.
@@ -973,6 +1134,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
         pageMargin: patch.pageMargin ?? pageMargin,
         paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
+        writingMode: 'writingMode' in patch ? patch.writingMode : writingMode,
       }
       setViewMode(next.viewMode)
       setFontSize(next.fontSize)
@@ -981,6 +1143,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       setFontWeight(next.fontWeight)
       setPageMargin(next.pageMargin)
       setParagraphMargin(next.paragraphMargin)
+      setWritingMode(next.writingMode)
       persistTypography({
         viewMode: next.viewMode,
         fontSize: next.fontSize,
@@ -989,6 +1152,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         fontWeight: next.fontWeight,
         pageMargin: next.pageMargin,
         paragraphMargin: next.paragraphMargin,
+        writingMode: next.writingMode,
       })
       void adapterRef.current?.setLayout({
         flow: next.viewMode === 'scroll' ? 'scrolled' : 'paginated',
@@ -999,10 +1163,26 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         fontWeight: next.fontWeight,
         margin: next.pageMargin,
         paragraphMargin: next.paragraphMargin,
+        writingMode: next.writingMode,
       })
     },
-    [viewMode, fontSize, lineHeight, fontFamily, fontWeight, pageMargin, paragraphMargin],
+    [
+      viewMode,
+      fontSize,
+      lineHeight,
+      fontFamily,
+      fontWeight,
+      pageMargin,
+      paragraphMargin,
+      writingMode,
+    ],
   )
+
+  /** 切简繁档位:state 进 open effect 依赖 → 整体重开书(见开书 effect)。 */
+  const changeZhConvert = useCallback((variant: ZhConvertVariant): void => {
+    setZhConvert(variant)
+    persistTypography({ zhConvert: variant })
+  }, [])
 
   const changeFontSize = (delta: number): void => {
     const current = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number])
@@ -1132,8 +1312,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
     // 卡片落点避开还开着的划词工具:工具在选区下方,卡片去工具底下(见
     // selection-place 的三级退让),不再不管不顾地压在选区上。
     const frame =
-      document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
-      windowFrame(window.innerWidth, window.innerHeight)
+      hostRef.current?.getBoundingClientRect() ?? windowFrame(window.innerWidth, window.innerHeight)
     const rect = {
       top: placeCompanionCard(frame, anchorFromRect(current.rect), TRANSLATE_CARD_HEIGHT).top,
       left: current.rect.left,
@@ -1621,8 +1800,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
       .slice(0, 40)
     // 词典卡与翻译卡同套避让(工具条现在不关),选区也留给后续动作。
     const frame =
-      document.querySelector('[data-reading-content]')?.getBoundingClientRect() ??
-      windowFrame(window.innerWidth, window.innerHeight)
+      hostRef.current?.getBoundingClientRect() ?? windowFrame(window.innerWidth, window.innerHeight)
     const rect = {
       top: placeCompanionCard(frame, anchorFromRect(selection.rect), LOOKUP_CARD_HEIGHT).top,
       left: selection.rect.left,
@@ -1764,15 +1942,23 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         }}
       />
       <div
-        className={`reader${chromeVisible || openPanel !== null ? ' chrome-visible' : ''}${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
-        onPointerDown={() => showChrome()}
+        className={`reader${pane === undefined ? '' : ' reader-embedded'}${
+          chromeVisible || openPanel !== null ? ' chrome-visible' : ''
+        }${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
+        onPointerDown={() => {
+          showChrome()
+          // 一栏里任何一次按下都切换活动栏:与「窗口聚焦」同一个直觉,
+          // 也是键盘方向的唯一归属依据。
+          pane?.onActivate()
+        }}
       >
         {/* data-reading-content:划词工具按这个矩形夹取位置 —— 面板属于 chrome,
             必须留在阅读区里,而不是挂到窗口边(窗口比阅读卡片宽,圆角处会露头)。 */}
         <div ref={hostRef} className="reader-host" data-reading-content />
 
-        {/* 左右悬浮翻页钮:常驻低透明度胶囊,悬停浮现;按下不冒泡 ——
-            点翻页不该顺带唤起顶栏/底栏(每次点击「闪一下」的来源)。 */}
+        {/* 左右悬浮翻页钮:按钮自己是 2/3 书高的透明热区,鼠标进入边缘才
+            让芯片现身(见 .page-flip);按下不冒泡 —— 点翻页不该顺带唤起
+            顶栏/底栏(每次点击「闪一下」的来源)。 */}
         <button
           type="button"
           className="page-flip page-flip-left"
@@ -1781,7 +1967,9 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
           title="上一页"
           aria-label="上一页"
         >
-          <CaretLeft size={20} weight="bold" aria-hidden />
+          <span className="page-flip-chip">
+            <CaretLeft size={16} weight="bold" aria-hidden />
+          </span>
         </button>
         <button
           type="button"
@@ -1791,7 +1979,9 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
           title="下一页"
           aria-label="下一页"
         >
-          <CaretRight size={20} weight="bold" aria-hidden />
+          <span className="page-flip-chip">
+            <CaretRight size={16} weight="bold" aria-hidden />
+          </span>
         </button>
 
         {phase === 'opening' && (
@@ -1894,6 +2084,24 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
           >
             <GraduationCap size={18} weight="regular" aria-hidden />
           </button>
+          {/* 对照阅读是「再加一本书」而不是又一个视图开关,所以放在目录前、
+              紧贴最右:读者翻到这里时手已经在最右侧了。已在并排模式时藏起来
+              —— 一栏里没有第三栏可开。 */}
+          {onOpenParallel !== undefined && pane === undefined && (
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'parallel' ? ' is-active' : ''}`}
+              onClick={() => {
+                setOpenPanel((panel) => (panel === 'parallel' ? null : 'parallel'))
+                setChromeVisible(true)
+              }}
+              title="对照阅读(两本书并排)"
+              aria-haspopup="dialog"
+              aria-expanded={openPanel === 'parallel'}
+            >
+              <Columns size={18} weight="regular" aria-hidden />
+            </button>
+          )}
           <button
             type="button"
             className="chrome-button"
@@ -1906,6 +2114,17 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
             <List size={18} weight="regular" aria-hidden />
           </button>
         </header>
+
+        {openPanel === 'parallel' && onOpenParallel !== undefined && (
+          <ParallelPicker
+            excludeHash={book.hash}
+            onPick={(other) => {
+              setOpenPanel(null)
+              onOpenParallel(other)
+            }}
+            onClose={() => setOpenPanel(null)}
+          />
+        )}
 
         {openPanel === 'settings' && (
           <section className="reader-settings" aria-label="排版设置">
@@ -2015,6 +2234,34 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">排版方向</span>
+              <div className="segmented">
+                {WRITING_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={writingMode === option.value ? 'is-active' : ''}
+                    onClick={() => updateLayout({ writingMode: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">简繁转换</span>
+              {/* 二级菜单:9 档全展开会占掉半个面板(还会把字体行挤出视口),
+                  触发器只显示当前档位,点开才是完整列表。 */}
+              <DropdownMenu
+                value={zhConvert}
+                options={ZH_CONVERT_OPTIONS}
+                onChange={changeZhConvert}
+                ariaLabel="简繁转换"
+                title="转换正文与目录;切换后重新打开本书生效"
+                themeVars={readerVars}
+              />
             </div>
             <div className="settings-column">
               <span className="settings-label">字体</span>
@@ -2509,6 +2756,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
             bookHash={book.hash}
             title={title}
             sourceText={sourceText}
+            themeVars={readerVars}
             onReplaceSource={async (text) => {
               const adapter = adapterRef.current
               if (!adapter) return
@@ -2536,6 +2784,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
         {(selection !== null || activeRecord !== undefined) && (
           <SelectionToolbar
             rect={selection?.rect ?? activeAnnotationRect ?? { top: 0, left: 0, height: 0 }}
+            readFrame={readFrame}
             text={selection?.text ?? activeRecord?.excerpt ?? ''}
             annotation={activeRecord ?? null}
             defaultColor={lastInk.color}
@@ -2609,6 +2858,7 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
             <DropdownMenu
               className="tts-card-dropdown"
               ariaLabel="翻译目标语言"
+              themeVars={readerVars}
               value={effectiveTranslateTarget}
               options={TRANSLATE_TARGETS.map((target) => ({ value: target, label: target }))}
               onChange={(target) => {
@@ -2733,7 +2983,9 @@ export function ReaderScreen({ book, onBack, hidden = false, onRequestShow }: Re
               bookLanguage={bookLanguage}
               coverUrl={ttsCoverUrl}
               sectionLabel={sectionLabel}
-              minimized={ttsMinimized || openPanel !== 'tts'}
+              colorScheme={theme.theme.colorScheme}
+              minimized={ttsMiniVisible}
+              themeVars={readerVars}
               onPlayingChange={setTtsActive}
               getSectionText={ttsGetSectionText}
               jumpSection={ttsJumpSection}

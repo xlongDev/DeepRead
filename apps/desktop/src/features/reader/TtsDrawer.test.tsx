@@ -31,6 +31,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('../../lib/ipc', () => ({
   invokeCommand: vi.fn(),
+  // 桌面悬浮条(tts/desktop-bar)也从这个模块拿运行时判断 —— 测试里不是
+  // Tauri,整套桌面条应当是空操作。
+  isTauriRuntime: (): boolean => false,
 }))
 
 const invokeMock = vi.mocked(invokeCommand)

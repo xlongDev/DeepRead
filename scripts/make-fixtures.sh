@@ -177,6 +177,9 @@ startxref
 %%EOF
 EOF
 
+# --- PDF with an embedded image (night-mode "keep images" checks) -----------
+node "$ROOT/scripts/make-image-pdf.mjs"
+
 # --- MOBI (generated minimal but real PalmDB/PalmDOC/MOBI binary) -----------
 node "$ROOT/scripts/make-mobi.mjs"
 

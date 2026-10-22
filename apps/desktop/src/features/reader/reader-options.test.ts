@@ -3,8 +3,10 @@ import {
   DEFAULT_STATS_SETTINGS,
   loadPageTurnStyle,
   loadStatsSettings,
+  loadTypography,
   persistPageTurnStyle,
   persistStatsSettings,
+  persistTypography,
 } from './reader-options'
 
 beforeEach(() => {
@@ -88,5 +90,25 @@ describe('底栏显示偏好', () => {
       time: true,
       wordsScope: 'section',
     })
+  })
+})
+
+describe('排版偏好持久化(书写方向 / 简繁转换)', () => {
+  it('writingMode / zhConvert 写入后原样读回', () => {
+    persistTypography({ writingMode: 'vertical-rl', zhConvert: 's2t' })
+    const loaded = loadTypography()
+    expect(loaded.writingMode).toBe('vertical-rl')
+    expect(loaded.zhConvert).toBe('s2t')
+  })
+
+  it('显式 undefined 删键(选回「原书 / 不转换」不留旧值)', () => {
+    persistTypography({ writingMode: 'vertical-rl', zhConvert: 's2t' })
+    persistTypography({ writingMode: undefined, zhConvert: undefined })
+    const raw = JSON.parse(localStorage.getItem('deepread.reader.typography') ?? '{}') as Record<
+      string,
+      unknown
+    >
+    expect('writingMode' in raw).toBe(false)
+    expect('zhConvert' in raw).toBe(false)
   })
 })

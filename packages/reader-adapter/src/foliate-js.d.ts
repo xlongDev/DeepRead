@@ -82,6 +82,15 @@ declare module 'foliate-js/view.js' {
     toggleAttribute(name: string, force?: boolean): boolean
     setStyles?(css: string): void
     scrollToAnchor?(anchor: unknown, select?: boolean): Promise<void>
+    /** Low-level navigation used by the adapter's aligned fraction jump (see
+     *  FoliateAdapter#goToFractionAligned). A function anchor is resolved by
+     *  the kernel AFTER the target section renders, when the live page count
+     *  is known. Absent on the fixed-layout renderer. */
+    goTo?(target: { index: number; anchor?: number | ((doc: Document) => number) }): Promise<void>
+    /** Total columns of the rendered section (paginator only). */
+    readonly pages?: number
+    /** True while flow = scrolled (paginator only). */
+    readonly scrolled?: boolean
     next(distance?: number): Promise<void>
     prev(distance?: number): Promise<void>
     getContents(): { doc: Document; index: number; overlayer?: Overlayer }[]
@@ -106,6 +115,9 @@ declare module 'foliate-js/view.js' {
       target: string | number | { fraction: number; [key: string]: unknown },
     ): Promise<{ index: number; anchor: (doc: Document) => Range | Element } | undefined>
     goToFraction(fraction: number): Promise<void>
+    /** Cumulative section boundaries (0..1) driving progress fractions.
+     *  Public stand-in for the kernel's private SectionProgress. */
+    getSectionFractions(): number[]
     goLeft(): Promise<void>
     goRight(): Promise<void>
     prev(distance?: number): Promise<void>

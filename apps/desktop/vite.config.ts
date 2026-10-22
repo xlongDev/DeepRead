@@ -24,6 +24,14 @@ export default defineConfig({
     target: 'es2022',
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      input: {
+        // 第二个入口:桌面悬浮迷你条(独立 webview,只画胶囊)。
+        // 与主窗口同仓同构,按入口拆包,主窗口不会为它多付一分钱。
+        index: 'index.html',
+        mini: 'mini.html',
+      },
+    },
   },
   test: {
     environment: 'jsdom',

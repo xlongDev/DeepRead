@@ -4,7 +4,7 @@
  * can be read (and reasoned about) on their own.
  */
 
-import type { ReaderTheme } from '@deepread/reader-core'
+import type { ReaderTheme, ZhConvertVariant } from '@deepread/reader-core'
 import { convertFileSrc } from '../../lib/book-import'
 
 export const READER_THEMES: readonly { readonly label: string; readonly theme: ReaderTheme }[] = [
@@ -130,6 +130,34 @@ export const PAGE_TURN_OPTIONS: readonly {
   { label: '淡入', value: 'fade' },
 ]
 
+// 书写方向:undefined = 原书(竖排书保持竖排);显式档位强制覆盖。
+export type WritingModeChoice = 'horizontal-tb' | 'vertical-rl'
+
+export const WRITING_MODE_OPTIONS: readonly {
+  readonly label: string
+  readonly value: WritingModeChoice | undefined
+}[] = [
+  { label: '原书', value: undefined },
+  { label: '横排', value: 'horizontal-tb' },
+  { label: '竖排', value: 'vertical-rl' },
+]
+
+// 简繁转换档位(与 readest 的 simplecc 变体一一对应)。
+export const ZH_CONVERT_OPTIONS: readonly {
+  readonly label: string
+  readonly value: ZhConvertVariant
+}[] = [
+  { label: '不转换', value: 'none' },
+  { label: '简体 → 繁体', value: 's2t' },
+  { label: '繁体 → 简体', value: 't2s' },
+  { label: '简体 → 繁体(台湾)', value: 's2tw' },
+  { label: '简体 → 繁体(香港)', value: 's2hk' },
+  { label: '简体 → 繁体(台湾·用语)', value: 's2twp' },
+  { label: '繁体(台湾) → 简体', value: 'tw2s' },
+  { label: '繁体(香港) → 简体', value: 'hk2s' },
+  { label: '繁体(台湾) → 简体·用语', value: 'tw2sp' },
+]
+
 /* ---------- 排版设置持久化(localStorage;Rust 侧只存进度/批注)。 ---------- */
 
 export interface TypographySettings {
@@ -141,6 +169,8 @@ export interface TypographySettings {
   themeIndex?: number
   pageMargin?: number
   paragraphMargin?: number | undefined
+  writingMode?: WritingModeChoice | undefined
+  zhConvert?: ZhConvertVariant
 }
 
 const TYPOGRAPHY_KEY = 'deepread.reader.typography'

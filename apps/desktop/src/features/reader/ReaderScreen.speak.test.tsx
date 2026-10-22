@@ -29,6 +29,14 @@ vi.mock('@tauri-apps/api/window', () => ({
     listen: vi.fn(async (): Promise<() => void> => () => undefined),
     isFullscreen: vi.fn(async () => false),
     setFullscreen: vi.fn(async () => undefined),
+    // 桌面悬浮条的 tick 会轮询主窗口状态:mock 照真实契约给全,缺了就是
+    // 「main.isVisible is not a function」的 unhandled rejection。
+    isVisible: vi.fn(async (): Promise<boolean> => true),
+    isMinimized: vi.fn(async (): Promise<boolean> => false),
+    show: vi.fn(async (): Promise<void> => {}),
+    unminimize: vi.fn(async (): Promise<void> => {}),
+    setFocus: vi.fn(async (): Promise<void> => {}),
+    minimize: vi.fn(async (): Promise<void> => {}),
   }),
 }))
 
