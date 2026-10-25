@@ -343,6 +343,7 @@ describe('LibraryScreen 外壳契约', () => {
     expect(toolbarButtons()).toEqual([
       '网格视图',
       '列表视图',
+      '每行显示的书本数',
       '排序方式',
       '切换排序方向(当前降序)',
       '批量管理',
@@ -417,6 +418,19 @@ describe('LibraryScreen 书架渲染', () => {
     expect(screen.getAllByText('夜航书').length).toBeGreaterThan(0)
   })
 
+  it('列表行的悬浮动作与网格同一套:收藏/打标签/导出/更多', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByTitle('列表视图'))
+    const actions = document.querySelector('.book-row .book-row-actions')!
+    expect(
+      [...actions.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')),
+    ).toEqual(['收藏 夜航书', '给《夜航书》打标签', '导出《夜航书》的批注', '更多操作 夜航书'])
+
+    // 打标签开的是标签浮层,不是元数据表单。
+    fireEvent.click(within(actions as HTMLElement).getByLabelText('给《夜航书》打标签'))
+    expect(screen.getByRole('dialog', { name: '《夜航书》的标签' })).toBeInTheDocument()
+  })
+
   it('搜索过滤到零本时说清是没匹配,而不是空白', async () => {
     await renderLibrary()
     fireEvent.change(screen.getByLabelText('搜索书名'), { target: { value: '不存在的书' } })
@@ -434,6 +448,33 @@ describe('LibraryScreen 书架渲染', () => {
     await waitFor(() =>
       expect(invokeCommandMock).toHaveBeenCalledWith('library.remove', { bookHash: HASH_A }),
     )
+  })
+})
+
+describe('LibraryScreen 每行书本数', () => {
+  it('网格视图下选固定列数,网格带 is-fixed 并持久化', async () => {
+    await renderLibrary()
+    const trigger = screen.getByLabelText('每行显示的书本数')
+    expect(trigger).toHaveTextContent('自适应')
+
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '每行 4 本' }))
+    expect(document.querySelector('.shelf-grid')!.classList.contains('is-fixed')).toBe(true)
+    expect(localStorage.getItem('deepread.shelf.columns')).toBe('4')
+    // 触发器同步显示当前档位。
+    expect(screen.getByLabelText('每行显示的书本数')).toHaveTextContent('每行 4 本')
+  })
+
+  it('列表视图没有行数下拉 —— 行数是网格自己的事', async () => {
+    await renderLibrary()
+    fireEvent.click(screen.getByTitle('列表视图'))
+    expect(screen.queryByLabelText('每行显示的书本数')).toBeNull()
+  })
+
+  it('固定列数被记住,下次进入书架仍生效', async () => {
+    localStorage.setItem('deepread.shelf.columns', '6')
+    await renderLibrary()
+    expect(document.querySelector('.shelf-grid')!.classList.contains('is-fixed')).toBe(true)
   })
 })
 
@@ -986,7 +1027,7 @@ describe('LibraryScreen 卡片操作', () => {
     expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
   })
 
-  it('菜单只提供真的能工作的两项', async () => {
+  it('菜单是动作全集:打标签、导出批注、编辑、移除(⋯ 紧凑档的展开全靠它)', async () => {
     await renderLibrary()
     fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
     const menu = screen.getByRole('menu', { name: '夜航书 的操作' })
@@ -994,7 +1035,11 @@ describe('LibraryScreen 卡片操作', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => item.textContent?.trim()),
-    ).toEqual(['编辑书籍信息', '从书架移除'])
+    ).toEqual(['打标签', '导出批注(.md)', '编辑书籍信息', '从书架移除'])
+
+    // 菜单里的打标签走的也是标签浮层,不是元数据表单。
+    fireEvent.click(within(menu).getByRole('menuitem', { name: '打标签' }))
+    expect(screen.getByRole('dialog', { name: '《夜航书》的标签' })).toBeInTheDocument()
   })
 
   it('收藏写进标签系统,不新增字段也不新增命令', async () => {

@@ -66,11 +66,14 @@ import {
   sortBooks,
   sortDirFromStorage,
   sortFromStorage,
+  SHELF_COLUMNS_KEY,
   toggleFavoriteTag,
   viewFromStorage,
+  columnsFromStorage,
   type AppTheme,
   type LibraryView,
   type ShelfBook,
+  type ShelfColumns,
   type SmartFilter,
   type SortDir,
   type SortKey,
@@ -250,6 +253,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   const [sortDir, setSortDir] = useState<SortDir>(() => sortDirFromStorage(SORT_DEFAULT_DIR[sort]))
   /** 书架自己的呈现方式(网格/列表);侧栏目的地是下面那个 `view`。 */
   const [shelfMode, setShelfMode] = useState<ViewMode>(viewFromStorage)
+  /** 网格一行几本书('auto' = 自适应);与视图模式同一套 localStorage 习惯。 */
+  const [shelfColumns, setShelfColumns] = useState<ShelfColumns>(columnsFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance')
   /**
@@ -1127,6 +1132,11 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     localStorage.setItem('deepread.shelf.view', mode)
   }
 
+  const changeShelfColumns = (value: ShelfColumns): void => {
+    setShelfColumns(value)
+    localStorage.setItem(SHELF_COLUMNS_KEY, String(value))
+  }
+
   const changeSort = (key: SortKey): void => {
     // 换排序键时方向回到该键的自然方向,否则会出现「按书名」却从 Z 开始。
     const nextDir = SORT_DEFAULT_DIR[key]
@@ -1563,6 +1573,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
                   onQuery={setQuery}
                   view={shelfMode}
                   onView={changeShelfMode}
+                  columns={shelfColumns}
+                  onColumns={changeShelfColumns}
                   sort={sort}
                   onSort={changeSort}
                   sortDir={sortDir}

@@ -38,10 +38,24 @@ import {
   shelfTitle,
   SORT_LABELS,
   type ShelfBook,
+  type ShelfColumns,
   type SortDir,
   type SortKey,
   type ViewMode,
 } from './shelf-view'
+
+/** 「每行几本」的下拉选项。DropdownMenu 只收字符串,数字档在边界上转译。 */
+type ColumnsValue = 'auto' | '3' | '4' | '5' | '6' | '7' | '8'
+
+const COLUMN_OPTIONS: readonly { readonly value: ColumnsValue; readonly label: string }[] = [
+  { value: 'auto', label: '自适应' },
+  { value: '3', label: '每行 3 本' },
+  { value: '4', label: '每行 4 本' },
+  { value: '5', label: '每行 5 本' },
+  { value: '6', label: '每行 6 本' },
+  { value: '7', label: '每行 7 本' },
+  { value: '8', label: '每行 8 本' },
+]
 
 export interface ShelfViewProps {
   readonly books: readonly ShelfBook[]
@@ -51,6 +65,9 @@ export interface ShelfViewProps {
   readonly onQuery: (value: string) => void
   readonly view: ViewMode
   readonly onView: (value: ViewMode) => void
+  /** 网格一行几本书;'auto' = 按窗口宽度自适应。 */
+  readonly columns: ShelfColumns
+  readonly onColumns: (value: ShelfColumns) => void
   readonly sort: SortKey
   readonly onSort: (value: SortKey) => void
   readonly sortDir: SortDir
@@ -95,6 +112,8 @@ export function ShelfView({
   onQuery,
   view,
   onView,
+  columns,
+  onColumns,
   sort,
   onSort,
   sortDir,
@@ -220,6 +239,28 @@ export function ShelfView({
           role="menuitem"
           onClick={() => {
             setMenuHash(null)
+            setTagHash(book.hash)
+          }}
+        >
+          <Tag size={14} weight="regular" aria-hidden />
+          打标签
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setMenuHash(null)
+            void onExportNotes(book)
+          }}
+        >
+          <Export size={14} weight="regular" aria-hidden />
+          导出批注(.md)
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setMenuHash(null)
             onEditInfo(book)
           }}
         >
@@ -310,6 +351,19 @@ export function ShelfView({
             <ListBullets size={15} weight="regular" aria-hidden />
           </button>
         </SlidingIndicator>
+        {view === 'grid' && (
+          /* 行数是网格自己的事,列表视图下不占工具条的位置。 */
+          <DropdownMenu
+            ariaLabel="每行显示的书本数"
+            value={columns === 'auto' ? 'auto' : (String(columns) as ColumnsValue)}
+            options={COLUMN_OPTIONS}
+            onChange={(value) =>
+              onColumns(value === 'auto' ? 'auto' : (Number(value) as ShelfColumns))
+            }
+            className="dropdown-shelf-columns"
+            title="一行显示几本书;自适应按窗口宽度自动安排"
+          />
+        )}
         <DropdownMenu
           ariaLabel="排序方式"
           value={sort}
@@ -351,7 +405,14 @@ export function ShelfView({
            同一个 DOM 节点,只改 className —— li 的 key 也一样,于是整棵子树原地
            复用、从不重新挂载,CSS 入场动画自然一次都不播(用户看到的"布局切换
            没有动画")。换 key 强制重建,li 重新挂载,动画才会播。 */
-        <ul key={view} className="shelf-grid" aria-label="书架">
+        <ul
+          key={view}
+          className={`shelf-grid${columns === 'auto' ? '' : ' is-fixed'}`}
+          style={
+            columns === 'auto' ? undefined : ({ '--shelf-cols': columns } as React.CSSProperties)
+          }
+          aria-label="书架"
+        >
           {books.map((book, index) => {
             const palette = coverPalette(book.hash)
             const title = shelfTitle(book)
@@ -587,6 +648,8 @@ export function ShelfView({
                   )}
                 </button>
                 {!selecting && (
+                  /* 与网格卡片同一套动作(收藏/打标签/导出),「编辑」收进 ⋯ 菜单
+                     —— 列表行的高度放不下五个图标,但功能一项不少。 */
                   <div className="book-row-actions">
                     <button
                       type="button"
@@ -596,6 +659,25 @@ export function ShelfView({
                       onClick={() => onToggleFavorite(book)}
                     >
                       <Star size={15} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className="card-action-icon"
+                      aria-label={`给《${title}》打标签`}
+                      aria-haspopup="dialog"
+                      aria-expanded={tagHash === book.hash}
+                      onClick={() => setTagHash(tagHash === book.hash ? null : book.hash)}
+                    >
+                      <Tag size={15} weight="regular" aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className="card-action-icon"
+                      aria-label={`导出《${title}》的批注`}
+                      title="导出这本书的批注(.md)"
+                      onClick={() => onExportNotes(book)}
+                    >
+                      <Export size={15} weight="regular" aria-hidden />
                     </button>
                     <button
                       type="button"
@@ -613,6 +695,14 @@ export function ShelfView({
                 )}
                 {!selecting && removeButton(book, 'book-row-remove')}
                 {renderMenu(book, 'is-row')}
+                {tagHash === book.hash && (
+                  <TagPopover
+                    label={`《${title}》的标签`}
+                    tags={book.tags}
+                    onChange={(next) => onSetTags(book, next)}
+                    onClose={() => setTagHash(null)}
+                  />
+                )}
               </li>
             )
           })}

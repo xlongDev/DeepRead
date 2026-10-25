@@ -249,3 +249,19 @@ export const viewFromStorage = (): ViewMode => {
   const stored = localStorage.getItem('deepread.shelf.view')
   return stored === 'list' ? 'list' : 'grid'
 }
+
+/**
+ * 网格一行几本书:`'auto'` = 按窗口宽度自适应(auto-fill),数字 = 固定列数。
+ * 存储里统一是字符串,读取时收窄成白名单,脏值回落 auto。
+ */
+export type ShelfColumns = 'auto' | 3 | 4 | 5 | 6 | 7 | 8
+
+const SHELF_COLUMNS_VALID: readonly string[] = ['auto', '3', '4', '5', '6', '7', '8']
+
+export const SHELF_COLUMNS_KEY = 'deepread.shelf.columns'
+
+export const columnsFromStorage = (): ShelfColumns => {
+  const stored = localStorage.getItem(SHELF_COLUMNS_KEY)
+  if (stored === null || !SHELF_COLUMNS_VALID.includes(stored)) return 'auto'
+  return stored === 'auto' ? 'auto' : (Number(stored) as 3 | 4 | 5 | 6 | 7 | 8)
+}

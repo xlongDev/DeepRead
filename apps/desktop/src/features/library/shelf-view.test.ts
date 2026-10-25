@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  columnsFromStorage,
   coverPalette,
   formatBytes,
   formatStatDuration,
@@ -145,6 +146,27 @@ describe('收藏', () => {
     expect(isFavorite(book({ tags: [] }))).toBe(false)
     expect(toggleFavoriteTag([])).toEqual(['收藏'])
     expect(toggleFavoriteTag(['文学', '收藏'])).toEqual(['文学'])
+  })
+})
+
+describe('每行书本数(columnsFromStorage)', () => {
+  it('没存过或存的是 auto,都回落自适应', () => {
+    localStorage.removeItem('deepread.shelf.columns')
+    expect(columnsFromStorage()).toBe('auto')
+    localStorage.setItem('deepread.shelf.columns', 'auto')
+    expect(columnsFromStorage()).toBe('auto')
+  })
+
+  it('数字档收窄成字面量类型', () => {
+    localStorage.setItem('deepread.shelf.columns', '6')
+    expect(columnsFromStorage()).toBe(6)
+  })
+
+  it('脏值(白名单外的数字)不进网格,回落自适应', () => {
+    localStorage.setItem('deepread.shelf.columns', '42')
+    expect(columnsFromStorage()).toBe('auto')
+    localStorage.setItem('deepread.shelf.columns', '两个')
+    expect(columnsFromStorage()).toBe('auto')
   })
 })
 
