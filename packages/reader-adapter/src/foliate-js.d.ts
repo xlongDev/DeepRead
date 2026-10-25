@@ -16,13 +16,25 @@ declare module 'foliate-js/view.js' {
     subitems?: FoliateTocItem[] | null
   }
 
+  /**
+   * A fixed-layout section as loaded by the vendored PDF adapter: a blob URL
+   * for the page document plus the zoom hook the renderer calls with the
+   * computed scale (`width`/`height` are the page's natural CSS size).
+   */
+  export interface FixedLayoutPage {
+    src: string
+    onZoom?: (state: { doc: Document; scale: number }) => void
+    width?: number
+    height?: number
+  }
+
   export interface FoliateSection {
     id?: unknown
     cfi?: string
     linear?: string
     /** Estimated content size in bytes; drives reading-progress fractions. */
     size: number
-    load(): Promise<string>
+    load(): Promise<string | FixedLayoutPage>
     unload?(url: string): void
     createDocument?(): Promise<Document>
   }
@@ -45,7 +57,13 @@ declare module 'foliate-js/view.js' {
     toc?: Promise<FoliateTocItem[] | null> | FoliateTocItem[] | null
     pageList?: Promise<FoliateTocItem[] | null> | FoliateTocItem[] | null
     sections: FoliateSection[]
-    rendition?: { layout?: 'pre-paginated' | 'reflowable' }
+    rendition?: {
+      layout?: 'pre-paginated' | 'reflowable'
+      /** Fixed-layout spread pairing, read by the kernel at `open()` time:
+       *  `none` = one section per spread (单页), `auto`/absent = pair into
+       *  two-page spreads on wide surfaces (双页). */
+      spread?: 'auto' | 'none' | 'both' | 'portrait'
+    }
     splitTOCHref?(href: string): Promise<[number, string | null]> | [number, string | null]
     getTOCFragment?(doc: Document, fragment: string | null): Element | null
     resolveHref?(href: string): Promise<{ index: number; anchor?: unknown }>
@@ -85,12 +103,25 @@ declare module 'foliate-js/view.js' {
     /** Low-level navigation used by the adapter's aligned fraction jump (see
      *  FoliateAdapter#goToFractionAligned). A function anchor is resolved by
      *  the kernel AFTER the target section renders, when the live page count
-     *  is known. Absent on the fixed-layout renderer. */
-    goTo?(target: { index: number; anchor?: number | ((doc: Document) => number) }): Promise<void>
+     *  is known. Absent on the fixed-layout renderer.
+     *
+     *  分页档下 Range 锚点比数字比例鲁棒:内核对数字锚点按 `anchor *
+     *  (textPages - 1)` 反算页号,短章(textPages = 1)恒落第 1 页;Range 走
+     *  getClientRects 几何,同章 / 跨章都落得准(见 anchorRangeFor)。 */
+    goTo?(target: {
+      index: number
+      anchor?: number | Range | ((doc: Document) => number | Range)
+    }): Promise<void>
     /** Total columns of the rendered section (paginator only). */
     readonly pages?: number
+    /** Column width in CSS px (paginator only):联动动画算目标滚动偏移用。 */
+    readonly size?: number
     /** True while flow = scrolled (paginator only). */
     readonly scrolled?: boolean
+    /** 容器滚动位置(分页 = scrollLeft,滚动 = scrollTop)。阅读尺把它当
+     *  「把某一行滚到视口中间」的唯一入口 —— 内核的 scrollBy 在滚动模式下
+     *  取的是 dx(见 paginator.js `#vertical ? dy : dx`),横向滚动时是空操作。 */
+    containerPosition?: number
     next(distance?: number): Promise<void>
     prev(distance?: number): Promise<void>
     getContents(): { doc: Document; index: number; overlayer?: Overlayer }[]
@@ -98,9 +129,25 @@ declare module 'foliate-js/view.js' {
      *  it (not on the view — the event does not bubble), which is how section
      *  reloads are observed for annotation replay. The boolean `animated`
      *  attribute also lives here: it switches the kernel's own page-turn
-     *  slide on/off (see FoliateAdapter.#turnPage). */
+     *  slide on/off (see FoliateAdapter.#turnPage). The fixed-layout renderer
+     *  is an HTMLElement too: the adapter mounts PDF scroll pages by
+     *  dispatching synthetic `load`/`relocate` events on it, which view.js
+     *  re-emits on the view (see pdf-scroll.ts). */
     addEventListener(type: string, listener: (event: Event) => void): void
+    dispatchEvent(event: Event): boolean
     destroy(): void
+    /** HTMLElement 出身:view.open() 从不摘旧 renderer,换书/重开必须自己
+     * 从影子根里摘掉(见 FoliateAdapter.#retireRenderer)。 */
+    remove(): void
+    /** ---- fixed-layout renderer (foliate-fxl) only ---- */
+    /** Re-reads `book.rendition.spread` and rebuilds the spread grouping.
+     *  The kernel computes spreads once inside its own `open()` (private
+     *  field), so switching 单页/双页 at runtime means calling it again. */
+    open?(book: FoliateBook): void
+    getSpreadOf?(
+      section: FoliateSection,
+    ): { index: number; side: 'left' | 'right' | 'center' } | undefined
+    goToSpread?(index: number, side?: string, reason?: string): Promise<void>
   }
 
   export class View extends HTMLElement {
@@ -115,6 +162,12 @@ declare module 'foliate-js/view.js' {
       target: string | number | { fraction: number; [key: string]: unknown },
     ): Promise<{ index: number; anchor: (doc: Document) => Range | Element } | undefined>
     goToFraction(fraction: number): Promise<void>
+    /** Resolve a navigation target (CFI / href / index / fraction) to a
+     *  section index without touching the renderer. Returns undefined (after
+     *  logging) when the target cannot be resolved. */
+    resolveNavigation(
+      target: string | number | { fraction: number; [key: string]: unknown },
+    ): { index: number; anchor: (doc: Document) => Range | Element } | undefined
     /** Cumulative section boundaries (0..1) driving progress fractions.
      *  Public stand-in for the kernel's private SectionProgress. */
     getSectionFractions(): number[]

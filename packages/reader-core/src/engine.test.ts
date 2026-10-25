@@ -74,8 +74,13 @@ class ContractProbe implements ReaderEngine {
   }
 
   setLayout(layout: ReaderLayout): Promise<void> {
+    // 上下与左右是两把独立的标尺,任何一个为负都得挡住(负数会把栏宽/留白
+    // 算成比纸还窄,内核不会替调用方兜)。
     if (layout.margin !== undefined && layout.margin < 0) {
       return Promise.reject(new Error('margin must be non-negative'))
+    }
+    if (layout.marginInline !== undefined && layout.marginInline < 0) {
+      return Promise.reject(new Error('marginInline must be non-negative'))
     }
     return Promise.resolve()
   }
@@ -126,6 +131,9 @@ describe('ReaderEngine contract', () => {
     const layouts: ReaderLayout[] = [
       { flow: 'paginated', pageMode: 'single' },
       { flow: 'scrolled', pageMode: 'single' },
+      // 上下 / 左右两把标尺 + 段首缩进可以各自单改,互不影响。
+      { flow: 'paginated', pageMode: 'single', margin: 72, marginInline: 48, textIndent: 2 },
+      { flow: 'paginated', pageMode: 'single', textIndent: 0 },
     ]
     for (const layout of layouts) {
       await expect(engine.setLayout(layout)).resolves.toBeUndefined()
@@ -133,5 +141,8 @@ describe('ReaderEngine contract', () => {
     await expect(
       engine.setLayout({ flow: 'paginated', pageMode: 'single', margin: -1 }),
     ).rejects.toThrow('margin must be non-negative')
+    await expect(
+      engine.setLayout({ flow: 'paginated', pageMode: 'single', marginInline: -1 }),
+    ).rejects.toThrow('marginInline must be non-negative')
   })
 })

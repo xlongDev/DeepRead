@@ -51,7 +51,11 @@ export interface ReaderEngine {
   getTableOfContents(): Promise<readonly TocItem[]>
 
   getCurrentLocation(): Promise<ReadingLocation>
-  goTo(location: ReadingLocation): Promise<void>
+  /**
+   * 跳转。`animate: true` 时同章内的位移带滑动(并行阅读的联动用 —— 主动
+   * 翻页的那一栏有内核翻页动画,被拽的这一栏不该是瞬跳)。
+   */
+  goTo(location: ReadingLocation, options?: { animate?: boolean }): Promise<void>
   /**
    * 翻页。`animate: false` 时内核必须瞬间完成翻页(调用方自己包了动画) —
    * foliate 的翻页默认带 100ms debounce,那段空窗露在动画中间就是用户
@@ -81,5 +85,27 @@ export interface ReaderEngine {
    */
   setChineseVariant(variant: ZhConvertVariant): Promise<void>
 
+  /**
+   * 阅读尺(可选能力:引擎不支持时调用方隐藏入口)。
+   *
+   * `null` = 关闭。打开后焦点带跟随阅读行,其余内容按 `dimOpacity` 淡化;
+   * 移动走 {@link moveReadingRuler} / {@link wheelReadingRuler},走到版心末尾
+   * 由引擎自己翻页,文首文末停住。固定排版与竖排暂不支持。
+   */
+  setReadingRuler?(options: ReadingRulerOptions | null): void
+  /** 阅读尺上下移一行;没有尺时是空操作。 */
+  moveReadingRuler?(direction: -1 | 1): Promise<void>
+  /** 滚轮事件转给阅读尺:引擎内部按像素累积成行。 */
+  wheelReadingRuler?(deltaY: number, deltaMode: number): void
+  /** 排版/尺寸变化后重画一次(锚点会跟着重排走)。 */
+  refreshReadingRuler?(): void
+
   destroy(): Promise<void>
+}
+
+export interface ReadingRulerOptions {
+  /** 焦点带覆盖的行数(1..10)。 */
+  readonly focusLines: number
+  /** 非焦点内容的不透明度(0..1)。 */
+  readonly dimOpacity: number
 }

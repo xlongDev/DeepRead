@@ -20,7 +20,7 @@
  *   「我要离开这本书」。
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LinkSimple, LinkSimpleBreak, X } from '@phosphor-icons/react'
 import { ReaderScreen } from './ReaderScreen'
 import type { OpenedBook } from '../../lib/book-import'
@@ -71,6 +71,9 @@ export function ParallelReader({
   const dragRef = useRef<{ rect: DOMRect; percent: number } | null>(null)
   const echoRef = useRef<RelayEcho | null>(null)
   const lastRelayRef = useRef(0)
+  /** 被节流挡下的最新目标:窗口结束补发一次(拖尾),不直接丢。 */
+  const pendingRef = useRef<{ side: PaneSide; fraction: number } | null>(null)
+  const pendingTimerRef = useRef<number | null>(null)
   /** 各栏最后停在哪条 CFI:「关闭对照」要立刻回到这一页,不等存储回读。 */
   const cfiRef = useRef<Record<PaneSide, string | undefined>>({ a: undefined, b: undefined })
 
@@ -80,26 +83,48 @@ export function ParallelReader({
    * 回声判定必须在**节流之前**:对面被拽过去后几乎立刻回调,那一跳往往就落在
    * 120ms 的节流窗里 —— 如果先被节流丢掉,守卫就一直挂在对面等一个永远不会
    * 被消费的回声,下一次真实翻页会被误吞(表现:联动偶尔失灵一次)。
+   *
+   * 节流本身是**拖尾**的(见 RELAY_INTERVAL_MS):挡下的请求记最新目标,
+   * 窗口结束补发,不然快速连翻几页对面就整整落后几页。
    */
   const relay = useCallback(
     (side: PaneSide, fraction: number) => {
-      if (!linked) return
+      if (!linked) {
+        // 联动关了:待发的拖尾也作废,不然再开会突然补跳一次。
+        pendingRef.current = null
+        return
+      }
       const now = Date.now()
       const previous = echoRef.current
       const decision = relayDecision(side, previous, now)
       echoRef.current = decision.echo
       if (decision.relay === null) return
-      if (now - lastRelayRef.current < RELAY_INTERVAL_MS) {
-        // 这一跳被节流掉:守卫还原 —— 没发出去的请求不该在等回声。
-        echoRef.current = previous
+      const target = decision.relay
+      const elapsed = now - lastRelayRef.current
+      if (elapsed >= RELAY_INTERVAL_MS) {
+        lastRelayRef.current = now
+        pendingRef.current = null
+        setRequests((current) => ({
+          ...current,
+          [target]: { fraction, nonce: current[target].nonce + 1 },
+        }))
         return
       }
-      lastRelayRef.current = now
-      const target = decision.relay
-      setRequests((current) => ({
-        ...current,
-        [target]: { fraction, nonce: current[target].nonce + 1 },
-      }))
+      // 落在节流窗里:记最新目标,窗尾补发。同一栏连翻时只会剩最后一次的
+      // 位置,对面跳一次就够。
+      pendingRef.current = { side: target, fraction }
+      if (pendingTimerRef.current !== null) return
+      pendingTimerRef.current = window.setTimeout(() => {
+        pendingTimerRef.current = null
+        const pending = pendingRef.current
+        pendingRef.current = null
+        if (pending === null) return
+        lastRelayRef.current = Date.now()
+        setRequests((current) => ({
+          ...current,
+          [pending.side]: { fraction: pending.fraction, nonce: current[pending.side].nonce + 1 },
+        }))
+      }, RELAY_INTERVAL_MS - elapsed)
     },
     [linked],
   )
@@ -138,6 +163,13 @@ export function ParallelReader({
   }
 
   const nudgeSplit = (delta: number): void => commitSplit(split + delta)
+
+  // 卸载时清掉拖尾计时器:不然它会对着一个已经不在的组件 setState。
+  useEffect(() => {
+    return () => {
+      if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current)
+    }
+  }, [])
 
   return (
     <div

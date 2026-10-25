@@ -164,7 +164,7 @@ describe('ParallelReader', () => {
     expect(left.nextPage).toHaveBeenCalledTimes(1)
   })
 
-  it('联动开着时,一栏翻到哪另一栏跟到哪(按比例)', async () => {
+  it('联动开着时,一栏翻到哪另一栏跟到哪(按比例,且带滑动动画)', async () => {
     await renderParallel()
     const [left, right] = panes()
     // 第一条是开书落位上报:真内核开书/恢复进度后一定会报一次,而它晚于 ready
@@ -172,7 +172,10 @@ describe('ParallelReader', () => {
     // ready 后的首条上报只当作跳过位(fake 内核不报,这里手动补上)。
     left.emitRelocate(relocate(0))
     left.emitRelocate(relocate(0.42))
-    await waitFor(() => expect(right.goTo).toHaveBeenCalledWith({ progress: 0.42 }))
+    // animate:被拽的这一栏也要滑过去,不能是瞬跳(用户报的「一边播动画一边瞬移」)
+    await waitFor(() =>
+      expect(right.goTo).toHaveBeenCalledWith({ progress: 0.42 }, { animate: true }),
+    )
   })
 
   it('联动关掉后不再互相拽', async () => {

@@ -6,7 +6,7 @@
  * 2000 行组件里的 handler 淹没。
  */
 
-export type ReaderKeyAction = 'fullscreen' | 'next' | 'prev' | 'escape'
+export type ReaderKeyAction = 'fullscreen' | 'next' | 'prev' | 'escape' | 'ruler-up' | 'ruler-down'
 
 /** 只取用得到的字段,方便测试直接传字面量。 */
 export interface ReaderKeyEvent {
@@ -27,6 +27,10 @@ export function readerKeyAction(event: ReaderKeyEvent): ReaderKeyAction | null {
   }
   if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') return 'next'
   if (event.key === 'ArrowLeft' || event.key === 'PageUp') return 'prev'
+  // 上下方向键归阅读尺:开尺时移尺(走到页尾自然翻页),关尺时调用方直接
+  // 忽略,保持「未绑定 = 交给浏览器」的旧行为。
+  if (event.key === 'ArrowDown') return 'ruler-down'
+  if (event.key === 'ArrowUp') return 'ruler-up'
   if (event.key === 'Escape') return 'escape'
   return null
 }

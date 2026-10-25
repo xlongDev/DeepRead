@@ -267,6 +267,9 @@ const render = async (page, doc, zoom, pageColors = currentPageColors) => {
 
 const renderPage = async (page, getImageBlob) => {
   const viewport = page.getViewport({ scale: 1 })
+  // 页面的自然尺寸(CSS px):滚动条要用它预排每页的占位高度(见
+  // pdf-scroll.ts 的 PdfScrollStrip),不依赖 iframe 挂载后才能量。
+  const size = { width: viewport.width, height: viewport.height }
   if (getImageBlob) {
     const canvas = document.createElement('canvas')
     canvas.height = viewport.height
@@ -311,7 +314,7 @@ const renderPage = async (page, getImageBlob) => {
   // pageColors 走 render 的默认参数(模块级 currentPageColors):npm 包的
   // fixed-layout 渲染器调 onZoom 时只给 { doc, scale }。
   const onZoom = ({ doc, scale }) => render(page, doc, scale)
-  return { src, onZoom }
+  return { src, onZoom, ...size }
 }
 
 const makeTOCItem = (item) => ({

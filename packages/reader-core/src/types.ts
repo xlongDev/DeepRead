@@ -96,8 +96,17 @@ export interface ReaderLayout {
    * Omit to keep the book's own writing mode (原书排版优先).
    */
   readonly writingMode?: 'horizontal-tb' | 'vertical-rl'
-  /** Page margin in px, when the flow is paginated. */
+  /**
+   * 页边距 · 上下(px),分页时生效。落到 paginator 的 `margin` 属性 ——
+   * 内核的该属性只作用于上下(横向留白由居中 + 栏宽上限推导,见 marginInline)。
+   */
   readonly margin?: number
+  /**
+   * 页边距 · 左右(px)。内核没有直接的横向边距属性,由栏宽上限
+   * (max-inline-size)模拟:边距越大栏越窄,宽窗口下也能感知变化。
+   * Omit = 内核默认栏宽。
+   */
+  readonly marginInline?: number
   /** Base font size in px for reflowable content (books keep their own fonts). */
   readonly fontSize?: number
   /**
@@ -110,6 +119,11 @@ export interface ReaderLayout {
    * paragraph spacing (原书排版优先).
    */
   readonly paragraphMargin?: number
+  /**
+   * 段首缩进(p 的 text-indent,单位 em;0 = 不缩进)。
+   * Omit to keep the book's own indentation (原书排版优先).
+   */
+  readonly textIndent?: number
   /**
    * 正文字重(400 常规 / 500 中等 / 700 加粗;标题不受影响)。
    * Omit to keep the book's own font weights (原书排版优先).

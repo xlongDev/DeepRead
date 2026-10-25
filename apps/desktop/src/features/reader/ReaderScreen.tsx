@@ -17,6 +17,7 @@ import {
   Moon,
   PencilSimple,
   Plus,
+  Ruler,
   SlidersHorizontal,
   Sparkle,
   Sun,
@@ -35,7 +36,12 @@ import {
   type DictionaryMeta,
   type ReadingFont,
 } from '@deepread/shared'
-import type { AnnotationStyle, TocItem, ZhConvertVariant } from '@deepread/reader-core'
+import type {
+  AnnotationStyle,
+  ReaderLayout,
+  TocItem,
+  ZhConvertVariant,
+} from '@deepread/reader-core'
 import { localDayKey } from '@deepread/shared'
 import { countChars } from '@deepread/reader-core'
 import {
@@ -44,6 +50,7 @@ import {
   chapterSections,
   extractCover,
   FoliateAdapter,
+  isFixedLayoutFormat,
   reviewRepair,
   inflateGzip,
   lookupWord,
@@ -69,31 +76,44 @@ import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib
 import {
   buildFontFacesCss,
   FONT_FAMILY_OPTIONS,
+  FONT_SIZE_DEFAULT,
   FONT_SIZES,
   FONT_STACK_PREVIEW,
   FONT_WEIGHT_OPTIONS,
   HIGHLIGHT_COLOR,
   HIGHLIGHT_PALETTE,
+  layoutOverrides,
   LINE_HEIGHT_OPTIONS,
   loadPageTurnStyle,
+  loadRulerSettings,
   loadStatsSettings,
   loadTypography,
-  PAGE_MARGIN_OPTIONS,
+  materializeCustomDefaults,
+  PAGE_MARGIN_BLOCK_DEFAULT,
+  PAGE_MARGIN_BLOCK_OPTIONS,
+  PAGE_MARGIN_INLINE_DEFAULT,
+  PAGE_MARGIN_INLINE_OPTIONS,
   PAGE_TURN_OPTIONS,
   PARAGRAPH_MARGIN_OPTIONS,
   persistPageTurnStyle,
+  persistRulerSettings,
   persistStatsSettings,
   persistTypography,
   loadTranslateTarget,
   persistTranslateTarget,
   READER_THEMES,
+  RULER_DIM_OPTIONS,
+  RULER_FOCUS_LINES,
+  TEXT_INDENT_OPTIONS,
   TRANSLATE_TARGETS,
   VIEW_MODE_OPTIONS,
   WRITING_MODE_OPTIONS,
   ZH_CONVERT_OPTIONS,
   withAlpha,
   type PageTurnStyle,
+  type ReadingRulerSettings,
   type StatsSettings,
+  type TypographySettings,
   type ViewMode,
   type WritingModeChoice,
 } from './reader-options'
@@ -118,6 +138,13 @@ import { primeTtsAudio } from './tts/audio'
 import type { OpenedBook } from '../../lib/book-import'
 
 const CHROME_TIMEOUT_MS = 2500
+/**
+ * 翻页期间(含片尾)不唤起 chrome 的窗口。
+ *
+ * 最长的一档动画是「覆盖」= 240ms 退场 + 340ms 进场;余量留给 WebKit 在
+ * 内容位移后继续补发的那几个 pointermove(见 showChrome 的注释)。
+ */
+const TURN_WAKE_SUPPRESS_MS = 900
 const SAVE_DEBOUNCE_MS = 800
 const MAX_SHOWN_SEARCH_RESULTS = 50
 /** 与 `reader.note.update` 的上限对齐(shared 协议里那条 zod)。 */
@@ -127,6 +154,26 @@ const EXCERPT_MAX_CHARS = 500
 const TRANSLATE_CARD_HEIGHT = 300
 /** 词典卡的估计高度(max-height 300),同用于避让工具条。 */
 const LOOKUP_CARD_HEIGHT = 280
+
+/**
+ * 偏好 → 内核版式对象(开书初值 / 偏好下发 / 改动下发三处共用)。
+ *
+ * 版式(flow / pageMode)、字号与两把边距任何时候都下发 —— 那是读者的阅读
+ * 舒适度;行距、段间距一类的**书自己的排版**先看总开关(见
+ * `layoutOverrides`):原书排版开着的默认值下,它们一律 undefined,内核因此
+ * 保留书里原有的值。三处各写一遍是「某一处漏掉默认值 → 偏偏那个入口表现不
+ * 一样」这种 bug 的固定来源,所以收成一个入口。
+ */
+function readerLayout(settings: TypographySettings): ReaderLayout {
+  return {
+    flow: settings.viewMode === 'scroll' ? 'scrolled' : 'paginated',
+    pageMode: settings.viewMode === 'dual' ? 'dual' : 'single',
+    fontSize: settings.fontSize ?? FONT_SIZE_DEFAULT,
+    margin: settings.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
+    marginInline: settings.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
+    ...layoutOverrides(settings),
+  }
+}
 
 /**
  * 并行阅读时宿主塞给一栏的桥接。
@@ -249,6 +296,8 @@ export function ReaderScreen({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 最近一次指针活动的时刻:chrome 自动隐藏以它为基准。 */
   const lastChromeActivityRef = useRef(0)
+  /** 翻页期间(含片尾)不唤起 chrome 的截止时刻(见 showChrome)。 */
+  const turnWakeUntilRef = useRef(0)
   /** chrome 显隐函数的 ref:内核回调(constant closure)经它调用最新版本。 */
   const showChromeRef = useRef<() => void>(() => {})
   /** 并排阅读的「激活我」:adapter 挂载时一次建成,回调要走 ref 才能拿到当次渲染的 pane。 */
@@ -261,15 +310,29 @@ export function ReaderScreen({
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
   const openPanelRef = useRef<OpenPanel | null>(null)
   const storedTypography = loadTypography()
-  const settingsRef = useRef({
-    viewMode: storedTypography.viewMode ?? ('single' as ViewMode),
-    fontSize: storedTypography.fontSize ?? 16,
+  /**
+   * 滚动形态只对可重排书籍与 PDF 存在(见 reader-adapter 的 isFixedLayoutFormat):
+   * CBZ 等固定排版没有可预排的页尺寸,「滚动」档对它们是空操作。存量的
+   * 「滚动」偏好在这类书上按单页起 —— 否则 UI 勾着滚动、画面却既不动也没
+   * 翻页动画。只改内存里的档位,不写回用户的全局偏好(换本书就恢复)。
+   */
+  const scrollModeSupported = book.format === 'pdf' || !isFixedLayoutFormat(book.format)
+  const initialViewMode: ViewMode =
+    storedTypography.viewMode === 'scroll' && !scrollModeSupported
+      ? 'single'
+      : (storedTypography.viewMode ?? 'single')
+  const settingsRef = useRef<TypographySettings>({
+    originalLayout: storedTypography.originalLayout ?? true,
+    viewMode: initialViewMode,
+    fontSize: storedTypography.fontSize,
     lineHeight: storedTypography.lineHeight,
     fontFamily: storedTypography.fontFamily,
     fontWeight: storedTypography.fontWeight,
     themeIndex: storedTypography.themeIndex ?? 0,
-    pageMargin: storedTypography.pageMargin ?? 72,
+    pageMargin: storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
+    pageMarginBlock: storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
     paragraphMargin: storedTypography.paragraphMargin,
+    textIndent: storedTypography.textIndent,
     writingMode: storedTypography.writingMode,
     zhConvert: storedTypography.zhConvert ?? ('none' as ZhConvertVariant),
   })
@@ -323,17 +386,36 @@ export function ReaderScreen({
   })
   const [annotations, setAnnotations] = useState<readonly AnnotationRecord[]>([])
   const [bookmarks, setBookmarks] = useState<readonly BookmarkRecord[]>([])
-  const [viewMode, setViewMode] = useState<ViewMode>(() => storedTypography.viewMode ?? 'single')
-  const [fontSize, setFontSize] = useState<number>(() => storedTypography.fontSize ?? 16)
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode)
+  /** 原书排版总开关(默认开:书自己的排版赢)。 */
+  const [originalLayout, setOriginalLayout] = useState<boolean>(
+    () => storedTypography.originalLayout ?? true,
+  )
+  /** undefined = 读者还没动过(切到自定义排版时才会落到 18px,见
+      `materializeCustomDefaults`);面板显示与下发仍按 16 兜底。 */
+  const [fontSize, setFontSize] = useState<number | undefined>(() => storedTypography.fontSize)
   const [lineHeight, setLineHeight] = useState<number | undefined>(
     () => storedTypography.lineHeight,
   )
   const [fontFamily, setFontFamily] = useState<string | undefined>(
     () => storedTypography.fontFamily,
   )
-  const [pageMargin, setPageMargin] = useState<number>(() => storedTypography.pageMargin ?? 72)
+  /**
+   * 页边距 · 左右(px)。内核没有横向边距属性,这一路由栏宽上限模拟(见
+   * reader-adapter 的 #maxInlineSize):数字越大留白越宽、栏越窄。
+   */
+  const [pageMargin, setPageMargin] = useState<number>(
+    () => storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
+  )
+  /** 页边距 · 上下(px):直接是 paginator 的 margin 属性。 */
+  const [pageMarginBlock, setPageMarginBlock] = useState<number>(
+    () => storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
+  )
   const [paragraphMargin, setParagraphMargin] = useState<number | undefined>(
     () => storedTypography.paragraphMargin,
+  )
+  const [textIndent, setTextIndent] = useState<number | undefined>(
+    () => storedTypography.textIndent,
   )
   const [fontWeight, setFontWeight] = useState<number | undefined>(
     () => storedTypography.fontWeight,
@@ -345,6 +427,14 @@ export function ReaderScreen({
     () => storedTypography.zhConvert ?? 'none',
   )
   const [themeIndex, setThemeIndex] = useState(() => storedTypography.themeIndex ?? 0)
+  const [rulerSettings, setRulerSettings] = useState<ReadingRulerSettings>(loadRulerSettings)
+  /**
+   * 阅读尺只吃可重排的横排正文:固定排版(PDF/CBZ)的「行」是画布上的影子
+   * 文本层,量不出行盒;竖排的「行」是竖列,蒙版要整块换轴。两档不给入口,
+   * 免得用户开了只看见一块歪掉的暗区。
+   */
+  const rulerSupported = !isFixedLayoutFormat(book.format) && writingMode !== 'vertical-rl'
+  const rulerActive = rulerSupported && rulerSettings.enabled
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
   )
@@ -468,6 +558,7 @@ export function ReaderScreen({
 
   useEffect(() => {
     settingsRef.current = {
+      originalLayout,
       viewMode,
       fontSize,
       lineHeight,
@@ -475,11 +566,14 @@ export function ReaderScreen({
       fontWeight,
       themeIndex,
       pageMargin,
+      pageMarginBlock,
       paragraphMargin,
+      textIndent,
       writingMode,
       zhConvert,
     }
   }, [
+    originalLayout,
     viewMode,
     fontSize,
     lineHeight,
@@ -487,7 +581,9 @@ export function ReaderScreen({
     fontWeight,
     themeIndex,
     pageMargin,
+    pageMarginBlock,
     paragraphMargin,
+    textIndent,
     writingMode,
     zhConvert,
   ])
@@ -705,20 +801,16 @@ export function ReaderScreen({
             name: book.name,
           },
           {
-            theme: READER_THEMES[settingsRef.current.themeIndex]?.theme ?? READER_THEMES[0]!.theme,
-            layout: {
-              flow: settingsRef.current.viewMode === 'scroll' ? 'scrolled' : 'paginated',
-              pageMode: settingsRef.current.viewMode === 'dual' ? 'dual' : 'single',
-              fontSize: settingsRef.current.fontSize,
-              lineHeight: settingsRef.current.lineHeight,
-              fontFamily: settingsRef.current.fontFamily,
-              fontWeight: settingsRef.current.fontWeight,
-              margin: settingsRef.current.pageMargin,
-              paragraphMargin: settingsRef.current.paragraphMargin,
-              writingMode: settingsRef.current.writingMode,
-            },
+            theme:
+              READER_THEMES[settingsRef.current.themeIndex ?? 0]?.theme ?? READER_THEMES[0]!.theme,
+            layout: readerLayout(settingsRef.current),
           },
         )
+        // 被销毁(StrictMode 换挂载 / 换书)后 open() 会空 resolve —— 此时
+        // 内核里什么都没有,IIFE 必须就此停手。漏掉这一句,后面的
+        // getMetadata 会现造一个没有 book 的 view 钉在宿主机里,下一个
+        // 适配器采用它开书,半个 paginator 直接把阅读尺探针打翻。
+        if (cancelled) return
         const [metadata, tocItems] = await Promise.all([
           adapter.getMetadata(),
           adapter.getTableOfContents(),
@@ -728,19 +820,9 @@ export function ReaderScreen({
         setToc(tocItems)
         setBookLanguage(metadata.language)
         await adapter.setTheme(
-          READER_THEMES[settingsRef.current.themeIndex]?.theme ?? READER_THEMES[0]!.theme,
+          READER_THEMES[settingsRef.current.themeIndex ?? 0]?.theme ?? READER_THEMES[0]!.theme,
         )
-        await adapter.setLayout({
-          flow: settingsRef.current.viewMode === 'scroll' ? 'scrolled' : 'paginated',
-          pageMode: settingsRef.current.viewMode === 'dual' ? 'dual' : 'single',
-          fontSize: settingsRef.current.fontSize,
-          lineHeight: settingsRef.current.lineHeight,
-          fontFamily: settingsRef.current.fontFamily,
-          fontWeight: settingsRef.current.fontWeight,
-          margin: settingsRef.current.pageMargin,
-          paragraphMargin: settingsRef.current.paragraphMargin,
-          writingMode: settingsRef.current.writingMode,
-        })
+        await adapter.setLayout(readerLayout(settingsRef.current))
 
         // 跨书搜索的正文命中:先按章节 label 定位。找不到那一章就照常
         // (恢复上次进度 / 开头),但要说一声 —— 用户点的是「跳到命中处」,
@@ -808,13 +890,26 @@ export function ReaderScreen({
    * 用 nonce 判「是不是新请求」而不是比进度值:两本书进度可能恰好相同,
    * 按值比较会把重复请求当成空操作,偶尔漏跳。也不要把它并到开书 effect 里
    * —— 那个 effect 的依赖是 book,换书才该重跑。
+   *
+   * 内核还没就绪(开书竞态 / 慢书)时**不记账**:请求留在 syncRequest 里,
+   * phase 到 reading 后 effect 重跑再放一次。否则 goTo 对着一个还没建好的
+   * renderer 抛错,请求被静默吞掉 —— 用户看到的就是「左边翻了右边没动」,
+   * 而且只偶现(取决于那一栏开书快慢)。
    */
   const syncRequest = pane?.sync
   useEffect(() => {
-    if (syncRequest === undefined || syncRequest.nonce === appliedSyncRef.current) return
-    appliedSyncRef.current = syncRequest.nonce
-    void adapterRef.current?.goTo({ progress: syncRequest.fraction }).catch(() => {})
-  }, [syncRequest])
+    if (syncRequest === undefined || syncRequest.nonce === 0) return
+    if (syncRequest.nonce === appliedSyncRef.current) return
+    if (phase !== 'reading') return
+    const adapter = adapterRef.current
+    if (adapter === null) return
+    const nonce = syncRequest.nonce
+    appliedSyncRef.current = nonce
+    void adapter.goTo({ progress: syncRequest.fraction }, { animate: true }).catch(() => {
+      // 跳转失败(内核正在换章等):把记账还回去,让后续一次 effect 重放。
+      if (appliedSyncRef.current === nonce) appliedSyncRef.current = 0
+    })
+  }, [syncRequest, phase])
 
   // 「朗读此处」的第二拍:抽屉挂载后(ref 就位)把等的文本交给它。
   // 有待播文本就动手(迷你条形态直接起播);文本在调用瞬间就被清掉,
@@ -962,7 +1057,13 @@ export function ReaderScreen({
 
   // chrome 显隐的统一节奏:任何显示路径只置可见 + 记活动时刻,
   // 自动隐藏由下方 effect 统一负责(可见且无浮层 → 距最后活动 2.5s 收起)。
+  //
+  // 抑制窗口:翻页会把整块正文在**静止的指针**底下挪走,WebKit 据此补发一串
+  // pointermove —— 那不是用户的动作,却是"键盘每翻一页顶栏底栏闪一下"的
+  // 全部来源。唤醒路径有五条(父窗口与 iframe 的 pointermove、选区、批注、
+  // 面板外按下),出口只有这一个函数,闸门守在这里就够。
   const showChrome = useCallback((): void => {
+    if (Date.now() < turnWakeUntilRef.current) return
     lastChromeActivityRef.current = Date.now()
     setChromeVisible(true)
   }, [])
@@ -1037,6 +1138,9 @@ export function ReaderScreen({
     async (dir: 'next' | 'prev'): Promise<void> => {
       const adapter = adapterRef.current
       if (!adapter) return
+      // 这一次翻页(以及它的动画片尾)不再唤起 chrome —— 见 showChrome。
+      // 键盘连翻时这是唯一该动的地方:按钮/键盘/尺走到页尾都汇到这里。
+      turnWakeUntilRef.current = Date.now() + TURN_WAKE_SUPPRESS_MS
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
       const animated = pageTurnStyle !== 'none' && !reducedMotion && viewMode !== 'scroll'
       // 滑动档 = 内核动画;其余档位 = 宿主动画(内核瞬间翻)。
@@ -1084,6 +1188,13 @@ export function ReaderScreen({
       // Escape 关面板与翻页都是通的。见 ReaderScreen.test 的「错误态下
       // Escape 也能关闭面板」。
       if (action !== 'fullscreen' && adapterRef.current === null) return
+      // 上下方向键归阅读尺:关着尺时保持「未绑定」,什么都不做(也不吞按键)。
+      if (action === 'ruler-up' || action === 'ruler-down') {
+        if (!rulerActive) return
+        event.preventDefault()
+        void adapterRef.current?.moveReadingRuler?.(action === 'ruler-down' ? 1 : -1)
+        return
+      }
       // Escape 不 preventDefault —— 原实现只在翻页分支里调用,别顺手扩大范围,
       // 否则会挡掉宿主对 Esc 的默认处理(原生 <dialog> 的 Esc 关闭等)。
       if (action !== 'escape') event.preventDefault()
@@ -1104,7 +1215,7 @@ export function ReaderScreen({
         setNoteDraft(null)
       }
     },
-    [turnPage, toggleFullscreen, hidden, ttsMounted, paneActive],
+    [turnPage, toggleFullscreen, hidden, ttsMounted, paneActive, rulerActive],
   )
 
   useEffect(() => {
@@ -1113,67 +1224,80 @@ export function ReaderScreen({
     return () => window.removeEventListener('keydown', handleReaderKey)
   }, [handleReaderKey])
 
+  /**
+   * 阅读尺设置:合并 → 落盘(下发见下面的 effect)。
+   *
+   * 只从事件处理器调用,所以直接读当前 state 合并、把副作用留在 updater
+   * 外面 —— setState 的 updater 在 StrictMode 下会跑两次,副作用混进去
+   * 会被双份执行。
+   */
+  const updateRuler = useCallback(
+    (patch: Partial<ReadingRulerSettings>): void => {
+      const next = { ...rulerSettings, ...patch }
+      setRulerSettings(next)
+      persistRulerSettings(next)
+    },
+    [rulerSettings],
+  )
+
   const updateLayout = useCallback(
     (patch: {
       viewMode?: ViewMode
-      fontSize?: number
+      originalLayout?: boolean
+      fontSize?: number | undefined
       lineHeight?: number | undefined
       fontFamily?: string | undefined
       fontWeight?: number | undefined
       pageMargin?: number
+      pageMarginBlock?: number
       paragraphMargin?: number | undefined
+      textIndent?: number | undefined
       writingMode?: WritingModeChoice | undefined
     }): void => {
       // `in` checks, not ?? merges: an explicit undefined means "reset to the
       // book's own typography" and must win over the previous setting.
-      const next = {
+      const merged: TypographySettings = {
         viewMode: patch.viewMode ?? viewMode,
-        fontSize: patch.fontSize ?? fontSize,
+        originalLayout: 'originalLayout' in patch ? patch.originalLayout : originalLayout,
+        fontSize: 'fontSize' in patch ? patch.fontSize : fontSize,
         lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
         fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
         fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
         pageMargin: patch.pageMargin ?? pageMargin,
+        pageMarginBlock: patch.pageMarginBlock ?? pageMarginBlock,
         paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
+        textIndent: 'textIndent' in patch ? patch.textIndent : textIndent,
         writingMode: 'writingMode' in patch ? patch.writingMode : writingMode,
       }
-      setViewMode(next.viewMode)
+      // 切到自定义排版:还没选过的维度先落到标准档 —— 否则「关了原书排版」
+      // 在画面上什么都不变(每项仍是 undefined = 书自己的值),读者只会以为
+      // 开关坏了。
+      const next = merged.originalLayout === false ? materializeCustomDefaults(merged) : merged
+      setOriginalLayout(next.originalLayout ?? true)
+      setViewMode(next.viewMode ?? 'single')
       setFontSize(next.fontSize)
       setLineHeight(next.lineHeight)
       setFontFamily(next.fontFamily)
       setFontWeight(next.fontWeight)
-      setPageMargin(next.pageMargin)
+      setPageMargin(next.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT)
+      setPageMarginBlock(next.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT)
       setParagraphMargin(next.paragraphMargin)
+      setTextIndent(next.textIndent)
       setWritingMode(next.writingMode)
-      persistTypography({
-        viewMode: next.viewMode,
-        fontSize: next.fontSize,
-        lineHeight: next.lineHeight,
-        fontFamily: next.fontFamily,
-        fontWeight: next.fontWeight,
-        pageMargin: next.pageMargin,
-        paragraphMargin: next.paragraphMargin,
-        writingMode: next.writingMode,
-      })
-      void adapterRef.current?.setLayout({
-        flow: next.viewMode === 'scroll' ? 'scrolled' : 'paginated',
-        pageMode: next.viewMode === 'dual' ? 'dual' : 'single',
-        fontSize: next.fontSize,
-        lineHeight: next.lineHeight,
-        fontFamily: next.fontFamily,
-        fontWeight: next.fontWeight,
-        margin: next.pageMargin,
-        paragraphMargin: next.paragraphMargin,
-        writingMode: next.writingMode,
-      })
+      persistTypography(next)
+      void adapterRef.current?.setLayout(readerLayout(next))
     },
     [
       viewMode,
+      originalLayout,
       fontSize,
       lineHeight,
       fontFamily,
       fontWeight,
       pageMargin,
+      pageMarginBlock,
       paragraphMargin,
+      textIndent,
       writingMode,
     ],
   )
@@ -1184,10 +1308,32 @@ export function ReaderScreen({
     persistTypography({ zhConvert: variant })
   }, [])
 
+  /** 尺的总开关(顶栏按钮 / 设置面板共用)。版式不跟着动。 */
+  const toggleRuler = useCallback((): void => {
+    updateRuler({ enabled: !rulerActive })
+  }, [rulerActive, updateRuler])
+
+  // 尺是跨书偏好:偏好一变就下发;刚开完书(phase → reading)也补一次 ——
+  // 内核建好之前没有版面可播种,early return 会把这次开尺吞掉。
+  // 版式与尺互不干涉:尺在三种版式下都只做高亮,「把当前行钉在视口中间」
+  // 是滚动排版才有的能力(分页下内核只按栏横滚),由内核自己判断。
+  useEffect(() => {
+    if (phase !== 'reading') return
+    adapterRef.current?.setReadingRuler?.(
+      rulerActive
+        ? { focusLines: rulerSettings.focusLines, dimOpacity: rulerSettings.dimOpacity }
+        : null,
+    )
+  }, [phase, rulerActive, rulerSettings.focusLines, rulerSettings.dimOpacity])
+
   const changeFontSize = (delta: number): void => {
-    const current = FONT_SIZES.indexOf(fontSize as (typeof FONT_SIZES)[number])
+    const current = FONT_SIZES.indexOf(
+      (fontSize ?? FONT_SIZE_DEFAULT) as (typeof FONT_SIZES)[number],
+    )
     updateLayout({
-      fontSize: FONT_SIZES[Math.min(FONT_SIZES.length - 1, Math.max(0, current + delta))] ?? 16,
+      fontSize:
+        FONT_SIZES[Math.min(FONT_SIZES.length - 1, Math.max(0, current + delta))] ??
+        FONT_SIZE_DEFAULT,
     })
   }
 
@@ -2060,6 +2206,25 @@ export function ReaderScreen({
           >
             <SlidersHorizontal size={18} weight="regular" aria-hidden />
           </button>
+          {/* 阅读尺是一个「开着的模式」,所以给顶栏一颗常驻开关:开着的时候
+              它像夜间/全屏一样是亮的,关掉即回到普通正文。开尺会把版式切到
+              滚动(当前行居中的唯一版式),关尺还原 —— 见 toggleRuler。 */}
+          <button
+            type="button"
+            className={`chrome-button${rulerActive ? ' is-active' : ''}`}
+            onClick={toggleRuler}
+            disabled={!rulerSupported}
+            aria-pressed={rulerActive}
+            title={
+              rulerSupported
+                ? rulerActive
+                  ? '关闭阅读尺'
+                  : '阅读尺:聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)'
+                : '阅读尺暂不支持固定排版(PDF / 漫画)与竖排'
+            }
+          >
+            <Ruler size={18} weight="regular" aria-hidden />
+          </button>
           <button
             type="button"
             className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
@@ -2128,8 +2293,9 @@ export function ReaderScreen({
 
         {openPanel === 'settings' && (
           <section className="reader-settings" aria-label="排版设置">
-            <div className="settings-column">
-              <span className="settings-label">阅读背景</span>
+            {/* 主题:与正文同屏,换档立刻看得见。 */}
+            <div className="settings-group">
+              <span className="settings-group-label">阅读背景</span>
               <div className="reader-theme-row">
                 {READER_THEMES.map((option, index) => (
                   <button
@@ -2152,119 +2318,178 @@ export function ReaderScreen({
                 ))}
               </div>
             </div>
-            <div className="settings-row">
-              <span className="settings-label">字号</span>
-              <div className="segmented">
-                <button
-                  type="button"
-                  className="chrome-button"
-                  onClick={() => changeFontSize(-1)}
-                  title="减小字号"
-                >
-                  <Minus size={14} weight="regular" aria-hidden />
-                </button>
-                <span className="segmented-value">{fontSize}px</span>
-                <button
-                  type="button"
-                  className="chrome-button"
-                  onClick={() => changeFontSize(1)}
-                  title="增大字号"
-                >
-                  <Plus size={14} weight="regular" aria-hidden />
-                </button>
+
+            {/* 原书排版总开关(默认开):开着由书决定,关掉逐项重写。 */}
+            <div className="settings-group">
+              <button
+                type="button"
+                className={`settings-toggle${originalLayout ? ' is-on' : ''}`}
+                role="switch"
+                aria-checked={originalLayout}
+                onClick={() => updateLayout({ originalLayout: !originalLayout })}
+                title={originalLayout ? '关闭后逐项自定义排版' : '恢复这本书自己的排版'}
+              >
+                <span className="settings-toggle-label">原书排版</span>
+                <span className="settings-toggle-track" aria-hidden>
+                  <span className="settings-toggle-thumb" />
+                </span>
+              </button>
+              <p className="settings-hint">
+                {originalLayout
+                  ? '行距、段间距、缩进、字重与方向都用书自己的;字体仍可自选。'
+                  : '按下面的档位重写这本书的排版;任一档位还能单独选回「原书」。'}
+              </p>
+            </div>
+
+            {/* 自定义排版:这几项在「原书排版」下由书决定,不开入口 —— 一排
+                按不动的灰按钮只会让人以为坏了。关掉开关就整组出现。 */}
+            {!originalLayout && (
+              <div className="settings-group">
+                <span className="settings-group-label">正文</span>
+                <div className="settings-stack">
+                  <div className="settings-row">
+                    <span className="settings-label">行距</span>
+                    <div className="segmented">
+                      {LINE_HEIGHT_OPTIONS.map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={lineHeight === option.value ? 'is-active' : ''}
+                          onClick={() => updateLayout({ lineHeight: option.value })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">段间距</span>
+                    <div className="segmented">
+                      {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={paragraphMargin === option.value ? 'is-active' : ''}
+                          onClick={() => updateLayout({ paragraphMargin: option.value })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">段首缩进</span>
+                    <div className="segmented">
+                      {TEXT_INDENT_OPTIONS.map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={textIndent === option.value ? 'is-active' : ''}
+                          onClick={() => updateLayout({ textIndent: option.value })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">字重</span>
+                    <div className="segmented">
+                      {FONT_WEIGHT_OPTIONS.map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={fontWeight === option.value ? 'is-active' : ''}
+                          style={{ fontWeight: option.cssWeight }}
+                          onClick={() => updateLayout({ fontWeight: option.value })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">排版方向</span>
+                    <div className="segmented">
+                      {WRITING_MODE_OPTIONS.map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={writingMode === option.value ? 'is-active' : ''}
+                          onClick={() => updateLayout({ writingMode: option.value })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 字号与两把边距:阅读舒适度,与是否「原书排版」无关。 */}
+            <div className="settings-group">
+              <span className="settings-group-label">页面</span>
+              <div className="settings-stack">
+                <div className="settings-row">
+                  <span className="settings-label">字号</span>
+                  <div className="segmented">
+                    <button
+                      type="button"
+                      className="chrome-button"
+                      onClick={() => changeFontSize(-1)}
+                      title="减小字号"
+                    >
+                      <Minus size={14} weight="regular" aria-hidden />
+                    </button>
+                    <span className="segmented-value">{fontSize ?? FONT_SIZE_DEFAULT}px</span>
+                    <button
+                      type="button"
+                      className="chrome-button"
+                      onClick={() => changeFontSize(1)}
+                      title="增大字号"
+                    >
+                      <Plus size={14} weight="regular" aria-hidden />
+                    </button>
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-label">左右边距</span>
+                  <div className="segmented">
+                    {PAGE_MARGIN_INLINE_OPTIONS.map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        className={pageMargin === option.value ? 'is-active' : ''}
+                        onClick={() => updateLayout({ pageMargin: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-label">上下边距</span>
+                  <div className="segmented">
+                    {PAGE_MARGIN_BLOCK_OPTIONS.map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        className={pageMarginBlock === option.value ? 'is-active' : ''}
+                        onClick={() => updateLayout({ pageMarginBlock: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="settings-row">
-              <span className="settings-label">行距</span>
-              <div className="segmented">
-                {LINE_HEIGHT_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={lineHeight === option.value ? 'is-active' : ''}
-                    onClick={() => updateLayout({ lineHeight: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">段间距</span>
-              <div className="segmented">
-                {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={paragraphMargin === option.value ? 'is-active' : ''}
-                    onClick={() => updateLayout({ paragraphMargin: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">字重</span>
-              <div className="segmented">
-                {FONT_WEIGHT_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={fontWeight === option.value ? 'is-active' : ''}
-                    style={{ fontWeight: option.cssWeight }}
-                    onClick={() => updateLayout({ fontWeight: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">页边距</span>
-              <div className="segmented">
-                {PAGE_MARGIN_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={pageMargin === option.value ? 'is-active' : ''}
-                    onClick={() => updateLayout({ pageMargin: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">排版方向</span>
-              <div className="segmented">
-                {WRITING_MODE_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={writingMode === option.value ? 'is-active' : ''}
-                    onClick={() => updateLayout({ writingMode: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">简繁转换</span>
-              {/* 二级菜单:9 档全展开会占掉半个面板(还会把字体行挤出视口),
-                  触发器只显示当前档位,点开才是完整列表。 */}
-              <DropdownMenu
-                value={zhConvert}
-                options={ZH_CONVERT_OPTIONS}
-                onChange={changeZhConvert}
-                ariaLabel="简繁转换"
-                title="转换正文与目录;切换后重新打开本书生效"
-                themeVars={readerVars}
-              />
-            </div>
-            <div className="settings-column">
-              <span className="settings-label">字体</span>
+
+            {/* 字体独立于总开关:读哪本书都用自己的字体是阅读口味,不是「书的
+                排版」—— 两种模式下都给入口,选「原书」才回到书自带的字体。 */}
+            <div className="settings-group">
+              <span className="settings-group-label">字体</span>
               <div className="segmented segmented-wrap">
                 {FONT_FAMILY_OPTIONS.map((option) => (
                   <button
@@ -2316,42 +2541,60 @@ export function ReaderScreen({
                   )}
               </div>
             </div>
+
+            <div className="settings-group">
+              <span className="settings-group-label">文字与词典</span>
+              <div className="settings-stack">
+                <div className="settings-row">
+                  <span className="settings-label">简繁转换</span>
+                  {/* 二级菜单:9 档全展开会占掉半个面板(还会把字体行挤出视口),
+                      触发器只显示当前档位,点开才是完整列表。 */}
+                  <DropdownMenu
+                    value={zhConvert}
+                    options={ZH_CONVERT_OPTIONS}
+                    onChange={changeZhConvert}
+                    ariaLabel="简繁转换"
+                    title="转换正文与目录;切换后重新打开本书生效"
+                    themeVars={readerVars}
+                  />
+                </div>
+                {dictionaries.map((dictionary) => (
+                  <div key={dictionary.id} className="settings-row dictionary-row">
+                    <span className="settings-label">
+                      {dictionary.name} · {dictionary.wordCount}
+                    </span>
+                    <button
+                      type="button"
+                      className="chrome-button"
+                      onClick={() => void removeDictionary(dictionary.id)}
+                      title="移除词典"
+                    >
+                      <X size={12} weight="regular" aria-hidden />
+                    </button>
+                  </div>
+                ))}
+                <div className="settings-row">
+                  <span className="settings-label">导入词典</span>
+                  <div className="segmented">
+                    <button type="button" onClick={() => void importDictionary()}>
+                      选择 .ifo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
             {panelProblem !== null && (
               <p className="lookup-empty" role="alert">
                 {panelProblem}
               </p>
             )}
-            {dictionaries.length > 0 && <p className="settings-label">词典</p>}
-            {dictionaries.map((dictionary) => (
-              <div key={dictionary.id} className="settings-row dictionary-row">
-                <span className="settings-label">
-                  {dictionary.name} · {dictionary.wordCount}
-                </span>
-                <button
-                  type="button"
-                  className="chrome-button"
-                  onClick={() => void removeDictionary(dictionary.id)}
-                  title="移除词典"
-                >
-                  <X size={12} weight="regular" aria-hidden />
-                </button>
-              </div>
-            ))}
-            <div className="settings-row">
-              <span className="settings-label">导入词典</span>
-              <div className="segmented">
-                <button type="button" onClick={() => void importDictionary()}>
-                  选择 .ifo
-                </button>
-              </div>
-            </div>
           </section>
         )}
 
         {openPanel === 'display' && (
           <section className="reader-settings reader-display" aria-label="显示设置">
-            <div className="settings-column">
-              <span className="settings-label">显示</span>
+            <div className="settings-group">
+              <span className="settings-group-label">显示</span>
               <div className="stats-toggles">
                 {(
                   [
@@ -2382,8 +2625,8 @@ export function ReaderScreen({
                 ))}
               </div>
             </div>
-            <div className="settings-column">
-              <span className="settings-label">翻页动画</span>
+            <div className="settings-group">
+              <span className="settings-group-label">翻页动画</span>
               <div className="segmented">
                 {PAGE_TURN_OPTIONS.map((option) => (
                   <button
@@ -2403,7 +2646,9 @@ export function ReaderScreen({
             <div className="settings-row">
               <span className="settings-label">方式</span>
               <div className="segmented">
-                {VIEW_MODE_OPTIONS.map((option) => (
+                {VIEW_MODE_OPTIONS.filter(
+                  (option) => option.value !== 'scroll' || scrollModeSupported,
+                ).map((option) => (
                   <button
                     key={option.label}
                     type="button"
@@ -2415,7 +2660,63 @@ export function ReaderScreen({
                 ))}
               </div>
             </div>
-            <p className="ai-privacy">关闭进度条后,底部工具栏整体隐藏,阅读更沉浸。</p>
+            <div className="settings-group">
+              <span className="settings-group-label">阅读尺</span>
+              <div className="stats-toggles">
+                <button
+                  type="button"
+                  className={`stats-toggle${rulerActive ? ' is-on' : ''}`}
+                  role="switch"
+                  aria-checked={rulerActive}
+                  disabled={!rulerSupported}
+                  onClick={toggleRuler}
+                >
+                  <span className="stats-toggle-label">聚焦当前行,淡化其他行</span>
+                  <span className="stats-toggle-track" aria-hidden>
+                    <span className="stats-toggle-thumb" />
+                  </span>
+                </button>
+              </div>
+            </div>
+            {rulerActive && (
+              <>
+                <div className="settings-row">
+                  <span className="settings-label">聚焦行数</span>
+                  <div className="segmented">
+                    {RULER_FOCUS_LINES.map((count) => (
+                      <button
+                        key={count}
+                        type="button"
+                        className={rulerSettings.focusLines === count ? 'is-active' : ''}
+                        onClick={() => updateRuler({ focusLines: count })}
+                      >
+                        {count}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-label">淡化</span>
+                  <div className="segmented">
+                    {RULER_DIM_OPTIONS.map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        className={rulerSettings.dimOpacity === option.value ? 'is-active' : ''}
+                        onClick={() => updateRuler({ dimOpacity: option.value })}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+            <p className="ai-privacy">
+              {!rulerSupported
+                ? '阅读尺暂不支持固定排版(PDF / 漫画)与竖排正文。'
+                : '滚轮与 ↑↓ 移动聚焦行,走到页尾自动翻页;当前排版是滚动时,移动后当前行会回到视口中间。分页排版只高亮、不滚动页面。'}
+            </p>
           </section>
         )}
 

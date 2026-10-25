@@ -5,6 +5,7 @@
  * (playwright 不在依赖里、chromium 的版本号会变)。复制两份,迟早只修其中一份。
  */
 
+import { request as httpRequest } from 'node:http'
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -67,12 +68,24 @@ export function createReporter() {
   }
 }
 
-/** dev server 没起就别往下跑了,给一句能直接照做的话。 */
-export async function requireDevServer(base) {
-  try {
-    await fetch(base, { signal: AbortSignal.timeout(3000) })
-  } catch {
-    console.error(`✗ dev server 不在 ${base}。先起一个:npx vite --port 5173`)
-    process.exit(1)
-  }
+/**
+ * dev server 没起就别往下跑了,给一句能直接照做的话。
+ *
+ * 用 `node:http` 而不是 `fetch`:后者会认 HTTP_PROXY/http_proxy,而这台机器把
+ * 代理挂在了全局 —— localhost 也被送去代理,fetch 一律失败(502),明明服务是好的。
+ * http 模块不走代理,探本机端口该用它。
+ */
+export function requireDevServer(base) {
+  return new Promise((resolve) => {
+    const request = httpRequest(base, { timeout: 3000 }, (response) => {
+      response.resume()
+      resolve()
+    })
+    request.on('timeout', () => request.destroy(new Error('timeout')))
+    request.on('error', () => {
+      console.error(`✗ dev server 不在 ${base}。先起一个:npx vite --port 5173`)
+      process.exit(1)
+    })
+    request.end()
+  })
 }

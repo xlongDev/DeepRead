@@ -17,6 +17,7 @@ import type {
   BookSource,
   ReaderLayout,
   ReaderTheme,
+  ReadingRulerOptions,
   ReadingLocation,
   SearchResult,
   TocItem,
@@ -89,6 +90,9 @@ export class FakeFoliateAdapter {
   readonly clearTTSHighlight = vi.fn<() => Promise<void>>()
   readonly replaceSource = vi.fn<(text: string) => Promise<void>>()
   readonly rebuildChapters = vi.fn<(rules: readonly ChapterRule[] | null) => Promise<number>>()
+  /** 阅读尺:null = 关。焦点带本身是 DOM 层的事,jsdom 里没有布局可量。 */
+  readonly setReadingRuler = vi.fn<(options: ReadingRulerOptions | null) => void>()
+  readonly moveReadingRuler = vi.fn<(direction: -1 | 1) => Promise<void>>()
 
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}, options?: FakeFoliateOptions) {
     this.host = host
@@ -132,6 +136,8 @@ export class FakeFoliateAdapter {
     this.clearTTSHighlight.mockResolvedValue(undefined)
     this.replaceSource.mockResolvedValue(undefined)
     this.rebuildChapters.mockResolvedValue(sections.length)
+    this.setReadingRuler.mockReset()
+    this.moveReadingRuler.mockResolvedValue(undefined)
   }
 
   // ---- 内核 → UI 的入向事件(用于模拟阅读位置变化等) ----

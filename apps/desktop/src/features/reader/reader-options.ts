@@ -4,7 +4,7 @@
  * can be read (and reasoned about) on their own.
  */
 
-import type { ReaderTheme, ZhConvertVariant } from '@deepread/reader-core'
+import type { ReaderLayout, ReaderTheme, ZhConvertVariant } from '@deepread/reader-core'
 import { convertFileSrc } from '../../lib/book-import'
 
 export const READER_THEMES: readonly { readonly label: string; readonly theme: ReaderTheme }[] = [
@@ -54,13 +54,46 @@ export const LINE_HEIGHT_OPTIONS: readonly {
   { label: '宽松', value: 1.9 },
 ]
 
-// 页边距档位:内核 margin(px),同时联动栏宽(边距越大栏越窄,
-// 见 reader-adapter #maxInlineSize),宽窗口下也能感知变化。
-export const PAGE_MARGIN_OPTIONS: readonly { readonly label: string; readonly value: number }[] = [
+/**
+ * 页边距拆成两把标尺 —— 左右与上下在内核里根本不是同一个东西:
+ * - 左右 = 栏宽上限(max-inline-size,见 reader-adapter #maxInlineSize);
+ * - 上下 = paginator 的 margin 属性(内核的 margin 只作用于上下)。
+ *
+ * 新「左右·标准」= 旧「特窄」的 48px(实测下来那是桌面宽度最好读的一档),
+ * 其余三档按同一档差向外排布;上下沿用旧标准的 72px 保持不动。
+ */
+export const PAGE_MARGIN_INLINE_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number
+}[] = [
+  { label: '特窄', value: 24 },
+  { label: '标准', value: 48 },
+  { label: '宽', value: 72 },
+  { label: '特宽', value: 96 },
+]
+
+export const PAGE_MARGIN_BLOCK_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number
+}[] = [
   { label: '特窄', value: 48 },
   { label: '标准', value: 72 },
   { label: '宽', value: 96 },
   { label: '特宽', value: 120 },
+]
+
+/** 「标准」档的左右/上下边距:UI 与 open 初值都从这里取,不写字面量。 */
+export const PAGE_MARGIN_INLINE_DEFAULT = 48
+export const PAGE_MARGIN_BLOCK_DEFAULT = 72
+
+// 段首缩进(单位 em),只在自定义排版下注入 —— 原书排版由书自己的 CSS 决定。
+export const TEXT_INDENT_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number
+}[] = [
+  { label: '不缩进', value: 0 },
+  { label: '1 字符', value: 1 },
+  { label: '2 字符', value: 2 },
 ]
 
 export const PARAGRAPH_MARGIN_OPTIONS: readonly {
@@ -161,16 +194,110 @@ export const ZH_CONVERT_OPTIONS: readonly {
 /* ---------- 排版设置持久化(localStorage;Rust 侧只存进度/批注)。 ---------- */
 
 export interface TypographySettings {
+  /**
+   * 原书排版总开关(缺省 true)。
+   * 开着 = 书自己的排版赢:行距 / 段间距 / 段首缩进 / 字重 / 排版方向不下发。
+   * 字号、页边距、字体三条是读者口味,与开关无关,两种模式下都生效
+   * (字体选「原书」时才回到书自带的字体)。
+   */
+  originalLayout?: boolean
   viewMode?: ViewMode
-  fontSize?: number
+  /** 字号;undefined = 读者还没动过(原书排版下按 16 走,切到自定义落到 18)。 */
+  fontSize?: number | undefined
   lineHeight?: number | undefined
   fontFamily?: string | undefined
   fontWeight?: number | undefined
   themeIndex?: number
+  /** 页边距 · 左右(px)。 */
   pageMargin?: number
+  /** 页边距 · 上下(px)。 */
+  pageMarginBlock?: number
   paragraphMargin?: number | undefined
+  /** 段首缩进(em);undefined = 不下发(原书排版)。 */
+  textIndent?: number | undefined
   writingMode?: WritingModeChoice | undefined
   zhConvert?: ZhConvertVariant
+}
+
+/**
+ * 切到自定义排版时实体化的默认档位 —— 每行都取该行的「标准」档。
+ *
+ * 为什么需要:不下发 = 书自己的排版。若切过去时六个维度都还是 undefined,
+ * 「关掉原书排版」在画面上什么都不会变,读者只会以为开关坏了。
+ */
+/**
+ * 字号在读者从没动过时的档位。
+ *
+ * 字号必须能表示「没选过」(undefined):否则切到自定义排版时无从判断该不该
+ * 落到 CUSTOM_TYPOGRAPHY_DEFAULTS 里的 18px —— 状态里永远躺着一个 16,
+ * 18 就永远不会生效。
+ */
+export const FONT_SIZE_DEFAULT = 16
+
+export const CUSTOM_TYPOGRAPHY_DEFAULTS = {
+  fontSize: 18,
+  lineHeight: 1.65,
+  fontFamily: 'system',
+  fontWeight: 400,
+  paragraphMargin: 0.8,
+  textIndent: 2,
+  writingMode: 'horizontal-tb',
+} as const
+
+/**
+ * 生效的排版覆盖项(纯函数,落盘与下发都走它)。
+ *
+ * 两个层级并存,互不覆盖:
+ * - 总开关开:除字体外整组维度不下发 —— 书自己的排版赢;
+ * - 总开关关:按各行档位下发,某行单独选回「原书」时那一项仍是 undefined,
+ *   于是这一个维度回到书自己的值。
+ *
+ * 字体是独立于总开关的一条轴:读哪本书都用自己的字体是阅读口味,不算「书的
+ * 排版」,所以两种模式下都下发。选「原书」(undefined)仍然回到书自带的字体。
+ */
+export function layoutOverrides(
+  settings: TypographySettings,
+): Pick<
+  ReaderLayout,
+  'lineHeight' | 'fontFamily' | 'fontWeight' | 'paragraphMargin' | 'textIndent' | 'writingMode'
+> {
+  if (settings.originalLayout ?? true) {
+    return {
+      lineHeight: undefined,
+      fontFamily: settings.fontFamily,
+      fontWeight: undefined,
+      paragraphMargin: undefined,
+      textIndent: undefined,
+      writingMode: undefined,
+    }
+  }
+  return {
+    lineHeight: settings.lineHeight,
+    fontFamily: settings.fontFamily,
+    fontWeight: settings.fontWeight,
+    paragraphMargin: settings.paragraphMargin,
+    textIndent: settings.textIndent,
+    writingMode: settings.writingMode,
+  }
+}
+
+/**
+ * 把还没选过的维度落到标准档(只用在「切到自定义」那一刻)。
+ *
+ * 字体不在这里强制改写:它是独立轴,读者在原书模式下挑的字体切过去要留着。
+ * 只有从未选过(undefined = 原书字体)时,才落成自定义档的默认。
+ */
+export function materializeCustomDefaults(settings: TypographySettings): TypographySettings {
+  return {
+    ...settings,
+    fontSize: settings.fontSize ?? CUSTOM_TYPOGRAPHY_DEFAULTS.fontSize,
+    lineHeight: settings.lineHeight ?? CUSTOM_TYPOGRAPHY_DEFAULTS.lineHeight,
+    fontFamily: settings.fontFamily ?? CUSTOM_TYPOGRAPHY_DEFAULTS.fontFamily,
+    fontWeight: settings.fontWeight ?? CUSTOM_TYPOGRAPHY_DEFAULTS.fontWeight,
+    paragraphMargin: settings.paragraphMargin ?? CUSTOM_TYPOGRAPHY_DEFAULTS.paragraphMargin,
+    textIndent: settings.textIndent ?? CUSTOM_TYPOGRAPHY_DEFAULTS.textIndent,
+    writingMode: settings.writingMode ?? CUSTOM_TYPOGRAPHY_DEFAULTS.writingMode,
+  }
 }
 
 const TYPOGRAPHY_KEY = 'deepread.reader.typography'
@@ -273,8 +400,62 @@ export function persistStatsSettings(next: StatsSettings): void {
   localStorage.setItem(STATS_KEY, JSON.stringify(next))
 }
 
-/** 书籍文档的 @font-face:内置霞鹜文楷 + 用户导入字体。 */
-export function buildFontFacesCss(
+/* ---------- 阅读尺(跨书偏好,与翻页动画同一档)。 ---------- */
+
+export interface ReadingRulerSettings {
+  enabled: boolean
+  /** 焦点带覆盖的行数。 */
+  focusLines: number
+  /** 非焦点内容的不透明度:越小越暗。 */
+  dimOpacity: number
+}
+
+/** 档位表,兼作脏值白名单 —— localStorage 里的历史值不能被当成法。 */
+export const RULER_FOCUS_LINES = [1, 2, 3, 5] as const
+
+export const RULER_DIM_OPTIONS: readonly {
+  readonly label: string
+  readonly value: number
+}[] = [
+  { label: '轻', value: 0.35 },
+  { label: '标准', value: 0.2 },
+  { label: '强', value: 0.1 },
+]
+
+export const DEFAULT_RULER_SETTINGS: ReadingRulerSettings = {
+  enabled: false,
+  focusLines: 1,
+  dimOpacity: 0.2,
+}
+
+const RULER_KEY = 'deepread.reader.ruler'
+
+export function loadRulerSettings(): ReadingRulerSettings {
+  try {
+    const stored = localStorage.getItem(RULER_KEY)
+    if (stored === null) return { ...DEFAULT_RULER_SETTINGS }
+    const parsed: unknown = JSON.parse(stored)
+    if (parsed === null || typeof parsed !== 'object') return { ...DEFAULT_RULER_SETTINGS }
+    const record = parsed as Record<string, unknown>
+    const focusLines = record['focusLines']
+    const dimOpacity = record['dimOpacity']
+    return {
+      enabled: record['enabled'] === true,
+      focusLines: RULER_FOCUS_LINES.find((value) => value === focusLines) ?? 1,
+      dimOpacity:
+        RULER_DIM_OPTIONS.find((option) => option.value === dimOpacity)?.value ??
+        DEFAULT_RULER_SETTINGS.dimOpacity,
+    }
+  } catch {
+    return { ...DEFAULT_RULER_SETTINGS }
+  }
+}
+
+export function persistRulerSettings(next: ReadingRulerSettings): void {
+  localStorage.setItem(RULER_KEY, JSON.stringify(next))
+}
+
+/** 书籍文档的 @font-face:内置霞鹜文楷 + 用户导入字体。 */ export function buildFontFacesCss(
   customFonts: readonly { readonly name: string; readonly path: string }[],
 ): string {
   const rules = [

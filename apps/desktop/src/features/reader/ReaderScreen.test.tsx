@@ -122,7 +122,7 @@ function respond(command: string): unknown {
   }
 }
 
-/** 顶栏 10 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。 */
+/** 顶栏 11 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。 */
 const TOP_KEYS = [
   '返回书架',
   '在此页添加书签',
@@ -130,6 +130,7 @@ const TOP_KEYS = [
   '全屏阅读(F11 / Ctrl+⌘+F)',
   '排版设置',
   '显示设置',
+  '阅读尺:聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)',
   'AI 助手',
   '朗读 / 听书',
   '学习(卡片 / 测验 / 错题本)',
@@ -252,7 +253,7 @@ describe('开书流程', () => {
   })
 })
 
-describe('顶栏 10 键', () => {
+describe('顶栏 11 键', () => {
   it('10 个键按顺序全部在位(历史回归:不要悄悄收进下拉)', async () => {
     await renderReader()
     expect(topKeyTitles()).toEqual([...TOP_KEYS])
@@ -278,7 +279,7 @@ describe('顶栏 10 键', () => {
   /**
    * 「对照阅读」只在宿主给了 onOpenParallel 时出现(并排中的一栏没有第三栏
    * 可开,那条分支在 ParallelReader 里就没有这个 prop)。不能加进 TOP_KEYS:
-   * 那 10 键是单本阅读的契约,多一个键会让所有既有用例跟着动。
+   * 那 11 键是单本阅读的契约,多一个键会让所有既有用例跟着动。
    */
   it('宿主支持对照阅读时多一个「对照阅读」键,选完书交给宿主', async () => {
     const onOpenParallel = vi.fn()
@@ -349,6 +350,150 @@ describe('面板开合', () => {
   })
 })
 
+describe('排版设置:原书排版与自定义', () => {
+  /** 打开排版设置面板(顶栏那颗键)。 */
+  async function openTypographyPanel(): Promise<HTMLElement> {
+    fireEvent.click(screen.getByTitle('排版设置'))
+    return screen.findByRole('region', { name: '排版设置' })
+  }
+
+  /** 面板里某一行的容器:同类按钮(特窄/标准/…)在两行里各有一份,
+      必须按行定位,不能全局按文本找。 */
+  function rowOf(panel: HTMLElement, label: string): HTMLElement {
+    const row = within(panel).getByText(label).closest('.settings-row')
+    if (row === null || !(row instanceof HTMLElement)) throw new Error(`找不到行:${label}`)
+    return row
+  }
+
+  it('默认原书排版:可覆盖项一律不下发(书自己的排版赢),页边距两把都在', async () => {
+    const { adapter } = await renderReader()
+    const layout = adapter.setLayout.mock.calls.at(-1)?.[0]
+    // 版式、字号与两把边距任何时候都下发 —— 那是读者的阅读舒适度。
+    expect(layout).toMatchObject({
+      flow: 'paginated',
+      pageMode: 'single',
+      fontSize: 16,
+      margin: 72,
+      marginInline: 48,
+    })
+    expect(layout?.lineHeight).toBeUndefined()
+    expect(layout?.fontFamily).toBeUndefined()
+    expect(layout?.fontWeight).toBeUndefined()
+    expect(layout?.paragraphMargin).toBeUndefined()
+    expect(layout?.textIndent).toBeUndefined()
+    expect(layout?.writingMode).toBeUndefined()
+  })
+
+  it('原书排版下不给自定义入口,关掉开关才整组出现', async () => {
+    await renderReader()
+    const panel = await openTypographyPanel()
+    const toggle = within(panel).getByRole('switch', { name: '原书排版' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    expect(within(panel).queryByText('段首缩进')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('行距')).not.toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(within(panel).getByText('段首缩进')).toBeInTheDocument())
+    expect(
+      within(panel).getByRole('switch', { name: '原书排版' }).getAttribute('aria-checked'),
+    ).toBe('false')
+  })
+
+  it('字体独立于开关:原书排版下也可见、点了就下发', async () => {
+    const { adapter } = await renderReader()
+    const panel = await openTypographyPanel()
+    // 入口:字体组不带 .settings-row,直接按分组标题定位。
+    const group = within(panel).getByText('字体').closest('.settings-group')
+    if (group === null || !(group instanceof HTMLElement)) throw new Error('找不到字体组')
+    fireEvent.click(within(group).getByText('楷体'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({ fontFamily: 'kaiti' }),
+    )
+    // 其余排版仍然归书:开着的开关没被这一下点动。
+    expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({
+      lineHeight: undefined,
+      textIndent: undefined,
+      writingMode: undefined,
+    })
+    fireEvent.click(within(group).getByText('原书'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({ fontFamily: undefined }),
+    )
+  })
+
+  it('关掉原书排版:标准档整体下发,画面当场就变', async () => {
+    const { adapter } = await renderReader()
+    const panel = await openTypographyPanel()
+    fireEvent.click(within(panel).getByRole('switch', { name: '原书排版' }))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({
+        fontSize: 18,
+        lineHeight: 1.65,
+        paragraphMargin: 0.8,
+        fontWeight: 400,
+        fontFamily: 'system',
+        textIndent: 2,
+        writingMode: 'horizontal-tb',
+      }),
+    )
+  })
+
+  it('段首缩进:选「不缩进」下 0,选「2 字符」下 2', async () => {
+    const { adapter } = await renderReader()
+    const panel = await openTypographyPanel()
+    fireEvent.click(within(panel).getByRole('switch', { name: '原书排版' }))
+    await waitFor(() => expect(within(panel).getByText('段首缩进')).toBeInTheDocument())
+    fireEvent.click(within(rowOf(panel, '段首缩进')).getByText('不缩进'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({ textIndent: 0 }),
+    )
+    fireEvent.click(within(rowOf(panel, '段首缩进')).getByText('2 字符'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({ textIndent: 2 }),
+    )
+  })
+
+  it('左右边距与上下边距各自下发,互不覆盖', async () => {
+    const { adapter } = await renderReader()
+    const panel = await openTypographyPanel()
+    fireEvent.click(within(rowOf(panel, '左右边距')).getByText('特宽'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({ marginInline: 96 }),
+    )
+    fireEvent.click(within(rowOf(panel, '上下边距')).getByText('特窄'))
+    await waitFor(() =>
+      expect(adapter.setLayout.mock.calls.at(-1)?.[0]).toMatchObject({
+        marginInline: 96,
+        margin: 48,
+      }),
+    )
+  })
+})
+
+describe('键盘翻页不打断沉浸阅读', () => {
+  const chromeIsVisible = (): boolean =>
+    document.querySelector('.reader')?.classList.contains('chrome-visible') === true
+
+  it('翻页期间(含动画片尾)的指针活动不唤起顶栏/底栏', async () => {
+    const { adapter } = await renderReader()
+    // 开书那一下会短暂显示,2.5s 后自动收起 —— 收起后才是沉浸态。
+    await waitFor(() => expect(chromeIsVisible()).toBe(false), { timeout: 6000 })
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    await waitFor(() => expect(adapter.nextPage).toHaveBeenCalled())
+    // 翻页会让正文在静止的指针底下位移,WebKit 据此补发 pointermove ——
+    // 那不是用户动作,chrome 不该因此亮起来。
+    fireEvent.pointerMove(window)
+    fireEvent.pointerMove(document.querySelector('.reader-host') ?? document.body)
+    expect(chromeIsVisible()).toBe(false)
+
+    // 窗口过后,真正的指针活动照常唤起(抑制只是翻页那一瞬的闸门)。
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    fireEvent.pointerMove(window)
+    await waitFor(() => expect(chromeIsVisible()).toBe(true))
+  })
+})
+
 describe('错误态', () => {
   it('内核打不开书时给出可读消息与返回入口,而不是静默卡住', async () => {
     const { onBack } = await renderReader({ openError: new Error('书籍文件损坏') })
@@ -381,6 +526,93 @@ describe('键盘事件契约', () => {
     expect(fireEvent.keyDown(window, { key: 'ArrowUp' })).toBe(true)
     expect(adapter.nextPage).not.toHaveBeenCalled()
     expect(adapter.previousPage).not.toHaveBeenCalled()
+  })
+
+  it('阅读尺开着:↑↓ 交给内核移尺并拦住默认滚动;关着时 ↑↓ 仍是未绑定键', async () => {
+    // 关着(默认):上下键不归任何分支,连 preventDefault 都不该有 —— 滚动
+    // 模式的正文滚动是内核自己的事,ReaderScreen 不插手。
+    const off = await renderReader()
+    expect(fireEvent.keyDown(window, { key: 'ArrowDown' })).toBe(true)
+    expect(off.adapter.moveReadingRuler).not.toHaveBeenCalled()
+    off.view.unmount()
+
+    // 开着:同两个键改成移尺,且要 preventDefault(否则iframe 里正文跟着滚)。
+    localStorage.setItem(
+      'deepread.reader.ruler',
+      JSON.stringify({ enabled: true, focusLines: 1, dimOpacity: 0.2 }),
+    )
+    const { adapter } = await renderReader()
+    expect(fireEvent.keyDown(window, { key: 'ArrowDown' })).toBe(false)
+    await waitFor(() => expect(adapter.moveReadingRuler).toHaveBeenCalledWith(1))
+    expect(fireEvent.keyDown(window, { key: 'ArrowUp' })).toBe(false)
+    await waitFor(() => expect(adapter.moveReadingRuler).toHaveBeenCalledWith(-1))
+    // 移尺不翻页:尺自己走到页尾才会调内核翻页(见 ReadingRuler#step)。
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+  })
+})
+
+describe('阅读尺与版式互不干涉', () => {
+  /** 打开显示设置面板(版式「方式」选择器在里面)。 */
+  async function openDisplayPanel(): Promise<HTMLElement> {
+    fireEvent.click(screen.getByTitle('显示设置'))
+    return screen.findByRole('region', { name: '显示设置' })
+  }
+
+  const enableRuler = (): void => {
+    localStorage.setItem(
+      'deepread.reader.ruler',
+      JSON.stringify({ enabled: true, focusLines: 1, dimOpacity: 0.2 }),
+    )
+  }
+
+  it('开尺 / 关尺都不动版式:尺只在滚动排版下居中,分页下只高亮', async () => {
+    const { adapter } = await renderReader()
+    expect(adapter.setLayout).toHaveBeenCalledWith(expect.objectContaining({ flow: 'paginated' }))
+
+    fireEvent.click(screen.getByTitle(/^阅读尺/))
+    await waitFor(() =>
+      expect(adapter.setReadingRuler).toHaveBeenCalledWith(
+        expect.objectContaining({ focusLines: 1 }),
+      ),
+    )
+    expect(adapter.setLayout).toHaveBeenLastCalledWith(
+      expect.objectContaining({ flow: 'paginated' }),
+    )
+
+    fireEvent.click(screen.getByTitle('关闭阅读尺'))
+    await waitFor(() => expect(adapter.setReadingRuler).toHaveBeenLastCalledWith(null))
+    expect(adapter.setLayout).toHaveBeenLastCalledWith(
+      expect.objectContaining({ flow: 'paginated' }),
+    )
+  })
+
+  it('存量偏好「尺开 + 单页」:开书即分页,尺照常开着', async () => {
+    enableRuler()
+    const { adapter } = await renderReader()
+    await waitFor(() =>
+      expect(adapter.setReadingRuler).toHaveBeenCalledWith(
+        expect.objectContaining({ focusLines: 1 }),
+      ),
+    )
+    expect(adapter.setLayout).toHaveBeenCalledWith(expect.objectContaining({ flow: 'paginated' }))
+  })
+
+  it('尺开着时选双页:版式照切,尺不被关掉', async () => {
+    enableRuler()
+    const { adapter } = await renderReader()
+    await waitFor(() => expect(adapter.setReadingRuler).toHaveBeenCalled())
+
+    const panel = await openDisplayPanel()
+    fireEvent.click(within(panel).getByRole('button', { name: '双页' }))
+    await waitFor(() =>
+      expect(adapter.setLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ flow: 'paginated', pageMode: 'dual' }),
+      ),
+    )
+    expect(adapter.setReadingRuler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ focusLines: 1 }),
+    )
   })
 })
 

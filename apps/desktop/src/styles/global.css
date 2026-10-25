@@ -484,6 +484,19 @@ button:disabled {
   gap: var(--space-xl) var(--space-lg);
 }
 
+/* 固定行数:工具条「每行」选了具体数字。minmax(0,1fr) 让封面随列数均分,
+   不会因为长书名把某一列撑宽。窗口太窄时回到自适应 —— 固定 6 列塞进 500px
+   窗口只会得到一排邮票,自适应才是小窗的正确答案。 */
+.shelf-grid.is-fixed {
+  grid-template-columns: repeat(var(--shelf-cols, 5), minmax(0, 1fr));
+}
+
+@media (max-width: 760px) {
+  .shelf-grid.is-fixed {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+}
+
 /* 逐条入场。网格↔列表切换时 ul 因 `key={view}` 而重建,li 跟着重新挂载,
    这个动画就会重播 —— 布局切换的"过程感"来自这里。
    不用 View Transition:那条路上,拍快照的时机和 CSS 动画互相打架
@@ -744,6 +757,8 @@ button:disabled {
 
 .book-cover-shell {
   position: relative;
+  /* 紧凑模式按封面的实际宽度分档(容器查询):shell 就是封面按钮那一格。 */
+  container-type: inline-size;
 }
 
 /* 悬浮时弹出的一排图标,浮在封面顶部、靠右(参考图:圆形玻璃底 + 图标)。
@@ -751,12 +766,33 @@ button:disabled {
 .card-actions {
   position: absolute;
   /* 底部、进度条上方:进度是读者自己的状态,压住它等于把书签藏起来。 */
-  right: 8px;
+  right: 4px;
   bottom: 10px;
   display: flex;
   justify-content: flex-end;
-  gap: 4px;
+  /* 缝也随封面收:8 本一行时 4px 的缝要一起让出来。 */
+  gap: clamp(0px, 0.6cqw, 4px);
   pointer-events: none;
+}
+
+/* 缩的是**圆圈**,不是图标本体:圆底从 28px 收成 ~18px(留白收紧),字形
+   始终 15px —— 缩字形的话 ★/🏷/⬆ 在 8 本一行(封面 ~102px)会糊成一团。
+   `20cqw - 3px` 正好是「5 个圆 + 4 条缝塞进封面宽」的解(容器查询按封面
+   实宽取值,3/6/7/8 本实测封面 312/144/120/102px → 28/25.8/21/17.4px),
+   上下限 clamp:再小就包不住 15px 的字形,再大是白占封面。 */
+.card-actions .card-action-icon {
+  width: clamp(18px, calc(20cqw - 3px), 28px);
+  height: clamp(18px, calc(20cqw - 3px), 28px);
+}
+
+/* 字形是固定像素(phosphor size={15})。但 svg 作为 flex item 默认 flex-shrink:1,
+   而圆底在窄封面会被 .card-actions 的 flex 收缩(7-8 本一行会压到 clamp 下限),
+   嵌套 flex 顺手把 svg 一起压扁 —— 且只压宽不压高,变成 6×15 的畸形字(Request E
+   截图里糊成一团的正是这个)。钉死尺寸 + 禁收缩,「缩圆圈不缩字形」才真正成立。 */
+.card-action-icon svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
 }
 
 .card-actions > * {
@@ -791,9 +827,15 @@ button:disabled {
     color var(--duration-fast) var(--ease-out);
 }
 
+/* 列表行的悬浮图标与卡片共用同一套图标底座 —— 底座默认隐形,卡片侧的
+   显隐选择器以前漏了 .book-row,列表行悬浮时容器亮了、图标却全是透明的,
+   只剩有独立显隐规则的移除 ×(用户报的"列表悬浮没有图标"就是这个)。 */
 .book-card:hover .card-action-icon,
 .book-card:focus-within .card-action-icon,
-.card-actions:focus-within .card-action-icon {
+.card-actions:focus-within .card-action-icon,
+.book-row:hover .card-action-icon,
+.book-row:focus-within .card-action-icon,
+.book-row-actions:focus-within .card-action-icon {
   opacity: 1;
   transform: translateY(0) scale(1);
   transition:
@@ -913,6 +955,15 @@ button:disabled {
 .book-row:hover .book-row-actions,
 .book-row-actions:focus-within {
   opacity: 1;
+}
+
+/* 列表行的打标签浮层:锚在行下方、与动作图标右对齐。网格版是「浮层居中于
+   卡片、悬在封面底边之上」—— 行高只有 70 来 px,照搬会把整行都盖住。
+   必须向下:列表区(.library-main)是 overflow:auto 的滚动容器,向上锚会
+   超出内容顶部被裁掉(top 变负不可滚动),向下溢出则只是把滚动区撑长一点。 */
+.book-row .tag-popover {
+  inset: calc(100% + 6px) 44px auto auto;
+  translate: none;
 }
 
 /* ---------- Book info dialog ---------- */
@@ -2222,10 +2273,74 @@ button:disabled {
   height: 100%;
 }
 
+/* 阅读尺:焦点带 + 蒙版(见 reader-adapter/reading-ruler.ts)。
+   焦点带自己透明,靠 box-shadow 向外铺满纸色蒙版 —— 视觉上等于「其余内容
+   压到 X% 不透明」,但图片/表格/代码块一视同仁,也不碰书页 DOM。
+   层挂在宿主里,所以 overflow:hidden 顺便把溢出的影子裁在阅读区内;
+   pointer-events:none 保证划词、点击、翻页丝毫无损。
+   颜色由脚本算成 rgba(主题纸色, 1 - 不透明度)写进 --reading-ruler-scrim:
+   主题驱动的颜色不过渡,交给 CSS 变量会在切主题时晚半拍。 */
+.reading-ruler {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.reading-ruler-band {
+  position: absolute;
+  /* 横向由脚本给(left + width = 锚点所在的那一栏,双页下是半屏);这里只
+     给初值,免得第一帧画成 0 宽。不能写 right —— 和 width 同时给会打架。 */
+  left: 0;
+  width: 100%;
+  opacity: 0;
+  box-shadow: 0 0 0 100vmax var(--reading-ruler-scrim, transparent);
+  /* 位置**不**过渡:移尺是脚本逐帧重画(reading-ruler 的 #animateTo),带子
+     必须和正文同帧 —— 再叠一层 CSS 过渡,带子就落后正文半拍(实测滑行中
+     最大差 9px,看着是「带子和内容各走各的」)。只有 opacity 是纯淡入。 */
+  transition: opacity 120ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-ruler-band {
+    transition: none;
+  }
+}
+
 /* The kernel's built-in header/footer stay out of the design. */
 .reader-host foliate-view::part(head),
 .reader-host foliate-view::part(foot) {
   display: none;
+}
+
+/* PDF 滚动模式(fixed-layout scrolled,见 reader-adapter/pdf-scroll.ts):
+   容器铺满宿主,每页按自然宽度 fit,间距与 pageOffsets 的算术互为镜像 ——
+   除第一页外 margin-top = 16px,末尾一块同高 spacer 做留白。改这里必须同步
+   改 pdf-scroll.ts 的 PAGE_GAP,否则滚动上报的页内比例会整体偏移。 */
+.pdf-scroll {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--reader-bg, var(--color-bg));
+}
+
+.pdf-scroll-page {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pdf-scroll-page + .pdf-scroll-page {
+  margin-top: 16px;
+}
+
+.pdf-scroll-spacer {
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .reader-toc {
@@ -2235,7 +2350,10 @@ button:disabled {
 .reader-settings {
   top: 64px;
   right: max(16px, calc(50% - 320px));
-  width: 276px;
+  /* 300px:最窄的「四档分段控件 + 四个字标签」一行也要放得下(左右/上下
+     边距各四档)。再窄就被面板的 overflow-x:hidden 咬掉最后一档。 */
+  width: 300px;
+  max-width: calc(100vw - 32px);
   padding: var(--space-md);
   border-radius: var(--radius-lg);
   display: flex;
@@ -5973,12 +6091,38 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   }
 }
 
-/* ---------- Reader: 设置面板的背景色板 ---------- */
+/* ---------- Reader: 排版 / 显示设置面板 ---------- */
 
-.settings-column {
+/* 一个组 = 一个话题(阅读背景 / 原书排版 / 正文 / 页面 …)。
+   组内紧排(8px),组与组之间由面板自己的 16px 拉开 —— 全场等距时,长短
+   不一的行读不出归属:读者只能逐行猜「字号和边距是一伙的吗」。 */
+.settings-group {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  min-width: 0;
+}
+
+/* 组里的行:比组间距再紧一档,同一组的控件要能被看成一块。 */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 组标题比行标签更淡:它是分节的,不该和行标签抢注意力。 */
+.settings-group-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 开关下面那句说明 —— 「关掉会发生什么」不写,读者就只能自己试一遍。 */
+.settings-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
 }
 
 .reader-theme-row {
@@ -6002,14 +6146,16 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   font-weight: var(--font-weight-medium);
 }
 
-/* 显示设置:自绘迷你开关(iOS 风格) */
+/* 自绘迷你开关(iOS 风格):显示设置的几个开关与排版设置的「原书排版」
+   共用同一套视觉 —— 两处各写一遍,迟早只有一处跟着改。 */
 .stats-toggles {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.stats-toggle {
+.stats-toggle,
+.settings-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6023,19 +6169,24 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   cursor: pointer;
 }
 
-.stats-toggle:hover {
+.stats-toggle:hover,
+.settings-toggle:hover {
   background: var(--color-accent-soft);
 }
 
-.stats-toggle-label {
+.stats-toggle-label,
+.settings-toggle-label {
   color: var(--color-text-secondary);
 }
 
-.stats-toggle.is-on .stats-toggle-label {
+.stats-toggle.is-on .stats-toggle-label,
+.settings-toggle.is-on .settings-toggle-label {
   color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
 }
 
-.stats-toggle-track {
+.stats-toggle-track,
+.settings-toggle-track {
   position: relative;
   width: 30px;
   height: 18px;
@@ -6045,11 +6196,13 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   flex-shrink: 0;
 }
 
-.stats-toggle.is-on .stats-toggle-track {
+.stats-toggle.is-on .stats-toggle-track,
+.settings-toggle.is-on .settings-toggle-track {
   background: var(--color-accent);
 }
 
-.stats-toggle-thumb {
+.stats-toggle-thumb,
+.settings-toggle-thumb {
   position: absolute;
   top: 2px;
   left: 2px;
@@ -6061,7 +6214,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   transition: transform var(--duration-base) var(--ease-spring);
 }
 
-.stats-toggle.is-on .stats-toggle-thumb {
+.stats-toggle.is-on .stats-toggle-thumb,
+.settings-toggle.is-on .settings-toggle-thumb {
   transform: translateX(12px);
 }
 
@@ -6620,6 +6774,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .reader-embedded .reader-pick {
   top: 60px;
   right: 12px;
+  /* 半屏里定宽 300px 会探出栏外:按栏宽收。 */
+  width: min(300px, calc(100% - 24px));
   max-height: calc(100% - 132px);
 }
 

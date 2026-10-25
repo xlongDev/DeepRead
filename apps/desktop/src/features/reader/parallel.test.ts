@@ -43,11 +43,15 @@ describe('联动回声守卫', () => {
     expect(decision.echo).toEqual({ side: 'b', until: 1000 + ECHO_WINDOW_MS })
   })
 
-  it('对面刚被拽过去后回调的位置变化是回声,吞掉', () => {
+  it('对面刚被拽过去后回调的位置变化是回声,吞掉(守卫保留到窗口结束)', () => {
     const first = relayDecision('a', null, 1000)
     const second = relayDecision('b', first.echo, 1100)
     expect(second.relay).toBeNull()
-    expect(second.echo).toBeNull()
+    // 守卫**保留**:一次 goTo 会上报好几次 relocate,只吞第一次的话后面几次
+    // 会被当成本栏的真实翻页,反向把对面拽回来(两栏对跳)。
+    expect(second.echo).toBe(first.echo)
+    // 窗口内后续的上报继续被吞
+    expect(relayDecision('b', second.echo, 1200).relay).toBeNull()
   })
 
   it('守卫过期后对面的真实翻页照常转(不被永久吞掉)', () => {

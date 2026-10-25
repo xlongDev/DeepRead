@@ -17,6 +17,7 @@ import {
   countCjkChars,
   type Annotation,
   type BookCharStats,
+  type BookFormat,
   type BookMetadata,
   type BookSource,
   type ReaderEngine,
@@ -24,6 +25,7 @@ import {
   type ReaderOpenInit,
   type ReaderTheme,
   type ReadingLocation,
+  type ReadingRulerOptions,
   type SearchResult,
   type TextRange,
   type TocItem,
@@ -40,6 +42,8 @@ import type { PDFPageColors } from './books/vendor/foliate-pdf.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
 import { isSupported } from './format'
 import { AnnotationRegistry } from './annotation-registry'
+import { PdfScrollStrip } from './pdf-scroll'
+import { ReadingRuler } from './reading-ruler'
 import { buildMobiBook } from './books/mobi-book'
 import { buildMarkdownBook } from './books/markdown-book'
 import { buildTextBook, decodeText } from './books/text-book'
@@ -54,12 +58,37 @@ const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
 const TTS_HIGHLIGHT_KEY = 'deepread-tts'
 
 /**
+ * 联动对位的滑行时长:一栏(≈556px)≈ 下限,跨小半本书 ≈ 上限。与阅读尺移尺
+ * 同一量级,两处手感才一致。
+ */
+const RELAY_ANIM_MIN_MS = 160
+const RELAY_ANIM_MAX_MS = 320
+
+/**
  * 暗色主题下 PDF 重着色的膝点对比度。PDF 文字是位图抗锯齿渲染,小字号笔画
  * 的边缘像素占截面大半,线性映射下这些中灰落在 fg→bg 中段,字看着发虚;膝点
  * 把中灰推回两端让边缘归边。1.6 是「明显变实但不显脏」的中庸值;浅色主题
  * 不走这条(对比度本就富裕,膝点会让羊皮纸发脏)。
  */
 const PDF_NIGHT_CONTRAST = 1.6
+
+/**
+ * 同一个宿主上的开书串行化。
+ *
+ * 两个适配器可能同时盯着同一个 foliate-view:StrictMode 的双挂载、开书
+ * effect 依赖(book / zhConvert)变化,都会在上一次开书还没落地时再调一次
+ * open()。并发 open 的后果不是「多开一本」那么温和 —— view.open() 自己
+ * 从不摘旧 renderer,每次新建一个 paginator 追加进影子根,而 view 的影子根
+ * 没有任何 CSS,两个 paginator 垂直堆叠:后来者整体落在屏幕外。实测宿主
+ * 820px 高时,活着的那个 iframe 落在 y≈892(820 + 默认页边距 72),读者看到
+ * 一片空白,而 open() 早已 resolve(phase 照常进 reading)。
+ *
+ * 按宿主串起来:前一次开书没落地,后一次不许开始。并行阅读的两栏是不同
+ * 宿主,互不阻塞;换书(同一宿主重开)也天然排成先后。
+ */
+const hostOpenChains = new WeakMap<HTMLElement, Promise<void>>()
+
+const NOOP = (): void => {}
 
 /**
  * 墨水样式 → 内核装饰函数。取值集合与 Rust `StoredAnnotation.style`、zod
@@ -326,6 +355,51 @@ function nextBound(bounds: readonly number[], index: number): number {
  *
  * @internal 导出仅为单测;产品代码走 {@link FoliateAdapter.goTo}。
  */
+/**
+ * Range 的第一个可见矩形 → 它所在的**栏**的滚动偏移(分页档页对齐)。
+ * 复刻内核 `#scrollToRect` 的换算(`floor(offset / size) + 1`,页号 1 起),
+ * 只是自己算目标位置,好让动画有终点。少那个 +1 会整整差一栏 —— 表现为
+ * 「算出来的目标就是当前位置」,动画永远不触发。
+ */
+function columnOffsetFor(renderer: FoliateRenderer, range: Range): number | null {
+  const size = renderer.size
+  if (size === undefined || !(size > 0)) return null
+  let rects: DOMRectList
+  try {
+    rects = range.getClientRects()
+  } catch {
+    return null
+  }
+  const rect = Array.from(rects).find((r) => r.width > 0 && r.height > 0) ?? rects[0]
+  if (rect === undefined) return null
+  return (Math.floor(rect.left / size) + 1) * size
+}
+
+/** 把内核容器从 from 滑到 target(分页 = scrollLeft,滚动 = scrollTop)。 */
+function animateContainerTo(
+  renderer: FoliateRenderer,
+  from: number,
+  target: number,
+): Promise<void> {
+  const distance = Math.abs(target - from)
+  const duration = Math.min(RELAY_ANIM_MAX_MS, Math.max(RELAY_ANIM_MIN_MS, distance * 0.5))
+  return new Promise((resolve) => {
+    const started = performance.now()
+    const tick = (now: number): void => {
+      const t = Math.min(1, (now - started) / duration)
+      const eased = 1 - (1 - t) ** 2
+      renderer.containerPosition = Math.round(from + (target - from) * eased)
+      if (t < 1) {
+        requestAnimationFrame(tick)
+        return
+      }
+      renderer.containerPosition = target
+      resolve()
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
 export function alignedAnchorFor(local: number, pages: number | undefined): number {
   // textPages <= 1 时任何锚点都落在唯一一页,没有可校正的空间。
   if (pages === undefined || !(pages > 3)) return local
@@ -334,8 +408,30 @@ export function alignedAnchorFor(local: number, pages: number | undefined): numb
   return target / (textPages - 1)
 }
 
-function alignedAnchor(view: View, local: number): number {
-  return alignedAnchorFor(local, view.renderer.pages)
+/**
+ * 按节内比例在正文里找一个 Range(分页档的 goTo 锚点)。
+ *
+ * 段落下标 ≈ 字符比例(段长参差,但对位阅读差一两段无感),比页栅比例鲁棒:
+ * 后者在 `textPages = 1` 的短章里恒落第 1 页。拿不到正文(文档正在换)返回
+ * null,调用方退回比例锚点。
+ */
+function anchorRangeFor(view: View, local: number): Range | null {
+  const doc = view.renderer.getContents()[0]?.doc
+  const body = doc?.body
+  if (doc === undefined || body === undefined) return null
+  const blocks = [...body.querySelectorAll('p, li, blockquote, h1, h2, h3, h4, h5, h6')]
+  // local 夹到 [0, length-1]:local 恰好是 1(全书最后一页)时
+  // `floor(length * 1)` 会越界成 undefined,退回 body —— 而 body 的 rect 从
+  // 栏首开始,目标就被算成第 1 栏,整栏往回跳(实测:联动把对面拽回书头)。
+  const index = Math.min(blocks.length - 1, Math.max(0, Math.floor(blocks.length * local)))
+  const node = blocks.length > 0 ? (blocks[index] ?? body) : body
+  try {
+    const range = doc.createRange()
+    range.selectNodeContents(node)
+    return range
+  } catch {
+    return null
+  }
 }
 
 /** 排版字体栈:键为 ReaderLayout.fontFamily 的具名档位(跨平台系统字体)。 */
@@ -367,6 +463,7 @@ function buildReaderCSS(
     lineHeight?: number
     fontFamily?: string
     paragraphMargin?: number
+    textIndent?: number
     fontWeight?: number
     writingMode?: 'horizontal-tb' | 'vertical-rl'
   },
@@ -399,6 +496,11 @@ function buildReaderCSS(
           `p { margin-block-start: ${layout.paragraphMargin}em !important; margin-block-end: ${layout.paragraphMargin}em !important; }`,
         ]
       : []),
+    // 段首缩进:自定义排版才注入(原书排版不下发,书自己的缩进赢)。
+    // 0 = 显式关掉原书缩进 —— 必须写 0 而不是省略,否则选了「不缩进」无效。
+    ...(layout.textIndent !== undefined
+      ? [`p { text-indent: ${layout.textIndent}em !important; }`]
+      : []),
     // 字重:覆盖正文级元素但不碰标题——标题保留书籍自己的层级。
     ...(layout.fontWeight !== undefined
       ? [`body, p, li, dd, blockquote, div { font-weight: ${layout.fontWeight} !important; }`]
@@ -427,12 +529,18 @@ export class FoliateAdapter implements ReaderEngine {
     lineHeight?: number
     fontFamily?: string
     paragraphMargin?: number
+    textIndent?: number
     fontWeight?: number
     writingMode?: 'horizontal-tb' | 'vertical-rl'
   } = {}
   #flow: 'paginated' | 'scrolled' = 'paginated'
   #fontFaces: string | undefined
+  /** 页边距 · 上下(px):paginator 的 `margin` 属性(只作用于上下)。 */
   #pageMargin: number | undefined
+  /** 页边距 · 左右(px):只进栏宽上限(见 #maxInlineSize)。 */
+  #pageMarginInline: number | undefined
+  /** 单/双页档位;与 #flow 一起构成 paginator 的版式属性(见 #applyPaginatorAttributes)。 */
+  #pageMode: 'single' | 'dual' | 'responsive' = 'single'
   /** 简繁转换档位;在每次 section load 时应用(见 load 钩子)。 */
   #zhVariant: ZhConvertVariant = 'none'
   #bookCharStats: BookCharStats | null = null
@@ -450,14 +558,35 @@ export class FoliateAdapter implements ReaderEngine {
    * 对";但并行阅读把宿主压成半屏后,视口宽度会让栏宽比宿主还宽 → 内核按
    * 它排版,横向裁字。宿主尺寸同时覆盖窗口缩放、全屏切换、分隔条拖动三种
    * 变化,一个观察者管完,顺带少一个全局监听。
+   *
+   * 只在档位真的变了时才落 attribute:attributeChangedCallback 对每次
+   * setAttribute 都无条件 render(),而 render() 在「换章的 iframe 重载
+   * 窗口」里会踩 foliate 的离窗文档(旧 view 的 iframe 刚被 #createView
+   * 摘掉,#view 字段还没更新,documentElement 在、body 是 null)—— 那次
+   * TypeError 会沿 RO 回调逃逸成 uncaught。尺寸变化本身由 paginator 自己
+   * 的容器 RO 负责重排,这里只补「值变了但容器尺寸没变」的那一枪。
    */
   readonly #onHostResize = (): void => {
-    if (this.#view && !this.#view.isFixedLayout && this.#pageMargin !== undefined) {
-      this.#requireView().renderer.setAttribute(
-        'max-inline-size',
-        this.#maxInlineSize(this.#pageMargin, this.#layout.writingMode === 'vertical-rl'),
-      )
-    }
+    // 边距还没下发过(开书第一帧之前):那之前 renderer 也还不存在,什么都
+    // 落不了,直接收声(与旧写法一致)。
+    if (this.#pageMargin === undefined && this.#pageMarginInline === undefined) return
+    this.#syncMaxInlineSize()
+  }
+  /** 最近一次落到 renderer 上的 max-inline-size(没变就不碰,见 #onHostResize)。 */
+  #lastMaxInlineSize: string | null = null
+  #syncMaxInlineSize(): void {
+    const view = this.#view
+    const renderer = view?.renderer
+    // 渲染器还没建(开书前的首帧 RO 就落在 fetch 窗口里)—— 没有它什么都
+    // 落不了,别碰。固定排版不吃这组属性。
+    if (!view || !renderer || view.isFixedLayout) return
+    const value = this.#maxInlineSize(
+      this.#pageMarginInline,
+      this.#layout.writingMode === 'vertical-rl',
+    )
+    if (value === this.#lastMaxInlineSize) return
+    this.#lastMaxInlineSize = value
+    renderer.setAttribute('max-inline-size', value)
   }
   #hostObserver: ResizeObserver | null = null
   #destroyed = false
@@ -466,6 +595,8 @@ export class FoliateAdapter implements ReaderEngine {
   #chapterRules: readonly ChapterRule[] = []
   /** 已装 renderer 守卫的 view:按实例只装一次(双适配器共用时后者重装亦无害)。 */
   #guardedViews = new WeakSet<View>()
+  /** 已挂滚动跟尺的 renderer:同一个 paginator 不重复挂监听。 */
+  #wiredRenderers = new WeakSet<FoliateRenderer>()
   /** 已挂过跨文档事件转发的 section doc(同一个 doc 会被 load 重复投递)。 */
   #wiredDocs = new WeakSet<Document>()
   /** 已下发给 vendored foliate-pdf.js 的页面重着色序列化键(去重用,见
@@ -473,16 +604,42 @@ export class FoliateAdapter implements ReaderEngine {
   #pdfColorsKey: string | null = null
   /** 固定排版当前 section index(最近一次 relocate;见 #applyPDFPageColors)。 */
   #fixedLayoutIndex: number | undefined
+  /** 可重排书籍的当前 section index(联动动画要判「同章内才能滑过去」)。 */
+  #sectionIndex: number | undefined
+  /** 固定排版的滚动形态(PDF 滚动模式):非空时翻页/跳转都走它,folio-fxl
+   *  的 spread 渲染整个藏起(见 #setFixedLayout)。 */
+  #pdfScroll: PdfScrollStrip | null = null
+  /** 当前开着的书的格式:滚动条只对 PDF 挂(其余固定排版如 CBZ 的 section
+   *  load() 不返回 {src,onZoom,width,height},没有可预排的自然尺寸)。 */
+  #sourceFormat: BookFormat | null = null
+  /** 阅读尺:焦点带 + 蒙版层,挂在宿主里、正文之外(不碰书页 DOM)。 */
+  readonly #ruler: ReadingRuler
+  /** 阅读尺的用户选项;null = 关着。换书/换主题后据此重挂。 */
+  #rulerOptions: ReadingRulerOptions | null = null
 
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.#host = host
     this.#callbacks = callbacks
+    this.#ruler = new ReadingRuler(host, () => this.#view)
+    // 滚轮:关尺时不拦(滚动模式仍用原生滚动);开着尺才接管,滚轮改成移尺。
+    host.addEventListener(
+      'wheel',
+      (event) => {
+        if (this.#ruler.enabled) this.#onRulerWheel(event)
+      },
+      { passive: false },
+    )
     // jsdom / 早期运行环境没有 ResizeObserver:没有它就退回「只在 setLayout
     // 时算一次」,不挡开书。
     if (typeof ResizeObserver !== 'undefined') {
       this.#hostObserver = new ResizeObserver(this.#onHostResize)
       this.#hostObserver.observe(host)
     }
+  }
+
+  #onRulerWheel(event: WheelEvent): void {
+    event.preventDefault()
+    this.#ruler.wheel(event.deltaY, event.deltaMode)
   }
 
   #applyStyles(): void {
@@ -513,11 +670,29 @@ export class FoliateAdapter implements ReaderEngine {
       get: () => current,
       set: (renderer: FoliateRenderer | undefined) => {
         current = renderer
-        renderer?.setAttribute('animated', '')
+        this.#hardenRenderer(renderer)
       },
     })
     // 采用孤儿 view(它已经开过书)时,给手上的这个补挂。
-    current?.setAttribute('animated', '')
+    this.#hardenRenderer(current)
+  }
+
+  /**
+   * 每个新 renderer 都要补的不变量:
+   * - `animated`:内核 `#turnPage` 的 wait(100) debounce(见 #guardRendererAnimated);
+   * - 滚动跟尺:尺开着时容器仍可能被**原生**滚动(进度条 / 目录跳转的动画、
+   *   PageDown、滚动条拖动、触摸),带子在宿主层,不跟滚就停在旧位置。
+   *   内核自带的 scroll 转发是 250ms 防抖的,等它带子早脱走了;paginator
+   *   每次滚动都会 dispatch 一个不防抖的 'scroll' 事件,挂它正合适。
+   */
+  #hardenRenderer(renderer: FoliateRenderer | undefined): void {
+    if (renderer === undefined) return
+    renderer.setAttribute('animated', '')
+    if (this.#wiredRenderers.has(renderer)) return
+    this.#wiredRenderers.add(renderer)
+    renderer.addEventListener('scroll', () => {
+      this.#ruler.refresh()
+    })
   }
 
   #requireView(): View {
@@ -547,7 +722,13 @@ export class FoliateAdapter implements ReaderEngine {
       // section:{current,total}(项目里的 ViewLocation 类型多声明了一个
       // 运行时并不存在的顶层 index)。
       const sectionIndex = detail.section?.current
-      if (typeof sectionIndex === 'number') this.#fixedLayoutIndex = sectionIndex
+      if (typeof sectionIndex === 'number') {
+        this.#fixedLayoutIndex = sectionIndex
+        this.#sectionIndex = sectionIndex
+      }
+      // 阅读尺:翻页/滚动都由 relocate 告知。换章时锚点所在的文档被卸载,
+      // 尺按新页重新播种(见 ReadingRuler#onRelocate)。
+      this.#ruler.onRelocate()
     })
     view.addEventListener('load', (event) => {
       const { doc, index } = (event as CustomEvent).detail as { doc: Document; index: number }
@@ -556,13 +737,10 @@ export class FoliateAdapter implements ReaderEngine {
       // 一次方向键翻出 3 页(3 份监听都转了同一次按键)。
       if (this.#wiredDocs.has(doc)) return
       this.#wiredDocs.add(doc)
-      // 简繁转换:内核 load 钩子在量版/渲染之前触发(paginator 的 onLoad
-      // 先于 getDirection/render),这里同步改写文本节点,分页量到的就是
-      // 转换后的版面。固定排版(PDF 文本层)不转——那层是选区影子文本。
-      if (this.#zhVariant !== 'none' && !view.isFixedLayout) {
-        const variant = this.#zhVariant
-        convertSectionDocument(doc, (text) => convertZhText(text, variant))
-      }
+      // 下面的接线是「这一节能不能用」的命根子(翻页转发、划选、滚轮),
+      // 一条都不能少;简繁转换与阅读尺刷新是装饰,却都要读文档几何 ——
+      // 文档正在换页/卸载的窗口里量版面可能抛。装饰失败不能带走接线,
+      // 所以顺序是「先接线、后装饰」,装饰整段包在 try 里。
       // 内核翻页后 iframe 会自行获焦,方向键从此落在 iframe 文档里,
       // 必须在这里转发,父层 window 才能持续收到切页按键。
       doc.addEventListener('keydown', (domEvent) => {
@@ -572,6 +750,15 @@ export class FoliateAdapter implements ReaderEngine {
       doc.addEventListener('pointermove', () => {
         this.#callbacks.onPointerActivity?.()
       })
+      // 滚轮同样不跨界,而且这里必须显式 passive:false —— Document 上的
+      // wheel 监听默认被动,preventDefault 会被忽略,尺和正文会一起动。
+      doc.addEventListener(
+        'wheel',
+        (wheelEvent) => {
+          if (this.#ruler.enabled) this.#onRulerWheel(wheelEvent)
+        },
+        { passive: false },
+      )
       doc.addEventListener('pointerdown', () => {
         this.#callbacks.onPointerDown?.()
       })
@@ -609,6 +796,22 @@ export class FoliateAdapter implements ReaderEngine {
           },
         })
       })
+      try {
+        // 简繁转换:内核 load 钩子在量版/渲染之前触发(paginator 的 onLoad
+        // 先于 getDirection/render),这里同步改写文本节点,分页量到的就是
+        // 转换后的版面。固定排版(PDF 文本层)不转——那层是选区影子文本。
+        if (this.#zhVariant !== 'none' && !view.isFixedLayout) {
+          const variant = this.#zhVariant
+          convertSectionDocument(doc, (text) => convertZhText(text, variant))
+        }
+        // 阅读尺:新章节的正文挂上了。开书时尺比正文先就位(播种扫不到行),
+        // 这是「第一次能扫到行」的信号,顺手重画/补播种。
+        this.#ruler.refresh()
+      } catch (error) {
+        // 降级而不是扩散:尺等下一次 relocate / 滚动还会再画,简繁没转成
+        // 也只是本节显示原文 —— 都不能让这里变成 uncaught。
+        console.error('reader section decoration failed', error)
+      }
     })
     view.addEventListener('draw-annotation', (event) => {
       const { draw, annotation } = (event as CustomEvent).detail as {
@@ -632,7 +835,59 @@ export class FoliateAdapter implements ReaderEngine {
     return view
   }
 
+  /**
+   * 在 view 上开一本书。view.open() 自己从不摘旧 renderer —— 每次新建一个
+   * paginator 追加进影子根,而 view 的影子根没有任何 CSS,两个 paginator 会
+   * 垂直堆叠,后来者整体落在屏幕外(宿主只有一屏高)。所以每次 open 之前必须
+   * 显式 close:同一适配器换书、采用兄弟适配器留下的 view、replaceSource /
+   * rebuildChapters 重建章节,走的都是这一条。
+   *
+   * close 之后还要把版式属性补回新 renderer:属性是落在 paginator 元素上
+   * 的,新建的那个一套都没有(flow / margin / gap / 栏宽 / 栏数),不补的话
+   * 重建章节后的正文会回落内核默认值。
+   */
+  async #openOnView(view: View, book: Parameters<View['open']>[0]): Promise<void> {
+    this.#retireRenderer(view)
+    // 新 renderer 一套属性都没有:栏宽跟踪值作废,逼 #syncMaxInlineSize
+    // 重新落一次(否则「值没变」会让新 paginator 永远收不到栏宽)。
+    this.#lastMaxInlineSize = null
+    await view.open(book)
+    if (!view.isFixedLayout) this.#applyPaginatorAttributes(view)
+  }
+
+  /**
+   * 收掉 view 上当前的 renderer,容忍内核的一个坑。
+   *
+   * foliate-js 1.0.1 的 `Paginator#destroy` 第 1158 行是裸的
+   * `this.#view.destroy()`:renderer 建好了但还没显示过任何一节(#display
+   * 没跑过,内部 #view 还是 undefined)、或者已经 destroy 过(#view 被置
+   * null)时,这一行抛 `Cannot read properties of undefined (reading
+   * 'destroy')`。这两种 renderer 都没有加载中的文档,回收只剩「从影子根
+   * 里摘掉」这一步 —— 摘不掉才会真的出问题(view.open 不摘旧 renderer,
+   * 两个 paginator 会在无 CSS 的影子根里垂直堆叠,后来者整体落在屏幕外)。
+   * 所以:先走内核正路,炸了就手动摘,别让异常顺着开书链往外爬。
+   */
+  #retireRenderer(view: View): void {
+    const renderer = view.renderer
+    if (!renderer) return
+    try {
+      view.close()
+    } catch (error) {
+      console.error('reader renderer retire failed; detaching it directly', error)
+      renderer.remove()
+    }
+  }
+
   async open(source: BookSource, init?: ReaderOpenInit): Promise<void> {
+    // 串行化(见 hostOpenChains):这一次要等同一宿主上前一次开书落地。
+    const previous = hostOpenChains.get(this.#host) ?? Promise.resolve()
+    const run = previous.then(() => this.#openBook(source, init))
+    // 链上存不 reject 的版本:一次开书失败不能把后续所有开书都堵死。
+    hostOpenChains.set(this.#host, run.then(NOOP, NOOP))
+    return run
+  }
+
+  async #openBook(source: BookSource, init?: ReaderOpenInit): Promise<void> {
     // Idempotent per adapter: a re-open (StrictMode double-effect, book
     // switch) tears down the previous renderer first, otherwise the kernel
     // appends a second paginator below the first and the live one renders
@@ -642,6 +897,7 @@ export class FoliateAdapter implements ReaderEngine {
     // 上一本书的 relocate index 作废:留着的话,本次 open 里的 setTheme 会
     // 拿着旧 index 去 goTo,把新书跳到错误的页(见 #applyPDFPageColors)。
     this.#fixedLayoutIndex = undefined
+    this.#sectionIndex = undefined
     if (!isSupported(source.format)) {
       throw new AppError(
         ErrorCodes.bookUnsupportedFormat,
@@ -659,42 +915,57 @@ export class FoliateAdapter implements ReaderEngine {
       // bare blob URL cannot express — always hand it a properly named File.
       const file = new File([blob], source.name ?? 'book', { type: blob.type })
 
+      // 造书与开书分开:开关都要走 #openOnView(它负责先收旧 renderer)。
+      let book: Parameters<View['open']>[0]
       switch (source.format) {
         case 'pdf': {
           const { buildPdfBook } = await import('./books/pdf-book')
-          await this.#requireView().open(await buildPdfBook(file))
+          book = await buildPdfBook(file)
           break
         }
         case 'mobi':
         case 'azw3': {
-          await this.#requireView().open(await buildMobiBook(file))
+          book = await buildMobiBook(file)
           break
         }
         case 'txt': {
           const text = decodeText(await file.arrayBuffer())
           this.#adapterBuiltText = { format: 'txt', title: titleFromName(file.name), text }
-          await this.#requireView().open(
-            buildTextBook(text, titleFromName(file.name), {
-              chapterRules: this.#chapterRules,
-            }),
-          )
+          book = buildTextBook(text, titleFromName(file.name), {
+            chapterRules: this.#chapterRules,
+          })
           break
         }
         case 'md': {
           const text = decodeText(await file.arrayBuffer())
           this.#adapterBuiltText = { format: 'md', title: titleFromName(file.name), text }
-          await this.#requireView().open(buildMarkdownBook(text, titleFromName(file.name)))
+          book = buildMarkdownBook(text, titleFromName(file.name))
           break
         }
         default:
-          await this.#requireView().open(file)
+          book = file
       }
+      // fetch / 解码 / 造书都是异步的:这段窗口里被销毁(StrictMode 换挂载、
+      // 依赖变化)不能只是放行 —— 现造的书开上去也没人认领,半个 paginator
+      // 会留在宿主机里被下一个适配器采用(见 #retireRenderer 的内核坑)。
+      if (this.#destroyed) return
+      await this.#openOnView(this.#requireView(), book)
     } catch (error) {
       throw toAppError(error, ErrorCodes.bookParseFailed)
     }
-    if (this.#destroyed) return
+    if (this.#destroyed) {
+      // 开书过半被销毁:renderer 已经建好甚至正在加载,但 goTo / 主题 /
+      // 排版都还没下发,没人会再用它。就地收掉再摘 view —— 宿主机回到
+      // 「没有 foliate-view」的干净状态,下一个适配器重新开一本,而不是
+      // 采用这个半成品去踩内核的空 #view。
+      this.#retireRenderer(this.#requireView())
+      this.#view?.remove()
+      this.#view = null
+      return
+    }
     const view = this.#requireView()
     this.#watchSectionReload(view)
+    this.#sourceFormat = source.format
     // 持久化排版必须先于首次导航落地(见 ReaderOpenInit):内核在每个 section
     // 挂载时读文档计算样式定 vertical/rtl,open() 之后才下发的 writing-mode
     // 只会把首节留在原书几何里。renderer 在 view.open() 时已建好,这里的
@@ -710,9 +981,15 @@ export class FoliateAdapter implements ReaderEngine {
     // the page strip (see sprint notes).
     if (source.format === 'txt' || source.format === 'md') {
       await view.goTo('s0')
+    } else if (this.#pdfScroll) {
+      // PDF 滚动模式:初始位置由滚动条自己落在第 0 页(#setFixedLayout 的
+      // goToIndex),再让内核翻一次会把 spread 渲染器重新拽出来。
     } else {
       await view.goToTextStart()
     }
+    // 尺是跨书偏好:换了一本还要在(close 时被摘掉),首屏落位之后再播种,
+    // 否则播种扫描量的是上一本书的版面。
+    this.#applyRuler()
   }
 
   /** Decoded source text, only for adapter-built books (TXT/MD). */
@@ -735,7 +1012,7 @@ export class FoliateAdapter implements ReaderEngine {
       built.format === 'md'
         ? buildMarkdownBook(text, built.title)
         : buildTextBook(text, built.title)
-    await view.open(book)
+    await this.#openOnView(view, book)
     this.#watchSectionReload(view)
     this.#adapterBuiltText = { ...built, text }
     this.#bookCharStatsComputed = false
@@ -755,7 +1032,8 @@ export class FoliateAdapter implements ReaderEngine {
     }
     this.#chapterRules = rules ?? []
     const view = this.#requireView()
-    await view.open(
+    await this.#openOnView(
+      view,
       buildTextBook(built.text, built.title, {
         chapterRules: this.#chapterRules,
       }),
@@ -768,7 +1046,19 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   async close(): Promise<void> {
-    this.#view?.close()
+    this.#pdfScroll?.destroy()
+    this.#pdfScroll = null
+    this.#sourceFormat = null
+    // 换书 = 新 renderer(属性全套重来):跟踪值作废,否则新 paginator 会
+    // 因为「值没变」而永远收不到 max-inline-size(回落内核默认 720px)。
+    this.#lastMaxInlineSize = null
+    // 蒙版层挂在宿主上、不是书的一部分:换书必须摘掉,否则新书的正文上会
+    // 留着一块按旧锚点算出来的暗区。
+    this.#ruler.setOptions(null)
+    // 滚动模式把 spread 渲染器藏起来了(display:none),不在这里恢复的话,
+    // 下一本书按分页档位打开会是一片空白。
+    if (this.#view) this.#view.style.display = ''
+    if (this.#view) this.#retireRenderer(this.#view)
     // overlayer 随 view 一起销毁,登记不摘的话下次开书会试图重放上一本书
     // 的标注(CFI 在新书里解析不出来,一条条 catch 里空转)。
     this.#annotations.clear()
@@ -830,8 +1120,22 @@ export class FoliateAdapter implements ReaderEngine {
     }
   }
 
-  async goTo(location: ReadingLocation): Promise<void> {
+  async goTo(location: ReadingLocation, options?: { readonly animate?: boolean }): Promise<void> {
     const view = this.#requireView()
+    // PDF 滚动模式:内核的 renderer 整个藏起了,导航改走滚动条。比例口径与
+    // 滚动上报同源(页 + 页内),不经 SectionProgress 的页尾口径。
+    if (this.#pdfScroll) {
+      if (location.cfi !== undefined) {
+        this.#pdfScroll.goToIndex(view.resolveCFI(location.cfi).index)
+      } else if (location.href !== undefined) {
+        // resolveNavigation 失败时内核只 console.error 并返回 undefined。
+        const resolved = await view.resolveNavigation(location.href)
+        if (resolved) this.#pdfScroll.goToIndex(resolved.index)
+      } else {
+        this.#pdfScroll.scrollToFraction(location.progress)
+      }
+      return
+    }
     if (location.cfi !== undefined) {
       await view.goTo(location.cfi)
     } else if (location.href !== undefined) {
@@ -852,9 +1156,38 @@ export class FoliateAdapter implements ReaderEngine {
       // 固定排版(PDF)没有 foliate-paginator 那套页栅,fraction 导航沿用内核
       // 原路径(它的 renderer 连 goTo 都没有,见 #applyPDFPageColors 的可选调用)。
       await view.goToFraction(location.progress)
+    } else if (options?.animate === true) {
+      await this.#goToFractionAnimated(view, location.progress)
     } else {
       await this.#goToFractionAligned(view, location.progress)
     }
+  }
+
+  /**
+   * 带滑动的比例跳转(并行阅读的联动专用)。
+   *
+   * 内核对 `scrollToAnchor` 这条路径固定用 reason='navigation',而
+   * `#scrollTo` 的动画分支只认 'snap'/smooth —— 所以 goTo 永远是瞬跳,
+   * 联动那一栏就「没有翻页动画」。这里自己插值 containerPosition 补上。
+   *
+   * 只补**同章内**的位移:跨章要换 section,内核那一下是内容替换,没有
+   * 「滑过去」的语义,让它照旧瞬移(和主动翻页跨章时一样)。
+   */
+  async #goToFractionAnimated(view: View, frac: number): Promise<void> {
+    const renderer = view.renderer
+    const [index, local] = splitSectionFraction(view, frac)
+    if (index !== this.#sectionIndex) {
+      await this.#goToFractionAligned(view, frac)
+      return
+    }
+    const range = anchorRangeFor(view, local)
+    const target = range === null ? null : columnOffsetFor(renderer, range)
+    const from = renderer.containerPosition ?? 0
+    if (target === null || Math.abs(target - from) <= 1) {
+      await this.#goToFractionAligned(view, frac)
+      return
+    }
+    await animateContainerTo(renderer, from, target)
   }
 
   /**
@@ -873,21 +1206,37 @@ export class FoliateAdapter implements ReaderEngine {
    * 加载完之后才调它(paginator #display),那时 renderer.pages 已经有效。
    *
    * 连续滚动(scrolled)模式不校正:那儿汇报值就是精确的滚动比例。
+   *
+   * 分页档的锚点是 **Range** 而不是页栅比例:内核 `#scrollToAnchor` 的 paginated
+   * 分支按 `anchor * (textPages - 1)` 反算页号,章短时 `textPages = 1`,乘出来恒
+   * 为 0 —— 章内定位整个退化成「永远翻到第 1 页」。实测后果:并行阅读联动时
+   * 对面那一栏怎么都拽不动(目标页就是当前页)。Range 走 getClientRects 几何,
+   * 不经过页栅,同章 / 跨章都落得准。
    */
   async #goToFractionAligned(view: View, frac: number): Promise<void> {
     const [index, local] = splitSectionFraction(view, frac)
     await view.renderer.goTo?.({
       index,
-      anchor: () => (view.renderer.scrolled ? local : alignedAnchor(view, local)),
+      anchor: () => (view.renderer.scrolled ? local : (anchorRangeFor(view, local) ?? local)),
     })
   }
 
   async nextPage(options?: { animate?: boolean }): Promise<void> {
     const view = this.#requireView()
+    // PDF 滚动模式:翻页钮/方向键 = 滚一屏(与 EPUB 滚动模式同语义)。
+    if (this.#pdfScroll) {
+      this.#pdfScroll.scrollByViewport(1)
+      return
+    }
     await this.#turnPage(view, () => view.next(), options)
   }
+
   async previousPage(options?: { animate?: boolean }): Promise<void> {
     const view = this.#requireView()
+    if (this.#pdfScroll) {
+      this.#pdfScroll.scrollByViewport(-1)
+      return
+    }
     await this.#turnPage(view, () => view.prev(), options)
   }
 
@@ -927,6 +1276,10 @@ export class FoliateAdapter implements ReaderEngine {
    * mounted, so a follow-up `getSectionText(index)` reads the right content.
    */
   async goToSection(index: number): Promise<void> {
+    if (this.#pdfScroll) {
+      this.#pdfScroll.goToIndex(index)
+      return
+    }
     const view = this.#requireView()
     await view.goTo(index)
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -1064,14 +1417,18 @@ export class FoliateAdapter implements ReaderEngine {
 
   async getText(range?: TextRange): Promise<string> {
     const view = this.#requireView()
+    // 滚动模式里 spread 渲染器整个是空的,正文在滚动条已挂载的页里。
+    const contents: { doc: Document; index: number }[] = this.#pdfScroll
+      ? this.#pdfScroll.mountedDocs()
+      : view.renderer.getContents()
     const cfi = range?.start.cfi
     if (cfi !== undefined) {
       const resolved = view.resolveCFI(cfi)
-      const content = view.renderer.getContents().find((x) => x.index === resolved.index)
+      const content = contents.find((x) => x.index === resolved.index)
       if (!content) return ''
       return resolved.anchor(content.doc).toString()
     }
-    const content = view.renderer.getContents()[0]
+    const content = contents[0]
     return content?.doc.body.textContent ?? ''
   }
 
@@ -1213,7 +1570,47 @@ export class FoliateAdapter implements ReaderEngine {
   async setTheme(theme: ReaderTheme): Promise<void> {
     this.#theme = theme
     this.#applyStyles()
+    // 蒙版是「纸色 + 不透明度」算死的:换主题必须重算,否则夜间留着白纱。
+    this.#applyRuler()
     await this.#applyPDFPageColors(theme)
+  }
+
+  /* ---------------- 阅读尺 ---------------- */
+
+  setReadingRuler(options: ReadingRulerOptions | null): void {
+    this.#rulerOptions = options
+    this.#applyRuler()
+  }
+
+  async moveReadingRuler(direction: -1 | 1): Promise<void> {
+    await this.#ruler.move(direction)
+  }
+
+  wheelReadingRuler(deltaY: number, deltaMode: number): void {
+    this.#ruler.wheel(deltaY, deltaMode)
+  }
+
+  refreshReadingRuler(): void {
+    this.#ruler.refresh()
+  }
+
+  /**
+   * 把用户选项 + 当前主题纸色一起下发给尺。固定排版(PDF/CBZ)与竖排不挂:
+   * 前者的正文是画布 + 影子文本层,命中测试量不出「行」;后者「行」是竖列,
+   * 蒙版得整块换轴,留待需要时再做。
+   */
+  #applyRuler(): void {
+    const options = this.#rulerOptions
+    const vertical = this.#layout.writingMode === 'vertical-rl'
+    if (options === null || this.#view?.isFixedLayout === true || vertical) {
+      this.#ruler.setOptions(null)
+      return
+    }
+    this.#ruler.setOptions({
+      focusLines: options.focusLines,
+      dimOpacity: options.dimOpacity,
+      background: this.#theme?.background ?? '#ffffff',
+    })
   }
 
   /**
@@ -1249,6 +1646,12 @@ export class FoliateAdapter implements ReaderEngine {
     this.#pdfColorsKey = key
     const { setPageColors } = await import('./books/vendor/foliate-pdf.js')
     setPageColors(colors)
+    // 滚动模式:重渲染已挂载的页(setPageColors 是模块级状态,onZoom 重跑
+    // 一次就会读到新色),不碰藏起的 spread 渲染器。
+    if (this.#pdfScroll) {
+      this.#pdfScroll.rerenderMounted()
+      return
+    }
     // 没有 relocate 过 = 还没有可见的 spread(开书流程正走到这),跳过:
     // 随后首次导航渲染时读到的就是新颜色。goTo 而不是 goToSpread ——
     // 后者要调用方自己猜 spread index,而 `renderer.index` 这个 getter 在
@@ -1271,23 +1674,27 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
-   * 栏宽上限:随页边距联动。内核的横向留白由居中 + max-inline-size 推导
-   * (margin 属性只作用于上下),所以"页边距"要可见必须同时缩栏宽——
+   * 栏宽上限:随左右页边距联动。内核的横向留白由居中 + max-inline-size 推导
+   * (margin 属性只作用于上下),所以"左右边距"要可见必须同时缩栏宽——
    * 边距越大栏越窄,宽窗口下也能感知到边距变化。
-   * 竖排时 inline 轴是纵向,"栏宽"即列高:按可视高度给满,不做行长收窄。
+   * 竖排时 inline 轴是纵向,"栏宽"即列高:竖排没有左右边距的对应物
+   * (横向是列间距),按上下边距推导列高上限,与拆分前的单值行为一致。
    */
-  #maxInlineSize(margin: number | undefined, vertical = false): string {
+  #maxInlineSize(marginInline: number | undefined, vertical = false): string {
     // 宿主还没布局(开书第一帧、jsdom)时 clientWidth 是 0,退回视口 ——
     // 0 不是真实尺寸,拿它算会得到一个比纸还窄的栏。
     const width = this.#host.clientWidth || window.innerWidth
     const height = this.#host.clientHeight || window.innerHeight
     if (vertical) {
-      const base = margin ?? 72
+      const base = this.#pageMargin ?? 72
       return `${this.#availableColumn(height, base * 2)}px`
     }
-    if (margin === undefined) return '700px'
-    const columnCap = margin <= 56 ? 820 : margin <= 80 ? 700 : margin <= 104 ? 600 : 520
-    return `${Math.min(columnCap, this.#availableColumn(width, margin * 2))}px`
+    if (marginInline === undefined) return '700px'
+    // 档位表(UI 侧 PAGE_MARGIN_INLINE_OPTIONS:24/48/72/96),阈值取档位
+    // 中点。标准档(48)= 旧「特窄」的栏宽;特窄(24)再放宽一档。
+    const columnCap =
+      marginInline <= 36 ? 880 : marginInline <= 60 ? 820 : marginInline <= 84 ? 700 : 600
+    return `${Math.min(columnCap, this.#availableColumn(width, marginInline * 2))}px`
   }
 
   /**
@@ -1302,35 +1709,121 @@ export class FoliateAdapter implements ReaderEngine {
     return Math.round(available < 240 ? host * 0.92 : available)
   }
 
+  /**
+   * 版式属性落到 renderer 上(flow / margin / gap / 栏宽 / 栏数)。
+   *
+   * 这些属性挂在 paginator 元素上,而 view.open() 每次都换一个新的 ——
+   * 开书(含重建章节)之后必须补一遍,否则新 renderer 回落内核默认值。
+   * 读取的全部是实例上持久化的当前档位,不随调用时机变化。
+   */
+  #applyPaginatorAttributes(view: View): void {
+    const renderer = view.renderer
+    renderer.setAttribute('flow', this.#flow)
+    // margin 属性 = 上下边距(左右走 #syncMaxInlineSize 的栏宽上限)。
+    renderer.setAttribute('margin', `${this.#pageMargin ?? 72}px`)
+    // 与 #onHostResize 共用同一条落点:值没变就不碰 attribute,省掉一次
+    // 无条件 render()。
+    this.#syncMaxInlineSize()
+    renderer.setAttribute('gap', this.#pageMode === 'dual' ? '4%' : '7%')
+    renderer.setAttribute('max-column-count', this.#pageMode === 'dual' ? '2' : '1')
+  }
+
   async setLayout(layout: ReaderLayout): Promise<void> {
     const view = this.#requireView()
-    if (view.isFixedLayout) return
+    if (view.isFixedLayout) {
+      await this.#setFixedLayout(view, layout)
+      return
+    }
     this.#flow = layout.flow === 'scrolled' ? 'scrolled' : 'paginated'
-    view.renderer.setAttribute('flow', this.#flow)
-    // 内核 CSS 变量参与 calc() 长度运算,必须带 px 单位——无单位会让整条
-    // grid 声明失效,列宽与上下边距全部失控(单页满宽、双页裁字)。
-    // 栏宽对齐印刷排版的舒适行长,并随页边距联动(见 #maxInlineSize)。
     this.#pageMargin = layout.margin
-    view.renderer.setAttribute('margin', `${layout.margin ?? 72}px`)
-    view.renderer.setAttribute(
-      'max-inline-size',
-      this.#maxInlineSize(layout.margin, layout.writingMode === 'vertical-rl'),
-    )
-    view.renderer.setAttribute('gap', layout.pageMode === 'dual' ? '4%' : '7%')
-
-    // Dual page only makes sense on wide paginated surfaces; the kernel picks
-    // its column count from these two attributes.
-    view.renderer.setAttribute('max-column-count', layout.pageMode === 'dual' ? '2' : '1')
+    this.#pageMarginInline = layout.marginInline
+    this.#pageMode = layout.pageMode
     // Whole-layout replace: omitting a field means "back to the book's own
     // typography" — merging here would make 原书 unreachable after any change.
+    // ⚠️ 必须先于 #applyPaginatorAttributes:#syncMaxInlineSize 读
+    // #layout.writingMode 定竖排的列高上限,反序会让切竖排后的第一帧用
+    // 上一档方向的算式(要等下一次 setLayout / 宿主 resize 才纠正)。
     this.#layout = {
       ...(layout.fontSize !== undefined ? { fontSize: layout.fontSize } : {}),
       lineHeight: layout.lineHeight,
       fontFamily: layout.fontFamily,
       paragraphMargin: layout.paragraphMargin,
+      textIndent: layout.textIndent,
       fontWeight: layout.fontWeight,
       writingMode: layout.writingMode,
     }
+    this.#applyPaginatorAttributes(view)
     this.#applyStyles()
+    // 阅读尺:双页要在栏底先走右栏再翻页;重排之后锚点行换位置了,重画。
+    this.#ruler.setDualPage(layout.pageMode === 'dual' && this.#flow === 'paginated')
+    this.#ruler.refresh()
+  }
+
+  /**
+   * 固定排版(PDF/CBZ)的「方式」切换。
+   *
+   * foliate-fxl 的 spread 分组在 renderer.open() 时一次算定(#spreads 是私有
+   * 字段,没有 setter),所以改单页/双页只能重跑 open() 让它按新的
+   * `rendition.spread` 重算,再把当前页恢复回去 —— 这就是旧代码直接 return
+   * 导致「排版修改无效」的根因:单页/双页从未下达到过内核。
+   *
+   * 滚动形态只有 PDF 有(页文档带自然尺寸与 onZoom,见 pdf-scroll.ts):CBZ 的
+   * section load() 只给一个 URL,没有可预排的尺寸,继续走 spread。
+   */
+  async #setFixedLayout(view: View, layout: ReaderLayout): Promise<void> {
+    // 滚动形态只有 PDF 有:页文档带自然尺寸与 onZoom(见 pdf-scroll.ts)。其余
+    // 固定排版(CBZ 等)的 section load() 只给一个 URL,没有可预排的尺寸,
+    // 滚动请求按分页处理 —— 退化成单页(滚动档下 pageMode 本就是 single),
+    // 与 UI 侧对 CBZ 隐藏「滚动」档的口径一致。
+    if (layout.flow === 'scrolled' && this.#sourceFormat === 'pdf') {
+      if (this.#pdfScroll) return
+      this.#pdfScroll = new PdfScrollStrip(this.#host, view.book, {
+        onPageMounted: (doc, index) => this.#dispatchSectionLoad(view, doc, index),
+        onScroll: (index, fraction) => this.#reportFixedScroll(view, index, fraction),
+      })
+      // spread 渲染整个藏起:滚动条铺满宿主,两边同时可见会重影。
+      view.style.display = 'none'
+      await this.#pdfScroll.mount()
+      this.#pdfScroll.goToIndex(this.#fixedLayoutIndex ?? 0)
+      return
+    }
+    if (this.#pdfScroll) {
+      this.#pdfScroll.destroy()
+      this.#pdfScroll = null
+      view.style.display = ''
+    }
+    // 'none' = 每页一个 spread(单页);'auto' = 宽面左右配对(双页,竖窗自动单页)
+    // —— 与 foliate-paginator 的 max-column-count 同语义。
+    const spread = layout.pageMode === 'dual' ? 'auto' : 'none'
+    const rendition = (view.book.rendition ??= {})
+    if (rendition.spread === spread) return
+    rendition.spread = spread
+    view.renderer.open?.(view.book)
+    // open() 把 #index 重置为 -1,当前页要靠 getSpreadOf 自己找回来(内核
+    // getter 在未展示过 spread 时会抛,不能读 renderer.index)。
+    const index = Math.min(Math.max(this.#fixedLayoutIndex ?? 0, 0), view.book.sections.length - 1)
+    const section = view.book.sections[index]
+    const at = section ? view.renderer.getSpreadOf?.(section) : undefined
+    await view.renderer.goToSpread?.(at?.index ?? 0, at?.side)
+  }
+
+  /** 把页文档挂载搬进内核的 load 通道:folio-fxl 收下 → view.js #onLoad →
+   *  #emit('load') 到 view 上,引擎挂的划词/按键转发/简繁监听原样生效。 */
+  #dispatchSectionLoad(view: View, doc: Document, index: number): void {
+    view.renderer.dispatchEvent(new CustomEvent('load', { detail: { doc, index } }))
+  }
+
+  /**
+   * 滚动位置 → relocate。detail 与 foliate-fxl #reportLocation 同形,但
+   * `size: 0`(pageFraction):SectionProgress 的 nextSize 会按页内比例精确
+   * 插值(fraction = (sizeBefore + f·sizeInSection) / sizeTotal),而不是
+   * spread 模式那个「页尾」口径(见 #goToFractionAligned 的坑)。
+   */
+  #reportFixedScroll(view: View, index: number, fraction: number): void {
+    view.renderer.dispatchEvent(
+      new CustomEvent('relocate', {
+        detail: { reason: 'scroll', range: null, index, fraction, size: 0 },
+      }),
+    )
   }
 }

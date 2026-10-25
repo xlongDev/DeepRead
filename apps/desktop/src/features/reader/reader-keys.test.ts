@@ -38,9 +38,9 @@ describe('翻页', () => {
     }
   })
 
-  it('上下方向键不绑定(滚动模式交给内核自己处理)', () => {
-    expect(readerKeyAction(press('ArrowUp'))).toBeNull()
-    expect(readerKeyAction(press('ArrowDown'))).toBeNull()
+  it('上下方向键归阅读尺(关尺时调用方忽略)', () => {
+    expect(readerKeyAction(press('ArrowUp'))).toBe('ruler-up')
+    expect(readerKeyAction(press('ArrowDown'))).toBe('ruler-down')
   })
 })
 
