@@ -1831,13 +1831,30 @@ button:disabled {
    发丝线通栏:抵消侧栏左右内边距,再把内边距补回来对齐文字 —— 否则线的
    两端悬在半空,和侧栏边框接不上。 */
 /* 侧栏今日阅读摘要:一行小字,贴着底部操作区,像状态栏一样"在那儿"。
-   不设目标时只报今日时长;统计没取到时整行不渲染(JS 侧控制)。 */
+   不设目标时只报今日时长;统计没取到就整行不渲染(JS 侧控制)。
+   它同时是统计页的常驻入口 —— 点一下进「目标与统计」主页。 */
 .lib-sidebar-goal {
+  display: block;
+  width: 100%;
   margin: 0 0 var(--space-sm);
-  padding: 0 10px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
   font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.lib-sidebar-goal:hover {
+  background: color-mix(in srgb, var(--color-text-tertiary) 12%, transparent);
+  color: var(--color-text-secondary);
 }
 
 .lib-sidebar-foot {
@@ -2423,6 +2440,44 @@ button:disabled {
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
+}
+
+/* 弹性滑动滑块(Segmented 组件):active 底色由滑块接管,按钮自身透明,
+   点别的档位时滑块以弹簧曲线滑过去。 */
+.segmented-animated {
+  position: relative;
+}
+
+.segmented-animated > .segmented-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
+  transition:
+    translate 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
+    width 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
+    height 0.45s cubic-bezier(0.3, 1.4, 0.45, 1);
+  pointer-events: none;
+}
+
+.segmented-animated > button {
+  /* 滑块是 absolute(定位元素画在非定位兄弟之上),按钮必须自己提一层,
+     文字才不会被动底盖掉。 */
+  position: relative;
+  z-index: 1;
+}
+
+.segmented-animated > button.is-active {
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmented-animated > .segmented-thumb {
+    transition: none;
+  }
 }
 
 .segmented-value {
@@ -3831,27 +3886,6 @@ button:disabled {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   line-height: var(--line-height-body);
-}
-
-/* 设置 → 阅读:目标输入 + 保存/清除。输入框收窄到只放得下四位数,
-   按钮跟在右边 —— 一个数字不需要一整行。 */
-.settings-goal-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-sm);
-}
-
-.settings-goal-row input {
-  width: 110px;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- AI citations ---------- */
@@ -6511,11 +6545,13 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 
 /* ---------- Reading stats ---------- */
 
+/* 累计指标:一行数据条,不再四张白卡片 —— 指标是页脚的注脚,不是主角。
+   上下通栏 hairline + 列间竖细分隔,密度和资产负债表一样诚实。 */
 .stats-summary {
   display: grid;
-  /* 四块指标:auto-fit 让窄屏自己决定两列还是一行,不用改布局。 */
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: var(--space-sm);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .stats-tile {
@@ -6524,9 +6560,10 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   align-items: center;
   gap: 2px;
   padding: var(--space-md) var(--space-sm);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+.stats-tile + .stats-tile {
+  border-left: 1px solid var(--color-border);
 }
 
 .stats-tile-value {
@@ -6541,20 +6578,50 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   color: var(--color-text-tertiary);
 }
 
+@media (max-width: 640px) {
+  /* 窄屏四列挤成两行两列,分隔线跟着重排(右列也要左边线)。 */
+  .stats-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-tile:nth-child(odd) + .stats-tile {
+    border-left: 0;
+  }
+
+  .stats-tile:nth-child(3) {
+    border-top: 1px solid var(--color-border);
+  }
+}
+
+/* ---- 柱状图:绘图区 + 标签行 ----
+   两层分开,目标线才按绘图区高度定位,与柱高同一把尺。列数固定 7
+   (dailySeries(…, 7)),不写 auto-fit。 */
 .stats-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-chart-plot {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 6px;
   align-items: end;
-  height: 120px;
+  height: 110px;
+}
+
+.stats-chart-labels {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .stats-bar {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
   height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .stats-bar-track {
@@ -6590,25 +6657,354 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
+  text-align: center;
 }
 
-/* 达标日的小旗:柱子上方一个实心点。不改柱高语义 —— 柱子仍然是时长,
-   点只是"这一天够了"的记号。 */
-.stats-bar-flag {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
+/* ---- 今日目标 hero ----
+   目标与它的进度同屏:左边环(或今日时长),右边数字摘要 + 调整入口。
+   没有每日目标时不画环 —— 0% 的环会把「没定目标」演成「今天完全没读」。 */
+.stats-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stats-head-sub {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 目标总览:今日 / 每周 / 年度,一张卡三层 ----
+   目标与它的进度是同一件事,分居三张卡只会层层嵌套(卡片叠卡片是
+   layout 的偷懒)。一张卡内部用 hairline 分层:今日是焦点(环 + 数字),
+   每周与年度是次级行(一行搞定,不再大卡包小卡)。 */
+.stats-overview {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+.stats-overview-today {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+}
+
+/* 次级行:hairline 之上,名称 / 可视化 / 数值 / 状态 / 动作一行排开。 */
+.stats-overview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm) var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--color-border);
+}
+
+.stats-overview-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 88px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.stats-overview-viz {
+  display: flex;
+  flex: 1;
+  min-width: 140px;
+  align-items: center;
+}
+
+.stats-overview-value {
+  flex-shrink: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.stats-overview-note {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.stats-overview-row .btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 6px 14px;
+}
+
+/* 行内编辑器在行内展开:占满整行,不挤仄右侧的按钮。 */
+.stats-overview-row .goal-editor,
+.stats-hero-side .goal-editor {
+  flex-basis: 100%;
+}
+
+.stats-hero-ring {
   flex-shrink: 0;
 }
 
-/* ---- 每日目标环(B6.2)---- */
-.stats-goal-body {
+/* 没设目标时的环位:今日时长当主角,「设定每日目标」是页面上的主动作。 */
+.stats-hero-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-lg);
+  justify-content: center;
+  width: 120px;
+  height: 120px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-full);
+  gap: 2px;
 }
 
+.stats-hero-empty-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.stats-hero-empty-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.stats-hero-side {
+  display: flex;
+  flex: 1;
+  min-width: 200px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
+.stats-hero-line {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+/* ---- 次级行内的每周圆点 / 年度进度条(总览卡复用)---- */
+/* 最近 7 天,一天一格:读过的日子点亮,顺序从旧到新。 */
+.goal-week-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.goal-week-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.goal-week-dot.is-read {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+/* 年度进度条:与柱状图同一把色尺。 */
+/* 年度进度条:总览行的 viz 列是 flex 容器,条要显式吃满才不会被
+   收缩成一小截(曾经就是这样:flex item 默认 shrink-to-fit)。 */
+.goal-year-bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-text-tertiary) 16%, transparent);
+  overflow: hidden;
+}
+
+.goal-year-fill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--color-accent),
+    color-mix(in srgb, var(--color-accent) 55%, transparent)
+  );
+  transition: width var(--duration-slow) var(--ease-emphasized);
+}
+
+/* ---- 目标行内编辑器:预设芯片 + 自定义 + 清除 ---- */
+.goal-editor {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--color-border);
+  animation: fade-up var(--duration-fast) var(--ease-out);
+}
+
+.goal-editor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.goal-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.goal-chip:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.goal-chip.is-active {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+.goal-chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.goal-editor-custom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.goal-editor-custom input {
+  width: 88px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.goal-editor-unit {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* ---- 柱状图目标线 ----
+   虚线横在每日目标的高度上 —— 柱头越过它就是达标。峰值把目标秒数算进去,
+   线就永远在画布内;位置按绘图区(.stats-chart-plot)算,与柱高同一把尺。 */
+.stats-chart-goal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--color-accent) 60%, transparent);
+  pointer-events: none;
+}
+
+/* ---- 年度热力图 ----
+   列 = 周(周一起),格 = 一天;色尺有每日目标时按目标(点亮 = 当天达标)。 */
+.stats-heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.stats-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 520px;
+}
+
+.stats-heatmap-months,
+.stats-heatmap-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+}
+
+.stats-heatmap-months {
+  height: 14px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.stats-heatmap-grid {
+  grid-template-rows: repeat(7, 1fr);
+}
+
+/* 色尺五档。轨迹格(level 0)是「有这一天、没读」:太淡在浅色主题里会
+   整片消失(曾经 14% 就几乎看不见),22% 是两个主题都刚好的底。 */
+.stats-heat-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text-tertiary) 22%, transparent);
+}
+
+.stats-heat-cell.level-1 {
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+}
+
+.stats-heat-cell.level-2 {
+  background: color-mix(in srgb, var(--color-accent) 46%, transparent);
+}
+
+.stats-heat-cell.level-3 {
+  background: color-mix(in srgb, var(--color-accent) 68%, transparent);
+}
+
+.stats-heat-cell.level-4 {
+  background: var(--color-accent);
+}
+
+/* 未来与补位格不出盒:图里只有"已经有或本该有数据"的日子。 */
+.stats-heat-cell.is-future,
+.stats-heat-cell.is-pad {
+  background: transparent;
+}
+
+.stats-heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-sm);
+  font-size: var(--font-size-xs);
+}
+
+.stats-heatmap-legend .stats-heat-cell {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+/* ---- 每日目标环 ---- */
 .stats-goal-ring-wrap {
   position: relative;
   width: 120px;
@@ -6643,18 +7039,6 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   justify-content: center;
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-medium);
-  font-variant-numeric: tabular-nums;
-}
-
-.stats-goal-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-.stats-goal-line {
-  margin: 0;
-  font-size: var(--font-size-md);
   font-variant-numeric: tabular-nums;
 }
 

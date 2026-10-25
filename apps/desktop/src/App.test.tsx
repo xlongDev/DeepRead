@@ -41,6 +41,7 @@ const shelfBook = {
   size: 2391,
   addedAt: '2026-09-09T00:00:00Z',
   progress: null,
+  finishedAt: null,
   tags: [],
 }
 
@@ -54,15 +55,17 @@ beforeEach(() => {
     if (command === 'reader.notes.list') {
       return Promise.resolve({ notes: [] })
     }
-    // 挂载时还会取一次阅读统计与每日目标(侧栏的今日摘要要用)。
+    // 挂载时还会取一次阅读统计与阅读目标(侧栏的今日摘要要用)。
     // 形状照真实后端:reader.stats.get → { days, totalSeconds },
-    // reading.goal.get → { dailyMinutes }。返回错的形状会在 zod 校验处
+    // reading.goal.get → { goals }。返回错的形状会在 zod 校验处
     // 抛 securityValidationFailed(生产路径),这里照合约给对的。
     if (command === 'reader.stats.get') {
       return Promise.resolve({ days: [], totalSeconds: 0 })
     }
     if (command === 'reading.goal.get') {
-      return Promise.resolve({ dailyMinutes: 0 })
+      return Promise.resolve({
+        goals: { dailyMinutes: 0, weeklyDays: 0, yearlyBooks: 0 },
+      })
     }
     return Promise.resolve(appInfo)
   })

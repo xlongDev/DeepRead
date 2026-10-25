@@ -27,8 +27,10 @@
   --font-size-sm: 13px;
   --font-size-md: 15px;
   --font-size-lg: 21px;
+  --font-size-xs: 12px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
+  --font-weight-semibold: 600;
   --line-height-tight: 1.25;
   --line-height-body: 1.6;
 
@@ -148,6 +150,28 @@
   --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
 }
 
+/* 松林:暗色绿调。夜读护眼,与暖黑的「深色」分属两个世界 ——
+   底色偏冷绿,accent 仍是靛蓝家族的亮变体(蓝绿相邻,在绿底上更跳)。 */
+[data-app-theme='pine'] {
+  --color-bg: #0f1512;
+  --color-surface: #17201b;
+  --color-surface-glass: rgba(23, 32, 27, 0.88);
+  --color-text-primary: #e8eee9;
+  --color-text-secondary: #a6b5aa;
+  --color-text-tertiary: #6b7b71;
+  --color-accent: #8aa5f0;
+  --color-accent-soft: rgba(138, 165, 240, 0.16);
+  --color-border: rgba(232, 238, 233, 0.12);
+  --color-highlight: rgba(255, 255, 255, 0.06);
+  --color-danger: #e0706a;
+  --color-success: #5cb886;
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 72px rgba(0, 0, 0, 0.6);
+  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
+  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
+}
+
 [data-app-theme='oled'] {
   --color-bg: #000000;
   --color-surface: #0d0d0d;
@@ -172,4 +196,26 @@
   --color-text-tertiary: #7d8794;
   --color-border: rgba(28, 36, 48, 0.14);
   --blur-glass: 32px;
+}
+
+/* 晨雾:浅色冷灰蓝。暖纸系(纯白/暖纸/象牙)全是暖底,浅灰又太素,
+   它补的是「中性的冷纸」—— 白天久盯不暖得发闷,也不像液态玻璃那样蓝。 */
+[data-app-theme='mist'] {
+  --color-bg: #ecf0f4;
+  --color-surface: #ffffff;
+  --color-surface-glass: rgba(255, 255, 255, 0.85);
+  --color-text-primary: #1e2732;
+  --color-text-secondary: #4f5c6b;
+  --color-text-tertiary: #82909f;
+  --color-accent: #3d6deb;
+  --color-accent-soft: rgba(61, 109, 235, 0.12);
+  --color-border: rgba(30, 39, 50, 0.12);
+  --color-highlight: rgba(255, 255, 255, 0.65);
+  --color-danger: #c4453d;
+  --color-success: #2f8a5b;
+  --shadow-soft: 0 1px 2px rgba(22, 30, 40, 0.05), 0 8px 24px rgba(22, 30, 40, 0.07);
+  --shadow-elevated: 0 2px 6px rgba(22, 30, 40, 0.07), 0 16px 48px rgba(22, 30, 40, 0.11);
+  --shadow-floating: 0 4px 12px rgba(22, 30, 40, 0.09), 0 24px 72px rgba(22, 30, 40, 0.17);
+  --shadow-cover: 0 1px 2px rgba(22, 30, 40, 0.1), 0 10px 28px rgba(22, 30, 40, 0.16);
+  --shadow-cover-hover: 0 2px 6px rgba(22, 30, 40, 0.1), 0 20px 44px rgba(22, 30, 40, 0.22);
 }

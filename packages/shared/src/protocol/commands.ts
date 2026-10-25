@@ -34,6 +34,7 @@ import type { StatsAddRequest as ReaderStatsAddRequest } from './generated/Stats
 import type { StatsAddResponse as ReaderStatsAddResponse } from './generated/StatsAddResponse'
 import type { StatsGetResponse as ReaderStatsGetResponse } from './generated/StatsGetResponse'
 import type { StatsBooksResponse as ReaderStatsBooksResponse } from './generated/StatsBooksResponse'
+import type { ReadingGoals } from './generated/ReadingGoals'
 import type { ReadingGoalGetResponse } from './generated/ReadingGoalGetResponse'
 import type { ReadingGoalSetRequest } from './generated/ReadingGoalSetRequest'
 import type { ReadingGoalSetResponse } from './generated/ReadingGoalSetResponse'
@@ -228,6 +229,7 @@ export type {
   ReaderStatsAddResponse,
   ReaderStatsBooksResponse,
   ReaderStatsGetResponse,
+  ReadingGoals,
   ReadingGoalGetResponse,
   ReadingGoalSetRequest,
   ReadingGoalSetResponse,
@@ -570,6 +572,8 @@ export const libraryBookSchema = z.object({
   size: z.number().int().min(0),
   addedAt: iso8601,
   progress: z.number().min(0).max(1).nullable(),
+  /** 读完时间(进度第一次到 100% 时的 state.updatedAt);没读完/没盖章为 null。 */
+  finishedAt: iso8601.nullable(),
   tags: z.array(z.string().min(1).max(32)).max(20),
 })
 
@@ -636,15 +640,20 @@ const bookReadingStatSchema = z.object({
 export const readerStatsBooksResponseSchema = z.object({
   books: z.array(bookReadingStatSchema).max(20),
 })
-/** 每日阅读目标(分钟);0 = 没有目标。上限 24h,与 Rust `MAX_GOAL_MINUTES` 对齐。 */
-export const readingGoalGetResponseSchema = z.object({
+/** 阅读目标三件套;各项 0 = 没有目标。上限与 Rust 侧三个 MAX_GOAL_* 对齐。 */
+export const readingGoalsSchema = z.object({
   dailyMinutes: z.number().int().min(0).max(1440),
+  weeklyDays: z.number().int().min(0).max(7),
+  yearlyBooks: z.number().int().min(0).max(366),
+})
+export const readingGoalGetResponseSchema = z.object({
+  goals: readingGoalsSchema,
 })
 export const readingGoalSetRequestSchema = z.object({
-  dailyMinutes: z.number().int().min(0).max(1440),
+  goals: readingGoalsSchema,
 })
 export const readingGoalSetResponseSchema = z.object({
-  dailyMinutes: z.number().int().min(0).max(1440),
+  goals: readingGoalsSchema,
 })
 /** 章节规则(spec §15):与 Rust `state::ChapterRule` 对齐;pattern 上限 200 字符。 */
 export const chapterRuleSchema = z.object({

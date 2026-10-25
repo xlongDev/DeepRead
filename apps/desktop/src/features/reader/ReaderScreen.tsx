@@ -126,12 +126,14 @@ import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { ParallelPicker } from './ParallelPicker'
+import { Segmented } from './Segmented'
 import {
   anchorFromRect,
   placeCompanionCard,
   windowFrame,
   type ReadingFrame,
 } from './selection-place'
+import { animateFlipTurn } from './page-flip'
 import { animatePageTurn } from './page-turn'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
 import { primeTtsAudio } from './tts/audio'
@@ -1129,9 +1131,12 @@ export function ReaderScreen({
    *   debounce,旧页滑出后屏幕只剩纸色 ~100ms 再滑入新页,这就是用户看到
    *   的「翻页闪一下」。且 transform 动在 iframe 的祖先层,WKWebView 下
    *   还有提层瞬间的栅格闪烁风险。
-   * - 「覆盖/仿真/淡入」档走宿主 WAAPI 两段动画(见 page-turn.ts),这时
-   *   内核必须**瞬间**翻页(传 animate:false 摘下 debounce),空窗由 page-turn
-   *   的「停车」钉在不可见状态。
+   * - 「覆盖/淡入」档走宿主 WAAPI 两段动画(见 page-turn.ts),这时内核必须
+   *   **瞬间**翻页(传 animate:false 摘下 debounce),空窗由 page-turn 的
+   *   「停车」钉在不可见状态。
+   * - 「仿真」档走 page-flip.ts 的纸叶:整页书克隆成一张纸盖住正文,内核在
+   *   纸叶底下瞬间翻页,纸叶再绕书脊转走。翻页窗口全程被盖着,不存在空窗。
+   *   纸叶建不起来(固定排版 / 内核未就绪)才退回上一条的两段动画。
    * 翻页不唤起工具栏:沉浸阅读时翻页不应打断 chrome 的显隐节奏。
    */
   const turnPage = useCallback(
@@ -1152,6 +1157,18 @@ export function ReaderScreen({
       if (animated && pageTurnStyle !== 'slide') {
         const host = hostRef.current
         if (host !== null && typeof host.animate === 'function') {
+          // 仿真档先试纸叶:它要克隆书页,拿不到(固定排版、内核未就绪)就
+          // 返回 false,再退回宿主的旧页抬起动画。
+          if (pageTurnStyle === 'flip') {
+            const turned = await animateFlipTurn({
+              host,
+              layers: adapter.flipLeafLayers?.() ?? [],
+              dir,
+              columns: viewMode === 'dual' ? 2 : 1,
+              flip,
+            }).catch(() => false)
+            if (turned) return
+          }
           // 动画失败(内核翻页抛错等)不向调用方冒泡 —— 按钮的 void 调用
           // 会把 rejection 变成 unhandled,而翻页失败不值得打断阅读。
           await animatePageTurn(host, pageTurnStyle, dir, flip).catch(() => {})
@@ -1271,8 +1288,10 @@ export function ReaderScreen({
       }
       // 切到自定义排版:还没选过的维度先落到标准档 —— 否则「关了原书排版」
       // 在画面上什么都不变(每项仍是 undefined = 书自己的值),读者只会以为
-      // 开关坏了。
-      const next = merged.originalLayout === false ? materializeCustomDefaults(merged) : merged
+      // 开关坏了。只在「开 → 关」的跳变瞬间物化;关着的时候再点「原书」档
+      // (显式 undefined)必须原样保留,不然那一项永远弹回标准档、点不亮。
+      const switchingToCustom = merged.originalLayout === false && originalLayout !== false
+      const next = switchingToCustom ? materializeCustomDefaults(merged) : merged
       setOriginalLayout(next.originalLayout ?? true)
       setViewMode(next.viewMode ?? 'single')
       setFontSize(next.fontSize)
@@ -2349,7 +2368,7 @@ export function ReaderScreen({
                 <div className="settings-stack">
                   <div className="settings-row">
                     <span className="settings-label">行距</span>
-                    <div className="segmented">
+                    <Segmented>
                       {LINE_HEIGHT_OPTIONS.map((option) => (
                         <button
                           key={option.label}
@@ -2360,11 +2379,11 @@ export function ReaderScreen({
                           {option.label}
                         </button>
                       ))}
-                    </div>
+                    </Segmented>
                   </div>
                   <div className="settings-row">
                     <span className="settings-label">段间距</span>
-                    <div className="segmented">
+                    <Segmented>
                       {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
                         <button
                           key={option.label}
@@ -2375,11 +2394,11 @@ export function ReaderScreen({
                           {option.label}
                         </button>
                       ))}
-                    </div>
+                    </Segmented>
                   </div>
                   <div className="settings-row">
                     <span className="settings-label">段首缩进</span>
-                    <div className="segmented">
+                    <Segmented>
                       {TEXT_INDENT_OPTIONS.map((option) => (
                         <button
                           key={option.label}
@@ -2390,11 +2409,11 @@ export function ReaderScreen({
                           {option.label}
                         </button>
                       ))}
-                    </div>
+                    </Segmented>
                   </div>
                   <div className="settings-row">
                     <span className="settings-label">字重</span>
-                    <div className="segmented">
+                    <Segmented>
                       {FONT_WEIGHT_OPTIONS.map((option) => (
                         <button
                           key={option.label}
@@ -2406,11 +2425,11 @@ export function ReaderScreen({
                           {option.label}
                         </button>
                       ))}
-                    </div>
+                    </Segmented>
                   </div>
                   <div className="settings-row">
                     <span className="settings-label">排版方向</span>
-                    <div className="segmented">
+                    <Segmented>
                       {WRITING_MODE_OPTIONS.map((option) => (
                         <button
                           key={option.label}
@@ -2421,7 +2440,7 @@ export function ReaderScreen({
                           {option.label}
                         </button>
                       ))}
-                    </div>
+                    </Segmented>
                   </div>
                 </div>
               </div>
@@ -2455,7 +2474,7 @@ export function ReaderScreen({
                 </div>
                 <div className="settings-row">
                   <span className="settings-label">左右边距</span>
-                  <div className="segmented">
+                  <Segmented>
                     {PAGE_MARGIN_INLINE_OPTIONS.map((option) => (
                       <button
                         key={option.label}
@@ -2466,11 +2485,11 @@ export function ReaderScreen({
                         {option.label}
                       </button>
                     ))}
-                  </div>
+                  </Segmented>
                 </div>
                 <div className="settings-row">
                   <span className="settings-label">上下边距</span>
-                  <div className="segmented">
+                  <Segmented>
                     {PAGE_MARGIN_BLOCK_OPTIONS.map((option) => (
                       <button
                         key={option.label}
@@ -2481,7 +2500,7 @@ export function ReaderScreen({
                         {option.label}
                       </button>
                     ))}
-                  </div>
+                  </Segmented>
                 </div>
               </div>
             </div>
@@ -2490,7 +2509,7 @@ export function ReaderScreen({
                 排版」—— 两种模式下都给入口,选「原书」才回到书自带的字体。 */}
             <div className="settings-group">
               <span className="settings-group-label">字体</span>
-              <div className="segmented segmented-wrap">
+              <Segmented className="segmented-wrap">
                 {FONT_FAMILY_OPTIONS.map((option) => (
                   <button
                     key={option.label}
@@ -2517,7 +2536,7 @@ export function ReaderScreen({
                     {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
                   </button>
                 ))}
-              </div>
+              </Segmented>
               <div className="font-custom-row">
                 <button
                   type="button"
@@ -2627,7 +2646,7 @@ export function ReaderScreen({
             </div>
             <div className="settings-group">
               <span className="settings-group-label">翻页动画</span>
-              <div className="segmented">
+              <Segmented>
                 {PAGE_TURN_OPTIONS.map((option) => (
                   <button
                     key={option.value}
@@ -2641,11 +2660,11 @@ export function ReaderScreen({
                     {option.label}
                   </button>
                 ))}
-              </div>
+              </Segmented>
             </div>
             <div className="settings-row">
               <span className="settings-label">方式</span>
-              <div className="segmented">
+              <Segmented>
                 {VIEW_MODE_OPTIONS.filter(
                   (option) => option.value !== 'scroll' || scrollModeSupported,
                 ).map((option) => (
@@ -2658,7 +2677,7 @@ export function ReaderScreen({
                     {option.label}
                   </button>
                 ))}
-              </div>
+              </Segmented>
             </div>
             <div className="settings-group">
               <span className="settings-group-label">阅读尺</span>
@@ -2682,7 +2701,7 @@ export function ReaderScreen({
               <>
                 <div className="settings-row">
                   <span className="settings-label">聚焦行数</span>
-                  <div className="segmented">
+                  <Segmented>
                     {RULER_FOCUS_LINES.map((count) => (
                       <button
                         key={count}
@@ -2693,11 +2712,11 @@ export function ReaderScreen({
                         {count}
                       </button>
                     ))}
-                  </div>
+                  </Segmented>
                 </div>
                 <div className="settings-row">
                   <span className="settings-label">淡化</span>
-                  <div className="segmented">
+                  <Segmented>
                     {RULER_DIM_OPTIONS.map((option) => (
                       <button
                         key={option.label}
@@ -2708,7 +2727,7 @@ export function ReaderScreen({
                         {option.label}
                       </button>
                     ))}
-                  </div>
+                  </Segmented>
                 </div>
               </>
             )}

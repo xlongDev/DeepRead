@@ -102,21 +102,22 @@
 
 ### `library.list` / `library.import` / `library.remove` / `library.info.set`
 
-|             |                                                                                                                                                                                   |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                                                                                                           |
-| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                                                                                   |
-| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                                                                                    |
-| info.set    | Request `{ bookHash, displayName, author, subtitle, publisher, language }`(各字段 `string \| null`,`null` = 清空);Response `{ book: LibraryBook }`                                |
-| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                                                                                 |
-| LibraryBook | `{ hash, fileName, displayName, author, subtitle, publisher, language (均 string \| null), format, path, size, addedAt, progress: number \| null, tags: string[] }`               |
-| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                                                                               |
-| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                                                                          |
-| 约定        | 元数据字段(`displayName` / `author` / `subtitle` / `publisher` / `language`)由书自带元数据惰性解析后经 `info.set` 回写;**只填还空着的字段** —— 用户手改过的值不会被后来的解析盖掉 |
-| 约定        | `info.set` 是整体赋值:`null` 表示清空该字段;前端把空字符串转成 `null` 再提交                                                                                                      |
-| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                                                                          |
-| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)                                                                   |
-| 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除)                                                         |
+|             |                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| list        | Request `undefined`;Response `{ books: LibraryBook[] }`(按加入时间倒序)                                                                                                                                                 |
+| import      | Request `{ path: string }`(来自系统文件对话框);Response `{ book: LibraryBook }`                                                                                                                                         |
+| remove      | Request `{ bookHash: string }`;Response `{ removed: boolean }`                                                                                                                                                          |
+| info.set    | Request `{ bookHash, displayName, author, subtitle, publisher, language }`(各字段 `string \| null`,`null` = 清空);Response `{ book: LibraryBook }`                                                                      |
+| tag.set     | Request `{ bookHash, tags: string[] }`(整体替换);Response `{ book: LibraryBook }`                                                                                                                                       |
+| LibraryBook | `{ hash, fileName, displayName, author, subtitle, publisher, language (均 string \| null), format, path, size, addedAt, progress: number \| null, finishedAt: string \| null, tags: string[] }`                         |
+| Errors      | `BOOK_UNSUPPORTED_FORMAT`、`BOOK_OPEN_FAILED`、`SYSTEM_VALIDATION`(hash 非法)、`STORAGE_IO/CORRUPT`                                                                                                                     |
+| 约定        | 文件保留原位(永不移动/删除用户文件);内核经 asset 协议流式读取,导入时按文件逐一授权 scope                                                                                                                                |
+| 约定        | 元数据字段(`displayName` / `author` / `subtitle` / `publisher` / `language`)由书自带元数据惰性解析后经 `info.set` 回写;**只填还空着的字段** —— 用户手改过的值不会被后来的解析盖掉                                       |
+| 约定        | `info.set` 是整体赋值:`null` 表示清空该字段;前端把空字符串转成 `null` 再提交                                                                                                                                            |
+| 约定        | `progress` 由 `list` 用 `LEFT JOIN progress` 一次带出(未读为 `null`);书架不再逐本调用 `reader.state.get`                                                                                                                |
+| 约定        | `finishedAt` = 进度第一次到 100% 的时刻(`reader.state.set` 里盖章,只盖一次);年度阅读目标按它数「今年读完」。v9 迁移**不回填**老数据 —— 没盖章的书不计入,宁少报不猜;重新导入同一文件不丢章(INSERT OR REPLACE 显式带回去) |
+| 约定        | `tags` 存于 `books.tags`(JSON 数组),写入时去空白/去重/单条 ≤32 字、最多 20 条;同步按并集合并(见 `mergeLibrary`)                                                                                                         |
+| 约定        | `remove` 同时清理 progress / annotations / bookmarks / cards / ai_index / ai_artifacts(外键 CASCADE 未开 PRAGMA,显式删除)                                                                                               |
 
 ### `library.search`(跨书搜索,B6.1)
 
@@ -130,16 +131,18 @@
 | 约定      | 正文命中按 `bookHash + label` 开书,前端在目录里定位(没有 CFI 可给);`indexedBooks` 让 UI 诚实标注"基于已建 AI 索引的 N 本书"                                  |
 | 约定      | 浏览器端只有书目层(`hits: []`、`indexedBooks: 0`)—— AI 索引本来就只有桌面版;demo 书架走前端本地过滤                                                          |
 
-### `reading.goal.get` / `reading.goal.set`(每日阅读目标,B6.2)
+### `reading.goal.get` / `reading.goal.set`(阅读目标三件套)
 
-|        |                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| get    | Request `undefined`;Response `{ dailyMinutes: number }`,**0 = 没有目标**                                                    |
-| set    | Request `{ dailyMinutes: number }`(0…1440);Response `{ dailyMinutes }`(落库后的生效值)                                      |
-| Errors | `SYSTEM_VALIDATION`(>1440、非整数由 serde 拒收)、`STORAGE_IO`                                                               |
-| 约定   | 桌面端存 `app_settings` KV(键 `reading.goal.dailyMinutes`),随 VACUUM INTO 备份快照一起走,零迁移;浏览器端分流到 localStorage |
-| 约定   | 读路径统一过滤非法/越界/过期值为 0 —— 设置项永远有一份干净的默认值可回,与 `tts.cache.maxBytes` 同一条规矩                   |
-| 约定   | 推导(完成度环 / 本周达标天数 / 侧栏摘要)全部在前端 `@deepread/shared/stats`,数据仍来自现有 `reading_stats`,不新增表         |
+|        |                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| get    | Request `undefined`;Response `{ goals: ReadingGoals }`                                                                                                                                                     |
+| set    | Request `{ goals: ReadingGoals }`(整对象下发);Response `{ goals }`(落库后的生效值)                                                                                                                         |
+| 字段   | `ReadingGoals = { dailyMinutes: 0…1440, weeklyDays: 0…7, yearlyBooks: 0…366 }`,**各项 0 = 没有目标**                                                                                                       |
+| Errors | `SYSTEM_VALIDATION`(任一项越界,serde 拒收)、`STORAGE_IO`                                                                                                                                                   |
+| 约定   | 桌面端存 `app_settings` KV(三个键 `reading.goal.dailyMinutes` / `weeklyDays` / `yearlyBooks`),随 VACUUM INTO 备份快照一起走,零迁移;浏览器端分流到 localStorage(同一个 JSON,旧格式只有 dailyMinutes 也兼容) |
+| 约定   | 读路径统一过滤非法/越界/过期值为 0 —— 设置项永远有一份干净的默认值可回,与 `tts.cache.maxBytes` 同一条规矩                                                                                                  |
+| 约定   | **目标不住设置弹窗**:UI 主居所是统计页(今日 hero + 每周/年度目标卡,行内编辑器),侧栏摘要行是常驻入口;设置弹窗只保留外观 / AI / 备份                                                                         |
+| 约定   | 推导(完成度环 / 本周达标天数 / 热力图色尺 / 年度读完)全部在前端 `@deepread/shared/stats`,数据仍来自现有 `reading_stats` 与 `books.finishedAt`,不新增表                                                     |
 
 ### `ai.*` 与 `secret.*`(Phase 3)
 

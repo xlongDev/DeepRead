@@ -300,6 +300,25 @@ export interface EngineCallbacks {
  * 是同一个 {@link walkSectionText} 模型(块级元素后有一个虚拟换行),
  * 所以字符区间能精确落回 DOM。
  */
+/**
+ * 封面页防压扁:calibre 等工具生成的封面页常是
+ * `<svg viewBox="…" preserveAspectRatio="none" width/height="100%">`,
+ * 在内核的分栏 iframe 里栏框比图片矮胖,"none" 会把封面拉伸成栏框形状
+ * (内核 setImageSize 的 object-fit 对内联 <svg> 无效,拦不住)。有
+ * viewBox 的 SVG 统一改成 meet:保持比例居中,多出的留白交给纸色。
+ * 返回改写的个数(测试用)。
+ */
+export function fixSvgStretch(doc: Document): number {
+  let count = 0
+  for (const svg of (doc.body ?? doc).querySelectorAll('svg[viewBox]')) {
+    if (svg.getAttribute('preserveAspectRatio') === 'none') {
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+      count++
+    }
+  }
+  return count
+}
+
 function titleFromName(name: string): string {
   return name.replace(
     /\.(epub|mobi|azw3?|kf8|prc|fb2|zip|cbz|pdf|txt|text|md|markdown|fbz|chm)$/i,
@@ -804,6 +823,9 @@ export class FoliateAdapter implements ReaderEngine {
           const variant = this.#zhVariant
           convertSectionDocument(doc, (text) => convertZhText(text, variant))
         }
+        // 封面页防压扁(见 fixSvgStretch):同在量版之前改写,分页量到的
+        // 就是修正后的版面。
+        fixSvgStretch(doc)
         // 阅读尺:新章节的正文挂上了。开书时尺比正文先就位(播种扫不到行),
         // 这是「第一次能扫到行」的信号,顺手重画/补播种。
         this.#ruler.refresh()
@@ -1592,6 +1614,33 @@ export class FoliateAdapter implements ReaderEngine {
 
   refreshReadingRuler(): void {
     this.#ruler.refresh()
+  }
+
+  /**
+   * 仿真翻页的纸叶素材(契约见 `ReaderEngine.flipLeafLayers`)。
+   *
+   * 只服务重排排版:固定排版(PDF/CBZ)的页是画布,克隆 `<canvas>` 只拿到
+   * 一个空壳 —— 位图不随节点走,纸叶会是一张白纸。而且 foliate-fxl 的
+   * `getContents()` 把没在显示的 spread 一起交出来,那里直接返回空更省心。
+   */
+  flipLeafLayers(): readonly Element[] {
+    const view = this.#view
+    if (!view || view.isFixedLayout) return []
+    const layers: Element[] = []
+    for (const content of view.renderer.getContents()) {
+      const frame = content.doc?.defaultView?.frameElement
+      // 影子根里的载体是另一个文档的 Element,`instanceof` 不认,看标签名。
+      if (frame?.tagName !== 'IFRAME') continue
+      const rect = frame.getBoundingClientRect()
+      // 藏起来的那一页(display:none)量出来是 0,别拿它当纸叶。
+      if (rect.width <= 0 || rect.height <= 0) continue
+      layers.push(frame)
+      // 批注层不在书页文档里 —— 它是同一影子根里叠在 iframe 上的一张 SVG,
+      // 不一起克隆的话,翻页那半秒里划过的线会整片消失。
+      const overlay = content.overlayer?.element
+      if (overlay) layers.push(overlay)
+    }
+    return layers
   }
 
   /**

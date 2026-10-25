@@ -1,7 +1,10 @@
 /**
- * 翻页动画(宿主 WAAPI 两段式)—— 只服务「覆盖/仿真/淡入」三档;
+ * 翻页动画(宿主 WAAPI 两段式)—— 只服务「覆盖/淡入」两档,外加「仿真」档
+ * 拿不到书页时的退化路径;
  * 「滑动」档走内核自带的 animated 翻页(真实内容运动、无空窗,见
- * FoliateAdapter 的 `animated` 属性与 ReaderScreen.turnPage 的注释)。
+ * FoliateAdapter 的 `animated` 属性与 ReaderScreen.turnPage 的注释);
+ * 「仿真」档的正式实现在 page-flip.ts —— 它克隆整页书当纸叶盖住正文,
+ * 翻页窗口根本不露,本文件的 flip 计划只在纸叶建不起来时兜底。
  *
  * 旧实现(含「滑动」档都在这里放)的历史问题,两条都已修:
  * 1. View Transitions 依赖浏览器对 `.reader-host` 的快照,而书页内容住在
@@ -88,7 +91,8 @@ const PLANS: Readonly<Record<'cover' | 'flip' | 'fade', Plan>> = {
     inEasing: EASE_OUT,
   },
   flip: {
-    // 仿真:旧页绕书脊掀起离场,新页从对称角落回。perspective 内联进
+    // 仿真(兜底):旧页绕书脊掀起离场,新页从对称角落回。正式路径见
+    // page-flip.ts,那里旧页是真身克隆、翻页全程被盖住。perspective 内联进
     // transform(rotateY 没有透视只是水平压缩)。换页瞬间必须不可见:
     // out 收在 opacity 0、in 起在 opacity 0,否则空窗里那半透明的旧页
     // 会当着用户的面从 +82° 翻到 -82°。

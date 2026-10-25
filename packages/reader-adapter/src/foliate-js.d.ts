@@ -200,6 +200,9 @@ declare module 'foliate-js/view.js' {
 
 declare module 'foliate-js/overlayer.js' {
   export class Overlayer {
+    /** 批注层自己那张 SVG:内核把它叠在书页 iframe 上(同一影子根里)。
+     *  仿真翻页要连它一起克隆,否则纸叶上没有划线。 */
+    readonly element: Element
     static highlight: (...args: unknown[]) => unknown
     static outline: (...args: unknown[]) => unknown
     static underline: (...args: unknown[]) => unknown

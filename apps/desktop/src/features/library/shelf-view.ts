@@ -135,7 +135,15 @@ export function toggleFavoriteTag(tags: readonly string[]): readonly string[] {
 }
 
 export type AppTheme =
-  'pure-white' | 'warm-paper' | 'ivory' | 'soft-gray' | 'dark' | 'oled' | 'liquid-glass'
+  | 'pure-white'
+  | 'warm-paper'
+  | 'ivory'
+  | 'soft-gray'
+  | 'dark'
+  | 'pine'
+  | 'oled'
+  | 'liquid-glass'
+  | 'mist'
 
 export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   added: '最近添加',
@@ -157,8 +165,10 @@ export const APP_THEMES: readonly {
   { id: 'ivory', label: '象牙', swatch: '#f8f4ea', ink: '#33302a', accent: '#3d6deb' },
   { id: 'soft-gray', label: '浅灰', swatch: '#ebebeb', ink: '#222222', accent: '#3d6deb' },
   { id: 'dark', label: '深色', swatch: '#131210', ink: '#ece9e3', accent: '#6e93f6' },
+  { id: 'pine', label: '松林', swatch: '#0f1512', ink: '#e8eee9', accent: '#8aa5f0' },
   { id: 'oled', label: 'OLED 纯黑', swatch: '#000000', ink: '#e8e5df', accent: '#7d9ef7' },
   { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec', ink: '#1c2430', accent: '#3d6deb' },
+  { id: 'mist', label: '晨雾', swatch: '#ecf0f4', ink: '#1e2732', accent: '#3d6deb' },
 ]
 
 export const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {

@@ -100,6 +100,16 @@ export interface ReaderEngine {
   /** 排版/尺寸变化后重画一次(锚点会跟着重排走)。 */
   refreshReadingRuler?(): void
 
+  /**
+   * 仿真翻页(可选能力):纸叶要克隆的层 —— 正文载体(内核关闭影子根里的
+   * `<iframe>`)在前,批注层(同一影子根里的 overlayer SVG)在后,按绘制
+   * 顺序给出。调用方把每一层整棵克隆、按原位置铺好,就是一张和真身逐像素
+   * 一致的纸叶:内核在纸叶底下瞬间翻页,纸叶再绕书脊转走露出新的一页。
+   *
+   * 返回空数组 = 不支持(固定排版 / 内核未就绪),调用方退回宿主层动画。
+   */
+  flipLeafLayers?(): readonly Element[]
+
   destroy(): Promise<void>
 }
 

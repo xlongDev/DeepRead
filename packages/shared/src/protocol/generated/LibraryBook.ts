@@ -16,6 +16,12 @@ author: string | null, subtitle: string | null, publisher: string | null, langua
  */
 progress: number | null, 
 /**
+ * First moment the book's progress reached 100% (`state.updated_at` at the
+ * time); `None` for unread, unfinished, or finished before v9. The yearly
+ * reading goal counts books whose finish date falls in the current year.
+ */
+finishedAt: string | null, 
+/**
  * User collections. Stored as a JSON array of strings in `books.tags`.
  */
 tags: Array<string>, };

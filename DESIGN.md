@@ -14,7 +14,7 @@ Committed visual world for AI Reader. Token source of truth: `packages/design-sy
 
 ## Type
 
-- UI: system sans stack (`--font-sans`), fixed rem-ish px scale from tokens (13/15/21), weight 400/500 only.
+- UI: system sans stack (`--font-sans`), fixed rem-ish px scale from tokens (12/13/15/21), weight 400/500/600 only (600 = semibold, for data values).
 - Reading content: the book's own CSS wins (foliate-js renders original typography); user font-size control scales via renderer styles, never re-typesets text.
 
 ## Rules

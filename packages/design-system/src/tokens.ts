@@ -33,8 +33,10 @@ export interface TypographyTokens {
   readonly fontSizeSm: string
   readonly fontSizeMd: string
   readonly fontSizeLg: string
+  readonly fontSizeXs: string
   readonly fontWeightRegular: number
   readonly fontWeightMedium: number
+  readonly fontWeightSemibold: number
   readonly lineHeightTight: number
   readonly lineHeightBody: number
 }
@@ -111,8 +113,10 @@ export const lightTheme: ThemeTokens = {
     fontSizeSm: '13px',
     fontSizeMd: '15px',
     fontSizeLg: '21px',
+    fontSizeXs: '12px',
     fontWeightRegular: 400,
     fontWeightMedium: 500,
+    fontWeightSemibold: 600,
     lineHeightTight: 1.25,
     lineHeightBody: 1.6,
   },
@@ -202,8 +206,10 @@ const typographyVars = (t: TypographyTokens): Record<string, string> => ({
   '--font-size-sm': t.fontSizeSm,
   '--font-size-md': t.fontSizeMd,
   '--font-size-lg': t.fontSizeLg,
+  '--font-size-xs': t.fontSizeXs,
   '--font-weight-regular': String(t.fontWeightRegular),
   '--font-weight-medium': String(t.fontWeightMedium),
+  '--font-weight-semibold': String(t.fontWeightSemibold),
   '--line-height-tight': String(t.lineHeightTight),
   '--line-height-body': String(t.lineHeightBody),
 })

@@ -54,6 +54,10 @@ pub struct LibraryBook {
     /// Reading fraction from `progress`, joined in so the shelf needs one query
     /// instead of one `reader.state.get` per book.
     pub progress: Option<f64>,
+    /// First moment the book's progress reached 100% (`state.updated_at` at the
+    /// time); `None` for unread, unfinished, or finished before v9. The yearly
+    /// reading goal counts books whose finish date falls in the current year.
+    pub finished_at: Option<String>,
     /// User collections. Stored as a JSON array of strings in `books.tags`.
     pub tags: Vec<String>,
 }
@@ -215,6 +219,7 @@ struct ExistingBookMeta {
     subtitle: Option<String>,
     publisher: Option<String>,
     language: Option<String>,
+    finished_at: Option<String>,
 }
 
 pub fn detect_format(file_name: &str) -> Option<&'static str> {
@@ -263,6 +268,7 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
         size: row.get::<_, i64>("size")? as u64,
         added_at: row.get("added_at")?,
         progress: row.get("progress")?,
+        finished_at: row.get("finished_at")?,
         tags: parse_tags(row.get::<_, String>("tags").unwrap_or_default().as_str()),
     })
 }
@@ -280,7 +286,7 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
         .prepare(
             "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                    b.tags, p.fraction AS progress
+                    b.finished_at, b.tags, p.fraction AS progress
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
              ORDER BY b.added_at DESC, b.rowid DESC",
@@ -388,7 +394,7 @@ pub fn search_library(conn: &Connection, query: &str) -> Result<LibrarySearchRes
     let mut statement = conn
         .prepare(
             "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                    b.tags, p.fraction AS progress
+                    b.finished_at, b.tags, p.fraction AS progress
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
              WHERE COALESCE(b.display_name, '') LIKE ?1 ESCAPE '\\'
@@ -611,7 +617,7 @@ pub fn set_book_info(
 fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
     conn.query_row(
         "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                b.tags, p.fraction AS progress
+                b.finished_at, b.tags, p.fraction AS progress
          FROM books b
          LEFT JOIN progress p ON p.book_hash = b.hash
          WHERE b.hash = ?1",
@@ -649,7 +655,7 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     // book itself已经填好的元数据 —— 重新导入通常是因为文件搬了位置,不是要重来一遍。
     let existing: Option<ExistingBookMeta> = conn
         .query_row(
-            "SELECT added_at, display_name, tags, author, subtitle, publisher, language
+            "SELECT added_at, display_name, tags, author, subtitle, publisher, language, finished_at
              FROM books WHERE hash = ?1",
             [&hash],
             |row| {
@@ -661,6 +667,7 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
                     subtitle: row.get(4)?,
                     publisher: row.get(5)?,
                     language: row.get(6)?,
+                    finished_at: row.get(7)?,
                 })
             },
         )
@@ -688,6 +695,9 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
             .map(|meta| meta.added_at.clone())
             .unwrap_or_else(crate::timestamps::rfc3339_now),
         progress: None,
+        // INSERT OR REPLACE 会整行重置未列出的列 —— 完成时间必须显式带回去,
+        // 否则读完的书重新导入一次就"没读完过"。
+        finished_at: existing.as_ref().and_then(|meta| meta.finished_at.clone()),
         tags: existing
             .as_ref()
             .map(|meta| meta.tags.clone())
@@ -696,8 +706,8 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     conn.execute(
         "INSERT OR REPLACE INTO books
              (hash, file_name, display_name, format, path, size, added_at, tags,
-              author, subtitle, publisher, language)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              author, subtitle, publisher, language, finished_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             book.hash,
             book.file_name,
@@ -711,6 +721,7 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
             book.subtitle,
             book.publisher,
             book.language,
+            book.finished_at,
         ],
     )
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save book").with_cause(err))?;
@@ -1128,6 +1139,7 @@ mod tests {
             size: 3,
             added_at: "2026-09-09T00:00:00Z".into(),
             progress: Some(0.25),
+            finished_at: None,
             tags: vec!["技术".into()],
         };
         let json = serde_json::to_value(&book).unwrap();
@@ -1136,6 +1148,8 @@ mod tests {
         // 新增的元数据也要按 camelCase 出线,前端才拿得到。
         assert_eq!(json["author"], "A Writer");
         assert_eq!(json["language"], "zh");
+        // 没读完的书不出线 finishedAt(Option + skip? 未设 skip,序列化为 null 也行)。
+        assert_eq!(json["finishedAt"], serde_json::Value::Null);
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
         assert_eq!(json["progress"], 0.25);
         assert_eq!(json["tags"][0], "技术");

@@ -148,6 +148,14 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE annotations ADD COLUMN style TEXT NOT NULL DEFAULT 'highlight';
     "#,
+    // v9 — finish timestamp for the yearly reading goal: stamped once when a
+    // book's progress first reaches 100% (state.rs `store_state`). No backfill
+    // on purpose — books finished before this column existed simply have no
+    // date, and the yearly goal counts only dated finishes (under-reporting is
+    // honest; a guessed date is not).
+    r#"
+    ALTER TABLE books ADD COLUMN finished_at TEXT;
+    "#,
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), AppError> {

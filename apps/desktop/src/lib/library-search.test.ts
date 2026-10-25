@@ -15,6 +15,7 @@ const book: LibraryBook = {
   size: 1024,
   addedAt: '2026-10-13T00:00:00Z',
   progress: null,
+  finishedAt: null,
   tags: ['文学', '小说'],
 }
 

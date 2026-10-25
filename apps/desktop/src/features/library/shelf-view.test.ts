@@ -27,6 +27,7 @@ const book = (overrides: Partial<ShelfBook>): ShelfBook => ({
   size: 2391,
   addedAt: '2026-09-01T00:00:00Z',
   progress: null,
+  finishedAt: null,
   tags: [],
   ...overrides,
 })

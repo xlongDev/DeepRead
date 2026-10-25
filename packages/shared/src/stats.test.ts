@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   STREAK_MIN_SECONDS,
+  booksFinishedInYear,
   dailySeries,
+  daysWithReading,
   goalDays,
   goalRatio,
   goalReached,
+  heatLevel,
   localDayKey,
   readingStreak,
   recentDayKeys,
+  yearHeatmap,
 } from './stats'
 
 const today = new Date(2026, 8, 28, 22, 0, 0) // 2026-09-28 local
@@ -86,5 +90,79 @@ describe('reading goal', () => {
     expect(goalDays(days, 0, 7, today)).toBe(0)
     // 3 天窗口(09-26…09-28):今天与昨天达标,20 分那天不够。
     expect(goalDays(days, 30, 3, today)).toBe(2)
+  })
+})
+
+describe('weekly & yearly goals', () => {
+  const day = (offset: number, seconds: number) => {
+    const date = new Date(today)
+    date.setDate(date.getDate() - offset)
+    return { day: localDayKey(date), seconds }
+  }
+
+  it('daysWithReading counts days past the two-minute floor, not any touch', () => {
+    const days = [day(0, 600), day(1, STREAK_MIN_SECONDS - 1), day(3, 3600)]
+    expect(daysWithReading(days, 7, today)).toBe(2)
+    expect(daysWithReading(days, 2, today)).toBe(1) // 窗口只有今天与昨天
+    expect(daysWithReading([], 7, today)).toBe(0)
+  })
+
+  it('booksFinishedInYear counts dated finishes by local year', () => {
+    const books = [
+      { finishedAt: '2026-03-04T00:00:00Z' },
+      { finishedAt: '2026-11-20T00:00:00Z' },
+      { finishedAt: '2025-06-15T00:00:00Z' },
+      { finishedAt: null },
+    ]
+    // 归属按本地日历年(时区由运行环境决定,断言用年内 unambiguous 日期)。
+    expect(booksFinishedInYear(books, 2026)).toBe(2)
+    expect(booksFinishedInYear(books, 2025)).toBe(1)
+    expect(booksFinishedInYear(books, 2024)).toBe(0)
+    // 没盖章的老书(进度 100% 但没有完成时间)不计入 —— 宁少报,不猜。
+    expect(booksFinishedInYear([{ finishedAt: null }])).toBe(0)
+  })
+})
+
+describe('year heatmap', () => {
+  const day = (offset: number, seconds: number) => {
+    const date = new Date(today)
+    date.setDate(date.getDate() - offset)
+    return { day: localDayKey(date), seconds }
+  }
+
+  it('lays out Monday-first weeks covering the whole year', () => {
+    const columns = yearHeatmap([day(0, 600)], today)
+    // 2026-01-01 是周四 → 第一列从 2025-12-29(周一)开始,整年 53 列。
+    expect(columns[0]?.[0]).toMatchObject({ day: '2025-12-29', inYear: false })
+    expect(columns[0]?.[3]).toMatchObject({ day: '2026-01-01', inYear: true })
+    // 最后一列必须盖住 12 月 31 日。
+    const last = columns[columns.length - 1]!
+    expect(last.map((cell) => cell.day)).toContain('2026-12-31')
+    // 每一列都是 7 格(周一→周日)。
+    for (const column of columns) expect(column).toHaveLength(7)
+  })
+
+  it('marks today and the future, fills gaps with zero', () => {
+    const columns = yearHeatmap([day(0, 600), day(1, 0)], today)
+    const flat = columns.flat()
+    const todayCell = flat.find((cell) => cell.day === localDayKey(today))
+    expect(todayCell).toMatchObject({ seconds: 600, future: false })
+    const yesterday = flat.find((cell) => cell.day === localDayKey(new Date(2026, 8, 27)))
+    expect(yesterday).toMatchObject({ seconds: 0, future: false })
+    // 2027 年 1 月(first column padding 之外没有)不在图里;今天之后全标 future。
+    expect(flat.filter((cell) => cell.future).every((cell) => cell.seconds === 0)).toBe(true)
+    expect(flat.some((cell) => cell.day === '2026-09-28' && cell.seconds === 600)).toBe(true)
+  })
+
+  it('heatLevel scales against the reference with a 30-minute floor', () => {
+    expect(heatLevel(0, 1800)).toBe(0)
+    expect(heatLevel(-5, 1800)).toBe(0)
+    // 参考 30 分钟:1/4 以下 1 格,正好 1/2 → 2 格,满参考 4 格。
+    expect(heatLevel(5 * 60, 30 * 60)).toBe(1)
+    expect(heatLevel(15 * 60, 30 * 60)).toBe(2)
+    expect(heatLevel(30 * 60, 30 * 60)).toBe(4)
+    expect(heatLevel(90 * 60, 30 * 60)).toBe(4)
+    // 参考值异常小时有地板:读 5 分钟也不会满格。
+    expect(heatLevel(5 * 60, 60)).toBe(1)
   })
 })

@@ -7,6 +7,17 @@
 import type { ReaderLayout, ReaderTheme, ZhConvertVariant } from '@deepread/reader-core'
 import { convertFileSrc } from '../../lib/book-import'
 
+/**
+ * 阅读背景(纸)。浅纸两张、暗夜一张在前 —— **新增的三张一律追加在末尾**:
+ * `themeIndex` 是按位置持久化的,在中间插入会让老用户存着的 2(夜间)
+ * 升级后变成牛皮。顺序即网格顺序,混排也认了,兼容性优先。
+ *
+ * 新增的三张各补一个空缺:苔绿是久读护眼的豆沙绿,牛皮纸是比羊皮更沉的
+ * 复古纸,冷夜蓝给夜读一个冷调选择(原来的「夜间」是暖黑,看久了发闷)。
+ * `colorScheme` 驱动两件事:内核的配色注入,以及 PDF 夜间重着色
+ * (engine `#applyPDFPageColors` 取 dark 的 fg/bg);夜读模式的一键切换
+ * 取第一张 dark(见 ReaderScreen 的 night toggle)。
+ */
 export const READER_THEMES: readonly { readonly label: string; readonly theme: ReaderTheme }[] = [
   {
     label: '纸白',
@@ -19,6 +30,18 @@ export const READER_THEMES: readonly { readonly label: string; readonly theme: R
   {
     label: '夜间',
     theme: { name: 'Night', background: '#131210', foreground: '#b8b2a7', colorScheme: 'dark' },
+  },
+  {
+    label: '牛皮',
+    theme: { name: 'Kraft', background: '#e9dcc3', foreground: '#3f382c', colorScheme: 'light' },
+  },
+  {
+    label: '苔绿',
+    theme: { name: 'Moss', background: '#e6ecdc', foreground: '#33402a', colorScheme: 'light' },
+  },
+  {
+    label: '冷夜蓝',
+    theme: { name: 'NightBlue', background: '#121a22', foreground: '#aebecb', colorScheme: 'dark' },
   },
 ]
 

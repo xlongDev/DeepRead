@@ -10,6 +10,7 @@ import {
   type GeneratedQuiz,
 } from '@deepread/ai-core'
 import { invokeCommand } from '../../lib/ipc'
+import { Segmented } from './Segmented'
 import { runChatOnce } from '../../lib/ai-chat'
 
 const QUIZ_QUESTION_COUNT = 5
@@ -282,7 +283,7 @@ export function LearningDrawer({
       </div>
 
       <div className="ai-drawer-body">
-        <div className="segmented learning-tabs">
+        <Segmented className="learning-tabs">
           <button
             type="button"
             className={tab === 'review' ? 'is-active' : ''}
@@ -304,7 +305,7 @@ export function LearningDrawer({
           >
             错题本{mistakeCards.length > 0 ? ` ${mistakeCards.length}` : ''}
           </button>
-        </div>
+        </Segmented>
 
         {tab === 'review' && (
           <section className="review-section" aria-label="间隔复习">

@@ -210,8 +210,18 @@ export function LibrarySidebar({
       )}
 
       {/* 今日阅读摘要:贴着底部操作区上方,像状态栏一样"在那儿"而不抢注意力。
-          没有目标时只报今日时长;统计没取到就整行不显示。 */}
-      {goalLine !== null && <p className="lib-sidebar-goal">{goalLine}</p>}
+          没有目标时只报今日时长;统计没取到就整行不显示。点它进统计页 ——
+          目标的主居所在那儿,这行是它的常驻入口。 */}
+      {goalLine !== null && (
+        <button
+          type="button"
+          className="lib-sidebar-goal"
+          onClick={() => onView('stats')}
+          title="查看阅读统计"
+        >
+          {goalLine}
+        </button>
+      )}
 
       <div className="lib-sidebar-foot">
         <button type="button" className="lib-sidebar-item" onClick={onOpenSync}>

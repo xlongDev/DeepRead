@@ -24,6 +24,7 @@ import {
   type NoteEntry,
   type ReaderStatePayload,
   type ReadingFont,
+  type ReadingGoals,
 } from '@deepread/shared'
 import { base64ToImageBlob } from './blob'
 import { matchesBookQuery } from './library-search'
@@ -61,10 +62,13 @@ const MAX_NOTES = 2000
 const MAX_CARDS_PER_ADD = 200
 /** 与 Rust `CARD_SOURCES` 一致。 */
 const CARD_SOURCES: readonly string[] = ['highlight', 'quiz', 'mistake']
-/** 浏览器端的每日阅读目标(桌面端在 app_settings KV,见 storage/kv.rs)。 */
+/** 浏览器端的阅读目标(桌面端在 app_settings KV,见 storage/kv.rs)。
+ *  同一个键沿用旧格式 `{ dailyMinutes }` —— 读路径按项取值,老数据自然兼容。 */
 const GOAL_STORAGE_KEY = 'deepread.reading.goal'
 const CHAPTER_RULES_STORAGE_KEY = 'deepread.chapter.rules'
 const MAX_GOAL_MINUTES = 1440
+const MAX_GOAL_WEEKLY_DAYS = 7
+const MAX_GOAL_YEARLY_BOOKS = 366
 
 /** 读出生效规则:脏值/旧格式一律按"没有规则",与 Rust 读路径同一规矩。 */
 function storedChapterRules(): ChapterRule[] {
@@ -88,16 +92,27 @@ function storedChapterRules(): ChapterRule[] {
   }
 }
 
-/** 读出生效目标:脏值/旧格式一律按"没有目标",与 Rust 读路径同一规矩。 */
-function storedGoalMinutes(): number {
+/** 读出生效目标:脏值/旧格式一律按"没有目标",与 Rust 读路径同一规矩。
+ *  旧格式只有 dailyMinutes 一项,另两项读出来就是 0(没设)。 */
+function storedGoals(): ReadingGoals {
+  const none: ReadingGoals = { dailyMinutes: 0, weeklyDays: 0, yearlyBooks: 0 }
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(GOAL_STORAGE_KEY) ?? 'null')
-    if (parsed === null || typeof parsed !== 'object') return 0
-    const minutes = (parsed as Record<string, unknown>)['dailyMinutes']
-    if (typeof minutes !== 'number' || !Number.isInteger(minutes)) return 0
-    return minutes > 0 && minutes <= MAX_GOAL_MINUTES ? minutes : 0
+    if (parsed === null || typeof parsed !== 'object') return none
+    const raw = parsed as Record<string, unknown>
+    const one = (key: string, max: number): number => {
+      const value = raw[key]
+      return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= max
+        ? value
+        : 0
+    }
+    return {
+      dailyMinutes: one('dailyMinutes', MAX_GOAL_MINUTES),
+      weeklyDays: one('weeklyDays', MAX_GOAL_WEEKLY_DAYS),
+      yearlyBooks: one('yearlyBooks', MAX_GOAL_YEARLY_BOOKS),
+    }
   } catch {
-    return 0
+    return none
   }
 }
 
@@ -259,6 +274,14 @@ export const webHandlers: {
 
   [COMMAND.readerStateSet]: async (request) => {
     await putStoredState(request.bookHash, request.state)
+    // 读完盖章(与 Rust `store_state` 同一条规矩):进度第一次到 100% 时给书
+    // 记上完成时间,年度目标按它数"今年读完"。只盖一次 —— 回头重读不改写。
+    if ((request.state.progress?.fraction ?? 0) >= 1) {
+      const book = (await listStoredBooks()).find((item) => item.hash === request.bookHash)
+      if (book !== undefined && book.finishedAt === null) {
+        await putStoredBook({ ...book, finishedAt: request.state.updatedAt })
+      }
+    }
     return { savedAt: request.state.updatedAt }
   },
 
@@ -303,14 +326,21 @@ export const webHandlers: {
     return { books: result }
   },
 
-  // 每日阅读目标:桌面端在 app_settings KV(随备份走),浏览器端没有 KV 表,
+  // 阅读目标:桌面端在 app_settings KV(随备份走),浏览器端没有 KV 表,
   // 用 localStorage 存同一个事实。0 = 没有目标,与 Rust 同一约定。
-  [COMMAND.readingGoalGet]: async () => ({ dailyMinutes: storedGoalMinutes() }),
+  [COMMAND.readingGoalGet]: async () => ({ goals: storedGoals() }),
 
   [COMMAND.readingGoalSet]: async (request) => {
-    const minutes = Math.min(Math.max(Math.trunc(request.dailyMinutes), 0), 1440)
-    localStorage.setItem(GOAL_STORAGE_KEY, JSON.stringify({ dailyMinutes: minutes }))
-    return { dailyMinutes: minutes }
+    const goals = {
+      dailyMinutes: Math.min(Math.max(Math.trunc(request.goals.dailyMinutes), 0), MAX_GOAL_MINUTES),
+      weeklyDays: Math.min(Math.max(Math.trunc(request.goals.weeklyDays), 0), MAX_GOAL_WEEKLY_DAYS),
+      yearlyBooks: Math.min(
+        Math.max(Math.trunc(request.goals.yearlyBooks), 0),
+        MAX_GOAL_YEARLY_BOOKS,
+      ),
+    }
+    localStorage.setItem(GOAL_STORAGE_KEY, JSON.stringify(goals))
+    return { goals }
   },
 
   // 章节规则(§15):浏览器端同样只做形状过滤,脏值按"没有规则"读。

@@ -242,6 +242,18 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
         .map_err(|err| {
             AppError::new(ErrorCode::StorageIo, "failed to save progress").with_cause(err)
         })?;
+        // 读完盖章:进度第一次到 100% 时记下这一刻 —— 年度目标按它数"今年读完
+        // 几本"。只盖一次(WHERE finished_at IS NULL):回头重读、手动改进度都不
+        // 改写完成时间;books 行不存在时这条 UPDATE 匹配 0 行,静默通过。
+        if progress.fraction >= 1.0 {
+            tx.execute(
+                "UPDATE books SET finished_at = ?2 WHERE hash = ?1 AND finished_at IS NULL",
+                rusqlite::params![hash, state.updated_at],
+            )
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to stamp finish time").with_cause(err)
+            })?;
+        }
     }
     for annotation in &state.annotations {
         tx.execute(
@@ -646,29 +658,50 @@ pub fn reader_stats_books(
     })
 }
 
-/* ---------- Reading goal ----------
-每日阅读目标(分钟)存在 `app_settings` KV 里:备份走 VACUUM INTO 全量快照,
-天然带上它,不需要为这一个数字新开表。0 = 没有目标(UI 据此不画目标环)。 */
+/* ---------- Reading goals ----------
+阅读目标是一组三个数字(每日时长 / 每周天数 / 年度本数),全部存在
+`app_settings` KV 里:备份走 VACUUM INTO 全量快照,天然带上,不需要为这
+三个数字新开表。每个键独立存取 —— 缺键 = 0 = 没设这一项,读路径统一过滤
+脏值,与旧版单键 `reading.goal.dailyMinutes` 和平共处(老键继续被 dailyMinutes
+读取,迁移零动作)。 */
 
 /// `app_settings` key: daily reading goal in minutes.
-pub const READING_GOAL_KEY: &str = "reading.goal.dailyMinutes";
+pub const READING_GOAL_DAILY_KEY: &str = "reading.goal.dailyMinutes";
+/// `app_settings` key: weekly reading-days goal (1…7).
+pub const READING_GOAL_WEEKLY_KEY: &str = "reading.goal.weeklyDays";
+/// `app_settings` key: yearly finished-books goal.
+pub const READING_GOAL_YEARLY_KEY: &str = "reading.goal.yearlyBooks";
 
 /// 上限 24h:再大就不是"每日目标"而是自罚;0 合法 = 清除目标。
 const MAX_GOAL_MINUTES: u32 = 24 * 60;
+const MAX_GOAL_WEEKLY_DAYS: u32 = 7;
+/// 一年最多 366 天,每天一本也读不出更多;0 合法 = 清除目标。
+const MAX_GOAL_YEARLY_BOOKS: u32 = 366;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingGoals {
+    /// 每日阅读目标(分钟);0 = 没有目标。
+    pub daily_minutes: u32,
+    /// 每周阅读天数目标(1…7);0 = 没有目标。
+    pub weekly_days: u32,
+    /// 年度读完本数目标;0 = 没有目标。
+    pub yearly_books: u32,
+}
 
 #[derive(Debug, Serialize, PartialEq, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadingGoalGetResponse {
-    /// 0 = 没有设置目标。
-    pub daily_minutes: u32,
+    pub goals: ReadingGoals,
 }
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadingGoalSetRequest {
-    pub daily_minutes: u32,
+    pub goals: ReadingGoals,
 }
 
 #[derive(Debug, Serialize, PartialEq, TS)]
@@ -676,29 +709,67 @@ pub struct ReadingGoalSetRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ReadingGoalSetResponse {
     /// 落库后的生效值(清洗过:越界/非法一律回 0)。
-    pub daily_minutes: u32,
+    pub goals: ReadingGoals,
 }
 
-/// 读出生效目标:存进去的值可能是旧版本遗留的非法内容,一律按"没有目标"处理,
-/// 与 `tts.rs::cache_limit` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
-pub fn load_reading_goal(conn: &Connection) -> Result<u32, AppError> {
-    Ok(crate::storage::get_setting(conn, READING_GOAL_KEY)?
+/// 读出一个数字目标:存进去的值可能是旧版本遗留的非法内容,一律按"没有目标"
+/// 处理,与 `tts.rs::cache_limit` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
+fn load_goal_minutes(conn: &Connection, key: &str, max: u32) -> u32 {
+    crate::storage::get_setting(conn, key)
+        .ok()
+        .flatten()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .filter(|minutes| *minutes > 0 && *minutes <= MAX_GOAL_MINUTES)
-        .unwrap_or(0))
+        .filter(|value| *value > 0 && *value <= max)
+        .unwrap_or(0)
 }
 
-pub fn save_reading_goal(conn: &Connection, minutes: u32) -> Result<u32, AppError> {
-    if minutes > MAX_GOAL_MINUTES {
+pub fn load_reading_goals(conn: &Connection) -> ReadingGoals {
+    ReadingGoals {
+        daily_minutes: load_goal_minutes(conn, READING_GOAL_DAILY_KEY, MAX_GOAL_MINUTES),
+        weekly_days: load_goal_minutes(conn, READING_GOAL_WEEKLY_KEY, MAX_GOAL_WEEKLY_DAYS),
+        yearly_books: load_goal_minutes(conn, READING_GOAL_YEARLY_KEY, MAX_GOAL_YEARLY_BOOKS),
+    }
+}
+
+/// 0 也落库(而不是删行):读路径统一过滤,少一条 DELETE 的错处理路径。
+fn save_goal_minutes(conn: &Connection, key: &str, minutes: u32, max: u32) -> Result<(), AppError> {
+    if minutes > max {
         return Err(AppError::new(
             ErrorCode::SystemValidation,
-            "daily goal must be between 0 and 1440 minutes",
+            format!("goal must be between 0 and {max}"),
         )
-        .with_context("field", "dailyMinutes"));
+        .with_context("field", key));
     }
-    // 0 也落库(而不是删行):读路径统一过滤,少一条 DELETE 的错处理路径。
-    crate::storage::set_setting(conn, READING_GOAL_KEY, &minutes.to_string())?;
-    Ok(minutes)
+    crate::storage::set_setting(conn, key, &minutes.to_string())
+}
+
+pub fn save_reading_goals(
+    conn: &Connection,
+    goals: &ReadingGoals,
+) -> Result<ReadingGoals, AppError> {
+    save_goal_minutes(
+        conn,
+        READING_GOAL_DAILY_KEY,
+        goals.daily_minutes,
+        MAX_GOAL_MINUTES,
+    )?;
+    save_goal_minutes(
+        conn,
+        READING_GOAL_WEEKLY_KEY,
+        goals.weekly_days,
+        MAX_GOAL_WEEKLY_DAYS,
+    )?;
+    save_goal_minutes(
+        conn,
+        READING_GOAL_YEARLY_KEY,
+        goals.yearly_books,
+        MAX_GOAL_YEARLY_BOOKS,
+    )?;
+    Ok(ReadingGoals {
+        daily_minutes: goals.daily_minutes.min(MAX_GOAL_MINUTES),
+        weekly_days: goals.weekly_days.min(MAX_GOAL_WEEKLY_DAYS),
+        yearly_books: goals.yearly_books.min(MAX_GOAL_YEARLY_BOOKS),
+    })
 }
 
 #[tauri::command(rename = "reading.goal.get")]
@@ -709,7 +780,7 @@ pub fn reading_goal_get(
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
     Ok(ReadingGoalGetResponse {
-        daily_minutes: load_reading_goal(&conn)?,
+        goals: load_reading_goals(&conn),
     })
 }
 
@@ -722,7 +793,7 @@ pub fn reading_goal_set(
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
     Ok(ReadingGoalSetResponse {
-        daily_minutes: save_reading_goal(&conn, request.daily_minutes)?,
+        goals: save_reading_goals(&conn, &request.goals)?,
     })
 }
 
@@ -784,7 +855,7 @@ fn valid_rule_shape(rule: &ChapterRule) -> bool {
 }
 
 /// 读规则:旧版本遗留的脏内容(不是数组/字段缺失/超长)一律按"没有规则"处理,
-/// 与 `load_reading_goal` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
+/// 与 `load_reading_goals` 同一条规矩 —— 设置项永远有一份干净的默认值可回。
 pub fn load_chapter_rules(conn: &Connection) -> Result<Vec<ChapterRule>, AppError> {
     let Some(raw) = crate::storage::get_setting(conn, CHAPTER_RULES_KEY)? else {
         return Ok(Vec::new());
@@ -1267,6 +1338,61 @@ mod tests {
         assert_eq!(load_state(&conn, hash).unwrap(), Some(state));
     }
 
+    /// 年度目标靠 `books.finished_at` 数"今年读完几本":第一次到 100% 盖章,
+    /// 之后重读/回退都不改写 —— 盖成"最后一次读完"会把年份算错。
+    #[test]
+    fn finishing_a_book_stamps_finished_at_once() {
+        let conn = memory_db();
+        let hash = &"e".repeat(64);
+        seed_book(&conn, hash);
+        let finished_at = |conn: &Connection| -> Option<String> {
+            conn.query_row(
+                "SELECT finished_at FROM books WHERE hash = ?1",
+                [hash.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        let mut half = sample();
+        half.progress = Some(StoredProgress {
+            cfi: "epubcfi(/6/4)".into(),
+            fraction: 0.5,
+        });
+        half.updated_at = "2026-01-02T00:00:00Z".into();
+        store_state(&conn, hash, &half).unwrap();
+        assert_eq!(finished_at(&conn), None);
+
+        let mut done = sample();
+        done.progress = Some(StoredProgress {
+            cfi: "epubcfi(/6/999)".into(),
+            fraction: 1.0,
+        });
+        done.updated_at = "2026-03-04T00:00:00Z".into();
+        store_state(&conn, hash, &done).unwrap();
+        assert_eq!(finished_at(&conn).as_deref(), Some("2026-03-04T00:00:00Z"));
+
+        // 回头重读到 100%:完成时间保持第一次的那一刻。
+        let mut again = ReaderState {
+            progress: Some(StoredProgress {
+                cfi: "epubcfi(/6/999)".into(),
+                fraction: 1.0,
+            }),
+            annotations: vec![],
+            bookmarks: vec![],
+            updated_at: "2026-06-07T00:00:00Z".into(),
+        };
+        store_state(&conn, hash, &again).unwrap();
+        assert_eq!(finished_at(&conn).as_deref(), Some("2026-03-04T00:00:00Z"));
+        // 进度回退到一半也不清章 —— 那本书确实被读完过一次。
+        again.progress = Some(StoredProgress {
+            cfi: "epubcfi(/6/4)".into(),
+            fraction: 0.4,
+        });
+        store_state(&conn, hash, &again).unwrap();
+        assert_eq!(finished_at(&conn).as_deref(), Some("2026-03-04T00:00:00Z"));
+    }
+
     #[test]
     fn re_set_replaces_previous_content() {
         let conn = memory_db();
@@ -1349,32 +1475,65 @@ mod tests {
     }
 
     #[test]
-    fn reading_goal_defaults_to_zero_and_round_trips() {
+    fn reading_goals_default_to_zero_and_round_trip() {
         let conn = memory_db();
-        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
-        assert_eq!(save_reading_goal(&conn, 45).unwrap(), 45);
-        assert_eq!(load_reading_goal(&conn).unwrap(), 45);
+        assert_eq!(load_reading_goals(&conn), ReadingGoals::default());
+        let goals = ReadingGoals {
+            daily_minutes: 45,
+            weekly_days: 5,
+            yearly_books: 24,
+        };
+        assert_eq!(save_reading_goals(&conn, &goals).unwrap(), goals);
+        assert_eq!(load_reading_goals(&conn), goals);
     }
 
     #[test]
-    fn reading_goal_zero_means_no_goal() {
+    fn reading_goals_zero_means_no_goal() {
         let conn = memory_db();
-        save_reading_goal(&conn, 45).unwrap();
-        save_reading_goal(&conn, 0).unwrap();
-        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+        save_reading_goals(
+            &conn,
+            &ReadingGoals {
+                daily_minutes: 45,
+                weekly_days: 3,
+                yearly_books: 12,
+            },
+        )
+        .unwrap();
+        save_reading_goals(&conn, &ReadingGoals::default()).unwrap();
+        assert_eq!(load_reading_goals(&conn), ReadingGoals::default());
     }
 
     #[test]
-    fn reading_goal_rejects_absurd_and_garbage_values() {
+    fn reading_goals_reject_absurd_and_garbage_values() {
         let conn = memory_db();
-        // 上限之外(25h)是校验错误,不是静默截断。
-        let err = save_reading_goal(&conn, MAX_GOAL_MINUTES + 1).unwrap_err();
-        assert_eq!(err.code, ErrorCode::SystemValidation);
+        // 上限之外(25h / 8 天 / 400 本)是校验错误,不是静默截断。
+        for goals in [
+            ReadingGoals {
+                daily_minutes: MAX_GOAL_MINUTES + 1,
+                ..ReadingGoals::default()
+            },
+            ReadingGoals {
+                weekly_days: MAX_GOAL_WEEKLY_DAYS + 1,
+                ..ReadingGoals::default()
+            },
+            ReadingGoals {
+                yearly_books: MAX_GOAL_YEARLY_BOOKS + 1,
+                ..ReadingGoals::default()
+            },
+        ] {
+            let err = save_reading_goals(&conn, &goals).unwrap_err();
+            assert_eq!(err.code, ErrorCode::SystemValidation);
+        }
         // 旧版本遗留的非法值按"没有目标"读,不让统计环画出一个怪东西。
-        crate::storage::set_setting(&conn, READING_GOAL_KEY, "abc").unwrap();
-        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
-        crate::storage::set_setting(&conn, READING_GOAL_KEY, "99999").unwrap();
-        assert_eq!(load_reading_goal(&conn).unwrap(), 0);
+        for key in [
+            READING_GOAL_DAILY_KEY,
+            READING_GOAL_WEEKLY_KEY,
+            READING_GOAL_YEARLY_KEY,
+        ] {
+            crate::storage::set_setting(&conn, key, "abc").unwrap();
+            crate::storage::set_setting(&conn, key, "99999").unwrap();
+        }
+        assert_eq!(load_reading_goals(&conn), ReadingGoals::default());
     }
 
     fn sample_rule(id: &str, priority: i32) -> ChapterRule {
