@@ -148,6 +148,65 @@ export function retrieve(
     .slice(0, topK)
 }
 
+/**
+ * 查询词条化:中文按相邻双字(bigram),拉丁字母/数字按整词,标点空白丢弃。
+ * 不引依赖、中英文都成立的最低限词法 —— 供无 embedding 服务时的兜底检索。
+ */
+function queryTerms(query: string): readonly string[] {
+  const terms = new Set<string>()
+  let latin = ''
+  let han = ''
+  const flushLatin = (): void => {
+    if (latin !== '') {
+      terms.add(latin)
+      latin = ''
+    }
+  }
+  for (const char of query.toLowerCase()) {
+    if (/\p{Script=Han}/u.test(char)) {
+      flushLatin()
+      han += char
+      if (han.length >= 2) terms.add(han.slice(-2))
+    } else if (/\p{L}|\p{N}/u.test(char)) {
+      han = ''
+      latin += char
+    } else {
+      flushLatin()
+      han = ''
+    }
+  }
+  flushLatin()
+  if (terms.size === 0) {
+    // 单字查询(如「灯」)造不出 bigram:把字本身当词条。
+    const single = [...query.toLowerCase()].find((char) => /\p{L}|\p{N}/u.test(char))
+    if (single !== undefined) terms.add(single)
+  }
+  return [...terms]
+}
+
+/**
+ * 关键词检索兜底:断网/欠费/没配 embedding 服务时,已建索引的书仍可问 ——
+ * chunk 文本对查询词条的命中率打分(除以词条总数归一,长 chunk 不占优)。
+ * 召回质量弱于向量,但「聊胜于无」,且引用标签照常可用。
+ */
+export function retrieveByTerms(
+  chunks: readonly RagChunk[],
+  query: string,
+  topK = 4,
+): readonly RetrievedChunk[] {
+  const terms = queryTerms(query)
+  if (terms.length === 0) return []
+  return chunks
+    .map((chunk) => {
+      const haystack = chunk.text.toLowerCase()
+      const hits = terms.filter((term) => haystack.includes(term)).length
+      return { label: chunk.label, text: chunk.text, score: hits / terms.length }
+    })
+    .filter((chunk) => chunk.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+}
+
 /** Build the chat messages for a RAG question, with citation rules in the system prompt. */
 export function buildRagMessages(
   question: string,

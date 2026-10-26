@@ -6,6 +6,7 @@ import {
   citationLabels,
   cosineSimilarity,
   retrieve,
+  retrieveByTerms,
 } from './rag'
 
 describe('chunkSectionText', () => {
@@ -59,6 +60,39 @@ describe('retrieve', () => {
   it('drops chunks below minScore', () => {
     const result = retrieve(chunks, [0, 0, 1], 3)
     expect(result.map((r) => r.label)).toEqual([])
+  })
+})
+
+describe('retrieveByTerms(离线兜底)', () => {
+  const chunks = [
+    { label: '第一章', text: '镇上的人把灯点亮。', vector: [] },
+    { label: '第二章', text: 'The letter arrived at night.', vector: [] },
+    { label: '第三章', text: '雪落在灯塔上。', vector: [] },
+  ]
+
+  it('中文 bigram 命中:包含查询双字的 chunk 排前', () => {
+    const result = retrieveByTerms(chunks, '灯塔在哪', 3)
+    // 「灯塔」只命中第三章;「塔在」「在哪」无处命中 → 只返回第三章。
+    expect(result.map((r) => r.label)).toEqual(['第三章'])
+    expect(result[0]?.score).toBeCloseTo(1 / 3)
+  })
+
+  it('拉丁整词命中且大小写不敏感', () => {
+    const result = retrieveByTerms(chunks, 'LETTER night', 3)
+    expect(result.map((r) => r.label)).toEqual(['第二章'])
+  })
+
+  it('没有任何词条命中时返回空,提示词拿到「未检索到」的诚实分支', () => {
+    expect(retrieveByTerms(chunks, 'totally unrelated words here')).toEqual([])
+  })
+
+  it('单字查询回退到字本身', () => {
+    const result = retrieveByTerms(chunks, '雪', 3)
+    expect(result.map((r) => r.label)).toEqual(['第三章'])
+  })
+
+  it('标点与空白不产生词条', () => {
+    expect(retrieveByTerms(chunks, '?!。 ')).toEqual([])
   })
 })
 

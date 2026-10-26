@@ -3930,6 +3930,46 @@ button:disabled {
   padding: 1px 8px;
 }
 
+/* 可跳转的引用 chip(带 onJumpToCitation 时渲染成 button):字体与 span 态
+   一致,hover 染 accent 提示「可点」。 */
+button.ai-citation {
+  cursor: pointer;
+  font-family: inherit;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+button.ai-citation:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* 选区问答的「写入批注笔记」:低调的文字钮,写入后转对勾态并禁用。 */
+.ai-note-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.ai-note-save:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.ai-note-save:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
 /* ---------- AI insights ---------- */
 
 .ai-insight-overview {

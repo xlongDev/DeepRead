@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CaretDown, PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
+import { CaretDown, Check, Note, PaperPlaneRight, Sparkle, X } from '@phosphor-icons/react'
 import { toAppError, type AiIndexPayload } from '@deepread/shared'
 import {
   buildChatBody,
@@ -17,6 +17,7 @@ import {
   INSIGHT_EXCERPT_CHARS,
   INSIGHT_MAX_CHAPTERS,
   retrieve,
+  retrieveByTerms,
   timelineSchema,
   type ChatMessage,
   type ConceptsPayload,
@@ -68,6 +69,10 @@ interface AiDrawerProps {
      浅色背景下菜单会回落全局暗色,像一块深色补丁)。 */
   readonly themeVars?: React.CSSProperties
   readonly onReplaceSource: (text: string) => Promise<void>
+  /** 引用 chip 点击跳转:ReaderScreen 按 label 回目录解析跳章。缺省时 chip 只展示。 */
+  readonly onJumpToCitation?: (label: string) => void
+  /** 把选区问答的回答写进批注笔记(已有划线追加,没有则落新划线)。 */
+  readonly onSaveAnswerToNote?: (text: string) => Promise<void>
   readonly onClose: () => void
 }
 
@@ -95,6 +100,8 @@ export function AiDrawer({
   sourceText,
   themeVars,
   onReplaceSource,
+  onJumpToCitation,
+  onSaveAnswerToNote,
   onClose,
 }: AiDrawerProps) {
   const { providers, activeId, setActiveId } = useAiProviders()
@@ -109,6 +116,8 @@ export function AiDrawer({
     'unknown',
   )
   const [citations, setCitations] = useState<ReadonlyMap<number, readonly string[]>>(new Map())
+  /** 已写入批注笔记的回答序号:写入后按钮转「已写入」,防重复落笔。 */
+  const [savedNotes, setSavedNotes] = useState<ReadonlySet<number>>(() => new Set())
   const [summary, setSummary] = useState<SummaryInsight | null>(null)
   const [outline, setOutline] = useState<OutlineInsight | null>(null)
   const [insightPhase, setInsightPhase] = useState<'idle' | 'streaming'>('idle')
@@ -514,27 +523,33 @@ export function AiDrawer({
         return
       }
       // Query embedding: mock path embeds client-side; Tauri uses ai.embed.
-      let queryVector: readonly number[]
-      if (isTauriRuntime() && activeId) {
-        const embedResponse = await invokeCommand('ai.embed', {
-          taskId: `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
-          configId: activeId,
-          texts: [question],
-        })
-        queryVector = embedResponse.vectors[0] ?? []
-      } else {
-        const embedFetch = await fetch('/mock-ai/v1/embeddings', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: 'Bearer sk-mock-test-key',
-          },
-          body: JSON.stringify({ model: 'mock-embedding', input: [question] }),
-        })
-        const payload = (await embedFetch.json()) as { data: { embedding: number[] }[] }
-        queryVector = payload.data[0]?.embedding ?? []
+      // 断网/欠费/没配 embedding 服务时抛错 → 关键词兜底,已建索引的书仍可问。
+      let retrieved: readonly RetrievedChunk[]
+      try {
+        let queryVector: readonly number[]
+        if (isTauriRuntime() && activeId) {
+          const embedResponse = await invokeCommand('ai.embed', {
+            taskId: `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
+            configId: activeId,
+            texts: [question],
+          })
+          queryVector = embedResponse.vectors[0] ?? []
+        } else {
+          const embedFetch = await fetch('/mock-ai/v1/embeddings', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: 'Bearer sk-mock-test-key',
+            },
+            body: JSON.stringify({ model: 'mock-embedding', input: [question] }),
+          })
+          const payload = (await embedFetch.json()) as { data: { embedding: number[] }[] }
+          queryVector = payload.data[0]?.embedding ?? []
+        }
+        retrieved = retrieve(index.chunks, queryVector)
+      } catch {
+        retrieved = retrieveByTerms(index.chunks, question)
       }
-      const retrieved: readonly RetrievedChunk[] = retrieve(index.chunks, queryVector)
       setCitations(new Map([[messages.length + 1, citationLabels(retrieved)]]))
       outbound = buildRagMessages(question, retrieved, messages)
     } else {
@@ -1013,13 +1028,55 @@ export function AiDrawer({
               </div>
               {message.role === 'assistant' && citations.get(index) !== undefined && (
                 <div className="ai-citations">
-                  {citations.get(index)?.map((label) => (
-                    <span key={label} className="ai-citation">
-                      {label}
-                    </span>
-                  ))}
+                  {citations.get(index)?.map((label) =>
+                    onJumpToCitation !== undefined ? (
+                      <button
+                        key={label}
+                        type="button"
+                        className="ai-citation"
+                        title={`跳转到「${label.replace(/\(\d+\)$/, '')}」`}
+                        onClick={() => onJumpToCitation(label)}
+                      >
+                        {label}
+                      </button>
+                    ) : (
+                      <span key={label} className="ai-citation">
+                        {label}
+                      </span>
+                    ),
+                  )}
                 </div>
               )}
+              {message.role === 'assistant' &&
+                !message.streaming &&
+                scope === 'selection' &&
+                selection !== null &&
+                onSaveAnswerToNote !== undefined &&
+                message.content.trim() !== '' && (
+                  <button
+                    type="button"
+                    className="ai-note-save"
+                    disabled={savedNotes.has(index)}
+                    onClick={() => {
+                      const save = onSaveAnswerToNote
+                      if (save === undefined) return
+                      void save(message.content.trim())
+                        .then(() => {
+                          setSavedNotes((current) => new Set(current).add(index))
+                        })
+                        .catch((saveError: unknown) => {
+                          setError(toAppError(saveError).message)
+                        })
+                    }}
+                  >
+                    {savedNotes.has(index) ? (
+                      <Check size={13} weight="bold" aria-hidden />
+                    ) : (
+                      <Note size={13} weight="regular" aria-hidden />
+                    )}
+                    {savedNotes.has(index) ? '已写入批注' : '写入批注笔记'}
+                  </button>
+                )}
             </div>
           ))}
           <div ref={messagesEndRef} />

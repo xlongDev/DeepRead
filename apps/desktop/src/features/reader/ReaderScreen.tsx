@@ -1375,6 +1375,26 @@ export function ReaderScreen({
     setOpenPanel(null)
   }
 
+  /** AI 引用 chip → 跳章:剥掉多块后缀「(2)」后按标题在目录里找。
+      ai-core 与内核对 TXT 的切章实现不同,不按序号对位,按标题对位才稳;
+      目录没有对应条目(如内核书的「原书正文」blob)就不动,chip 只是展示。 */
+  const jumpToCitation = (label: string): void => {
+    const wanted = label.replace(/\(\d+\)$/, '').trim()
+    if (wanted === '') return
+    const match = (items: readonly TocItem[]): TocItem | null => {
+      for (const item of items) {
+        const entryTitle = item.title.trim()
+        if (entryTitle === wanted || entryTitle.startsWith(wanted)) return item
+        const child = match(item.children)
+        if (child !== null) return child
+      }
+      return null
+    }
+    const item = match(toc)
+    if (item === null || item.href === undefined) return
+    goToTocItem(item)
+  }
+
   /** TTS 听书:当前 section 的纯文本(朗读起点为章首)。 */
   const ttsGetSectionText = useCallback(async (): Promise<string> => {
     const adapter = adapterRef.current
@@ -1668,6 +1688,19 @@ export function ReaderScreen({
 
   const removeAnnotationNote = async (id: string): Promise<void> => {
     await updateAnnotationNote(id, null)
+  }
+
+  /** AI 选区问答的回答 → 批注笔记:这条选区已有划线就追加,还没有就
+      「先落划线再写笔记」(commitSelectionNote 的既有约定)。 */
+  const saveAnswerToNote = async (text: string): Promise<void> => {
+    if (selection === null) return
+    const existing = annotations.find((record) => record.cfi === selection.cfi && !record.deleted)
+    if (existing !== undefined) {
+      const merged = existing.note ? `${existing.note}\n\n${text}` : text
+      await updateAnnotationNote(existing.id, merged)
+    } else {
+      await commitSelectionNote(text)
+    }
   }
 
   const copySelection = async (): Promise<void> => {
@@ -3091,6 +3124,8 @@ export function ReaderScreen({
             title={title}
             sourceText={sourceText}
             themeVars={readerVars}
+            onJumpToCitation={jumpToCitation}
+            onSaveAnswerToNote={saveAnswerToNote}
             onReplaceSource={async (text) => {
               const adapter = adapterRef.current
               if (!adapter) return
