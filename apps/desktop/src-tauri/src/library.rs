@@ -1030,12 +1030,33 @@ pub async fn notes_export<R: tauri::Runtime>(
     } else {
         request.default_name.trim().to_string()
     };
+    // default_name 自带扩展名(如「闪卡.csv」)就按它来,不带才补 .md ——
+    // 这是给 CSV 等纯文本导出复用同一条命令留的口子,协议形状不变。
+    // 判定口径:有点号且尾段像扩展名(≤5 字符、无空格无斜杠)。
+    let looks_like_extension = name.contains('.')
+        && name
+            .rsplit('.')
+            .next()
+            .is_some_and(|ext| !ext.is_empty() && ext.len() <= 5 && !ext.contains([' ', '/']));
+    let (file_name, filter_label, extensions) = if looks_like_extension {
+        let ext = name.rsplit('.').next().unwrap().to_lowercase();
+        (name, ext.to_uppercase(), vec![ext])
+    } else {
+        (
+            format!("{name}.md"),
+            "Markdown".to_string(),
+            vec!["md".to_string()],
+        )
+    };
     let path = app
         .dialog()
         .file()
-        .set_title("导出批注")
-        .set_file_name(format!("{name}.md"))
-        .add_filter("Markdown", &["md"])
+        .set_title("导出")
+        .set_file_name(file_name)
+        .add_filter(
+            &filter_label,
+            &extensions.iter().map(String::as_str).collect::<Vec<_>>(),
+        )
         .blocking_save_file();
     let Some(file_path) = path else {
         return Ok(NotesExportResponse { path: None });

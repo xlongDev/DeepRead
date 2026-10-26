@@ -10,6 +10,7 @@ import {
   type GeneratedQuiz,
 } from '@deepread/ai-core'
 import { invokeCommand } from '../../lib/ipc'
+import { downloadText } from '../../lib/download'
 import { resolveActiveProvider } from '../../lib/ai-active-provider'
 import { Segmented } from './Segmented'
 import { runChatOnce } from '../../lib/ai-chat'
@@ -26,6 +27,16 @@ interface LearningDrawerProps {
   /** Plain text of the section currently on screen (quiz material). */
   readonly getChapterText: () => Promise<string>
   readonly onClose: () => void
+}
+
+/** Anki 兼容 CSV:front,back 两列,按 CSV 规则转义;空正面跳过。 */
+export function cardsToAnkiCsv(cards: readonly LearningCard[]): string {
+  const escape = (value: string): string =>
+    /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+  return `${cards
+    .filter((card) => card.front.trim() !== '')
+    .map((card) => `${escape(card.front)},${escape(card.back)}`)
+    .join('\n')}\n`
 }
 
 const GRADE_OPTIONS: readonly { readonly grade: ReviewGrade; readonly label: string }[] = [
@@ -104,6 +115,18 @@ export function LearningDrawer({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  /** 导出闪卡:桌面走系统保存对话框(notes.export 已支持自带扩展名),
+   *  浏览器走 <a download>。Anki 的「导入文件」直接吃这份 CSV。 */
+  const exportCardsCsv = async (): Promise<void> => {
+    const csv = cardsToAnkiCsv(cards)
+    const name = `闪卡-${bookTitle}`
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+      downloadText(`${name}.csv`, csv, 'text/csv')
+      return
+    }
+    await invokeCommand('notes.export', { markdown: csv, defaultName: `${name}.csv` })
+  }
 
   const dueCards = cards.filter((card) => isDue(card.dueAt))
   const reviewCard = dueCards[Math.min(reviewIndex, dueCards.length - 1)]
@@ -311,6 +334,16 @@ export function LearningDrawer({
 
         {tab === 'review' && (
           <section className="review-section" aria-label="间隔复习">
+            {cards.length > 0 && (
+              <div className="settings-row">
+                <span className="settings-label">导出({cards.length} 张,Anki 兼容 CSV)</span>
+                <div className="segmented">
+                  <button type="button" onClick={() => void exportCardsCsv()}>
+                    导出
+                  </button>
+                </div>
+              </div>
+            )}
             {!reviewCard && (
               <p className="reader-toc-empty">
                 {cards.length === 0
