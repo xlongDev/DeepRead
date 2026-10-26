@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { buildReaderCSS } from './engine'
+import { buildReaderCSS, INHERITANCE_BUS } from './engine'
 
 const theme = { name: 't', background: '#fff', foreground: '#111', colorScheme: 'light' } as const
 
@@ -88,5 +88,28 @@ describe('字重盖住行内 span 但保留标题层级', () => {
   it('未调字重时不下发 font-weight(保留原书层级)', () => {
     const css = buildReaderCSS(theme, {}, 'paginated')
     expect(css).not.toContain('font-weight')
+  })
+})
+
+describe('继承属性覆盖总线(机制不变式)', () => {
+  // 病根史:font-family / line-height / 夜间墨色是三次独立的「压 body 不够,
+  // 要压 body *」修复。这条不变式把口径钉死:凡覆盖纯继承属性,选择器必须
+  // 就是总线 —— 将来加新继承属性却写成裸 body {,这里直接红。
+  it('line-height 与 font-family 共用同一条总线选择器', () => {
+    const css = buildReaderCSS(theme, { lineHeight: 1.8, fontFamily: 'kaiti' }, 'paginated')
+    const rules = css.split('\n')
+    for (const prop of ['line-height', 'font-family']) {
+      const rule = rules.find((line) => line.includes('!important') && line.includes(`${prop}:`))
+      expect(rule).toBeDefined()
+      expect(rule!.startsWith(`${INHERITANCE_BUS} {`)).toBe(true)
+    }
+  })
+
+  it('字重是总线的 :not(h1..h6) 变体,仍以总线为前缀', () => {
+    const css = buildReaderCSS(theme, { fontWeight: 700 }, 'paginated')
+    const rule = css
+      .split('\n')
+      .find((line) => line.includes('font-weight:') && line.includes('!important'))
+    expect(rule!.startsWith(`${INHERITANCE_BUS}:not(h1)`)).toBe(true)
   })
 })

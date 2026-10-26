@@ -469,6 +469,15 @@ const FONT_STACKS: Readonly<Record<string, string>> = {
 /** 等宽类元素:读者选的字体管不到它们(代码本来就该等宽)。 */
 const MONO_STACK = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
 
+/**
+ * 继承属性的覆盖总线:纯继承属性(line-height / font-family…)要压过书自己的
+ * 后代类声明(calibre 的 <span class="calibreN"> 病灶),选择器必须打到后代。
+ * 这条串过去在 buildReaderCSS 里逐属性复制,每修一次就是一次打地鼠 —— 现在
+ * 集中成常量,下一个继承属性(font-style、letter-spacing)照抄一行,选择器
+ * 口径不会再漂;测试按这条常量做不变式断言。
+ */
+export const INHERITANCE_BUS = 'body, body *'
+
 function resolveFontStack(fontFamily: string | undefined): string | undefined {
   if (fontFamily === undefined) return undefined
   const named = FONT_STACKS[fontFamily]
@@ -513,7 +522,7 @@ export function buildReaderCSS(
     // (calibre 标题类常见),只压 body 会被继承规则甩掉,读者调行距等于没调。
     // 压到 body * 上,读者行距控制全局统一生效。
     ...(layout.lineHeight !== undefined
-      ? [`body, body * { line-height: ${layout.lineHeight} !important; }`]
+      ? [`${INHERITANCE_BUS} { line-height: ${layout.lineHeight} !important; }`]
       : []),
     // 段间距:仅当用户显式选择时注入,undefined 保持原书段落排版。
     ...(layout.paragraphMargin !== undefined
@@ -542,7 +551,7 @@ export function buildReaderCSS(
     // !important 对书里那些普通类选择器有效。等宽元素留一手,不能被读者口味换掉。
     ...(fontStack
       ? [
-          `body, body * { font-family: ${fontStack} !important; }`,
+          `${INHERITANCE_BUS} { font-family: ${fontStack} !important; }`,
           `code, pre, kbd, samp, code *, pre *, kbd *, samp * { font-family: ${MONO_STACK} !important; }`,
         ]
       : []),
