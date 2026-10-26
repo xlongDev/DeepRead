@@ -547,6 +547,17 @@ export function buildReaderCSS(
         ]
       : []),
     `html, body { background: ${theme.background} !important; color: ${theme.foreground} !important; }`,
+    // 夜间:书自己的配色一律作废 —— 与 font-family 同一个病,只是更致命:书的
+    // CSS 把 color 打在**后代**上(calibre 导出的中文书几乎每个标题/正文都套
+    // 一层 `<span class="calibreN">`,类里写死 `color: rgb(0,0,0)`),后代声明
+    // 永远赢过从 body 继承下来的墨色 → 黑字留在黑纸上,完全隐形;白底块同理,
+    // 底不掀掉,换了墨色照样是浅底浅字。所以两条一起压到 body * 上。
+    // 浅色纸不这么干:书的颜色本来就是为白纸画的,照原样着墨才是「原书排版」。
+    ...(theme.colorScheme === 'dark'
+      ? [
+          `body * { color: ${theme.foreground} !important; background-color: transparent !important; }`,
+        ]
+      : []),
     // 滚动模式内核把上下 padding 清零,这里由我们补回舒适的阅读留白
     ...(flow === 'scrolled' ? [`body { padding: 56px 0 120px !important; }`] : []),
   ].join('\n')

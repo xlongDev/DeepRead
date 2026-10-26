@@ -40,6 +40,34 @@ describe('行高也要盖住书后代类上的声明', () => {
   })
 })
 
+describe('夜间模式盖住书自己的配色', () => {
+  // 病根:书的 CSS 把 color 打在**后代**上(calibre 导出的书几乎每个标题/正文
+  // 都套 `<span class="calibreN">`,类里写死 `color: rgb(0,0,0)`),后代声明
+  // 永远赢过从 body 继承下来的墨色 —— 黑字留在黑纸上,等于隐形(实测 1.12:1)。
+  const night = {
+    name: 'Night',
+    background: '#131210',
+    foreground: '#b8b2a7',
+    colorScheme: 'dark',
+  } as const
+
+  it('墨色压到 body *,不只是 body', () => {
+    const css = buildReaderCSS(night, {}, 'paginated')
+    expect(css).toContain('body * { color: #b8b2a7 !important;')
+  })
+
+  it('书自己的底色也掀掉(浅底块会吃掉换过的墨色)', () => {
+    const css = buildReaderCSS(night, {}, 'paginated')
+    expect(css).toContain('background-color: transparent !important; }')
+  })
+
+  it('浅色纸不动书的颜色 —— 那是为白纸画的', () => {
+    const css = buildReaderCSS(theme, {}, 'paginated')
+    expect(css).not.toContain('body * { color:')
+    expect(css).not.toContain('background-color: transparent')
+  })
+})
+
 describe('字重盖住行内 span 但保留标题层级', () => {
   // 字重要盖住 calibre 的 <span class="calibreN"> 行内载体(只列块级会漏),
   // 但 h1–h6 用 :not() 排除,书的标题 font-weight 原样保留。
