@@ -41,6 +41,7 @@ import {
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadReadingGoals, saveReadingGoals } from '../../lib/reading-goal'
 import { mapWithConcurrency } from '../../lib/pool'
+import { AUTO_SYNC_INTERVAL_MS, isAutoSyncEnabled, runSync } from '../../lib/sync'
 import { loadNotes } from '../../lib/notes'
 import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
@@ -431,6 +432,41 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     })()
     return () => {
       cancelled = true
+    }
+  }, [loadBooks])
+
+  /** 自动 WebDAV 同步:已配置云端时,进书架同步一次,之后每 30 分钟一次。
+      静默运行 —— 失败不打扰阅读,云同步抽屉里的手动同步负责把错误摆到人
+      面前;拉到远端变化时刷新书架。ponytail: 复用 runSync 单趟引擎,
+      不做持久重试队列,失败等下一个周期。 */
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let stopped = false
+    let running = false
+    const maybeSync = async (): Promise<void> => {
+      if (stopped || running || !isAutoSyncEnabled()) return
+      let configured = false
+      try {
+        configured = (await invokeCommand('cloud.config.get', undefined)).config !== null
+      } catch {
+        return
+      }
+      if (!configured) return
+      running = true
+      try {
+        const report = await runSync()
+        if (report.pulled > 0) void loadBooks()
+      } catch {
+        // 静默:自动同步的失败不弹窗,下一个周期会再试。
+      } finally {
+        running = false
+      }
+    }
+    const timer = window.setInterval(() => void maybeSync(), AUTO_SYNC_INTERVAL_MS)
+    void maybeSync()
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
     }
   }, [loadBooks])
 

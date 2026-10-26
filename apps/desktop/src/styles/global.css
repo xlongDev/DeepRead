@@ -4673,6 +4673,22 @@ dialog.modal-panel {
   gap: var(--space-sm);
 }
 
+/* 自动同步开关行:静态文本行 + 原生 checkbox(去原生控件偏好只限主行动,
+   开关这类二值偏好用系统控件最诚实)。 */
+.sync-auto-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 10px var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
 .sync-report {
   display: flex;
   flex-direction: column;

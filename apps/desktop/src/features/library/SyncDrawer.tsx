@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { toAppError, type CloudConfigGetResponse } from '@deepread/shared'
 import { invokeCommand } from '../../lib/ipc'
-import { runSync, type SyncReport } from '../../lib/sync'
+import { AUTO_SYNC_STORAGE_KEY, isAutoSyncEnabled, runSync, type SyncReport } from '../../lib/sync'
 
 interface SyncDrawerProps {
   /** Refresh the shelf after a WebDAV restore replaced the database. */
@@ -18,6 +18,8 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
   const [confirmRestore, setConfirmRestore] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** 自动同步开关:与书架侧的静默同步 effect 读同一个 localStorage 键。 */
+  const [autoSync, setAutoSync] = useState(isAutoSyncEnabled)
 
   useEffect(() => {
     invokeCommand('cloud.config.get', undefined)
@@ -192,6 +194,22 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
                 本机设备:{config.deviceName}({config.deviceId.slice(0, 11)}…)
               </span>
             </div>
+            <label className="sync-auto-row">
+              <input
+                type="checkbox"
+                checked={autoSync}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  setAutoSync(enabled)
+                  try {
+                    localStorage.setItem(AUTO_SYNC_STORAGE_KEY, enabled ? 'on' : 'off')
+                  } catch {
+                    // 写不进 localStorage(隐私模式等):选择只对本会话生效。
+                  }
+                }}
+              />
+              自动同步(进书架时与每 30 分钟,静默运行)
+            </label>
             <div className="sync-actions">
               <button
                 type="button"

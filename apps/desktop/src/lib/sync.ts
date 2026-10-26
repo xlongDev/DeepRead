@@ -52,6 +52,20 @@ export interface SyncReport {
   readonly syncedAt: string
 }
 
+/** 自动同步的开关:localStorage,'off' = 关;缺省(含写失败)= 开。 */
+export const AUTO_SYNC_STORAGE_KEY = 'deepread.cloud.autoSync'
+
+/** 自动同步间隔:进书架同步一次,之后每 30 分钟一次(书架在屏时)。 */
+export const AUTO_SYNC_INTERVAL_MS = 30 * 60 * 1000
+
+export function isAutoSyncEnabled(): boolean {
+  try {
+    return localStorage.getItem(AUTO_SYNC_STORAGE_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
 /** Document shape the merge compares — excludes the merge timestamp itself. */
 function contentOf(state: ReaderStatePayload | null): string {
   if (!state) return ''
