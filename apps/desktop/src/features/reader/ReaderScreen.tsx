@@ -118,7 +118,7 @@ import {
   type WritingModeChoice,
 } from './reader-options'
 import { buildReadingStats } from './reading-indicators'
-import { readerKeyAction } from './reader-keys'
+import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
@@ -440,7 +440,7 @@ export function ReaderScreen({
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
   )
-  const [searchState, setSearchState] = useState<'idle' | 'searching' | 'done'>('idle')
+  const [searchState, setSearchState] = useState<'idle' | 'searching' | 'done' | 'error'>('idle')
   /** 命中数超过展示上限:必须说清楚,否则用户以为搜索不全。 */
   const [searchTruncated, setSearchTruncated] = useState(false)
   const [dictionaries, setDictionaries] = useState<readonly DictionaryMeta[]>([])
@@ -1198,6 +1198,10 @@ export function ReaderScreen({
       if (paneActive === false) return
       const action = readerKeyAction(event)
       if (action === null) return
+      // 焦点在输入框/文本域/滑杆等可编辑元素上时,翻页与阅读尺键让位给原生
+      // 行为:搜索框里敲空格是打字,进度滑杆的 ←→ 是调滑杆。Escape 仍放行
+      // —— 面板内按 Esc 关面板是既有行为,不因焦点在搜索框里而失效。
+      if (action !== 'escape' && action !== 'fullscreen' && isEditableTarget(event.target)) return
       // 除全屏外,内核未就绪时不处理按键。
       // 实测结论(别照直觉推):adapterRef 在挂载 effect 起始处就同步赋值,
       // 开书失败只走 catch、并不清 ref,只有卸载 cleanup 才置 null。所以这条
@@ -2024,14 +2028,19 @@ export function ReaderScreen({
     const query = searchInputRef.current?.value.trim()
     if (!adapter || !query) return
     setSearchState('searching')
-    const results = await adapter.search(query)
-    setSearchTruncated(results.length > MAX_SHOWN_SEARCH_RESULTS)
-    setSearchResults(
-      results
-        .slice(0, MAX_SHOWN_SEARCH_RESULTS)
-        .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
-    )
-    setSearchState('done')
+    try {
+      const results = await adapter.search(query)
+      setSearchTruncated(results.length > MAX_SHOWN_SEARCH_RESULTS)
+      setSearchResults(
+        results
+          .slice(0, MAX_SHOWN_SEARCH_RESULTS)
+          .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
+      )
+      setSearchState('done')
+    } catch {
+      // 内核搜索失败要有明确终态 —— 否则 searchState 永远停在「搜索中」。
+      setSearchState('error')
+    }
   }
 
   const theme = READER_THEMES[themeIndex] ?? READER_THEMES[0]!
@@ -2792,6 +2801,11 @@ export function ReaderScreen({
                   </button>
                 </div>
                 {searchState === 'searching' && <p className="reader-toc-empty">搜索中…</p>}
+                {searchState === 'error' && (
+                  <p className="reader-toc-empty" role="alert">
+                    搜索失败,请重试。
+                  </p>
+                )}
                 {searchState === 'done' && searchResults.length === 0 && (
                   <p className="reader-toc-empty">没有找到匹配的正文。</p>
                 )}

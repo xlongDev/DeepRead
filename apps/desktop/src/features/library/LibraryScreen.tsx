@@ -146,6 +146,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
    * 元数据都落在 IndexedDB,两个平台都要等一次异步读,骨架屏也因此统一了。
    */
   const [libraryLoaded, setLibraryLoaded] = useState(false)
+  /** 读架失败的原因。绝不能静默 —— 那会把「加载失败」伪装成「还没有书」。 */
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -406,12 +408,20 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     try {
       const response = await invokeCommand('library.list', undefined)
       setBooks(response.books)
-    } catch {
-      // The library still works: importing will retry the list.
+      setLoadError(null)
+    } catch (error) {
+      // 读架失败要给错误态 + 重试,而不是让书架空成「还没有书」。
+      setLoadError(toAppError(error).message || '书架加载失败,请重试。')
     } finally {
       setLibraryLoaded(true)
     }
   }, [])
+
+  const retryLoadBooks = (): void => {
+    setLibraryLoaded(false)
+    setLoadError(null)
+    void loadBooks()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -1479,7 +1489,29 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
               </div>
             ) : (
               libraryLoaded &&
-              books.length === 0 && (
+              books.length === 0 &&
+              (loadError ? (
+                /* 读架失败:数据明明在,不能伪装成空书架。导入仍保留 ——
+                   导入成功会顺带重试读架。 */
+                <section
+                  className="library-empty"
+                  role="alert"
+                  aria-labelledby="library-load-error-title"
+                >
+                  <h2 className="library-empty-title" id="library-load-error-title">
+                    书架暂时打不开
+                  </h2>
+                  <p className="library-empty-lead">{loadError}</p>
+                  <div className="library-empty-actions">
+                    <button type="button" className="shelf-import" onClick={retryLoadBooks}>
+                      重试
+                    </button>
+                    <button type="button" className="shelf-import" onClick={triggerImport}>
+                      导入书籍
+                    </button>
+                  </div>
+                </section>
+              ) : (
                 <>
                   {/*
                    * 空书架也保留顶部栏 —— 页面骨架不该因为"没有书"就消失,
@@ -1539,7 +1571,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
                     )}
                   </section>
                 </>
-              )
+              ))
             )}
 
             {libraryLoaded && books.length > 0 && (

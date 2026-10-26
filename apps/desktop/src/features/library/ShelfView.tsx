@@ -154,6 +154,13 @@ export function ShelfView({
   /** 批量条里的常用标签浮层:点输入框弹出来,点空白/Esc 收起。 */
   const [bulkTagOpen, setBulkTagOpen] = useState(false)
   const bulkTagRef = useRef<HTMLDialogElement>(null)
+  /** 封面 asset 加载失败的 book:降级到字面封面,不能露破图。
+      网格视图的 <img> onError 负责登记;列表视图用 background-image 没有
+      错误事件,共享这份登记(先看网格才会知道,可接受)。 */
+  const [brokenCovers, setBrokenCovers] = useState<ReadonlySet<string>>(() => new Set())
+  const markCoverBroken = (hash: string): void => {
+    setBrokenCovers((prev) => new Set(prev).add(hash))
+  }
 
   useEffect(() => {
     if (!bulkTagOpen) return
@@ -418,6 +425,7 @@ export function ShelfView({
             const title = shelfTitle(book)
             const progress = book.progress
             const coverUrl = covers.get(book.hash) ?? null
+            const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
             const isSelected = selected.has(book.hash)
             return (
               <li
@@ -436,7 +444,7 @@ export function ShelfView({
                     }}
                     onKeyDown={menuKeyHandler(book.hash)}
                     style={
-                      coverUrl
+                      showCover
                         ? undefined
                         : {
                             background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
@@ -462,8 +470,14 @@ export function ShelfView({
                   >
                     {book.format === 'unknown' ? (
                       <span className="book-cover-missing">待重新导入</span>
-                    ) : coverUrl ? (
-                      <img src={coverUrl} alt="" className="book-cover-img" loading="lazy" />
+                    ) : showCover ? (
+                      <img
+                        src={coverUrl!}
+                        alt=""
+                        className="book-cover-img"
+                        loading="lazy"
+                        onError={() => markCoverBroken(book.hash)}
+                      />
                     ) : (
                       <>
                         <span className="book-cover-char">{title.charAt(0)}</span>
@@ -587,6 +601,7 @@ export function ShelfView({
             const title = shelfTitle(book)
             const progress = book.progress
             const coverUrl = covers.get(book.hash) ?? null
+            const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
             const palette = coverPalette(book.hash)
             const isSelected = selected.has(book.hash)
             return (
@@ -618,14 +633,14 @@ export function ShelfView({
                   <span
                     className="book-row-cover"
                     style={
-                      coverUrl
+                      showCover
                         ? { backgroundImage: `url(${coverUrl})`, backgroundSize: 'cover' }
                         : {
                             background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
                           }
                     }
                   >
-                    {!coverUrl && <span className="book-cover-char">{title.charAt(0)}</span>}
+                    {!showCover && <span className="book-cover-char">{title.charAt(0)}</span>}
                   </span>
                   <span className="book-row-main">
                     <span className="book-row-title">{title}</span>

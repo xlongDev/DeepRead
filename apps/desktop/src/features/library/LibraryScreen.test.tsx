@@ -391,6 +391,26 @@ describe('LibraryScreen 外壳契约', () => {
     expect(toolbarButtons()).toEqual(['导入书籍'])
   })
 
+  it('读架失败显示错误态与重试,而不是伪装成「还没有书」', async () => {
+    mockBackend(BOOKS)
+    const standard = invokeCommandMock.getMockImplementation()!
+    invokeCommandMock.mockImplementation((command, request) =>
+      command === 'library.list'
+        ? Promise.reject(new Error('数据库打不开'))
+        : standard(command, request),
+    )
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} backend={APP_INFO} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('书架暂时打不开')
+    expect(alert).toHaveTextContent('数据库打不开')
+
+    // 重试成功后错误态退场,书架正常出现。
+    invokeCommandMock.mockImplementation(standard)
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(document.querySelector('.shelf-toolbar')).not.toBeNull())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('底部状态栏如实报告本数与后端信息', async () => {
     await renderLibrary()
     const footer = document.querySelector('.library-footer')
@@ -1650,5 +1670,19 @@ describe('封面提取管线(B1.3 并发化)', () => {
     await waitFor(() => {
       expect(document.querySelector('img[src="blob:first-cover"]')).not.toBeNull()
     })
+  })
+
+  it('封面 asset 失效时降级到字面封面,不露破图', async () => {
+    vi.mocked(extractCover).mockResolvedValueOnce('blob:broken-cover')
+    await renderLibrary(BOOKS)
+    const img = await waitFor(() => {
+      const el = document.querySelector('img[src="blob:broken-cover"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    fireEvent.error(img)
+    // 破图退场,首字字面封面顶上,背景同步切回确定性渐变。
+    await waitFor(() => expect(document.querySelector('img[src="blob:broken-cover"]')).toBeNull())
+    expect(document.querySelector('.book-cover-char')).not.toBeNull()
   })
 })

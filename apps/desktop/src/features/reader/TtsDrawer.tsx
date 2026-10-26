@@ -33,6 +33,7 @@ import {
   type SpeechUnit,
 } from '@deepread/reader-core'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { resolveActiveProvider, writeActiveProviderId } from '../../lib/ai-active-provider'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { useTts } from './tts/useTts'
 import { primeTtsAudio, suspendTtsAudio } from './tts/audio'
@@ -295,8 +296,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     readonly { shortName: string; friendlyName: string; locale: string; lang: string }[]
   >([])
   const [providers, setProviders] = useState<readonly AiProviderConfig[]>([])
+  /** 云端朗读用哪个服务:跟着全局「当前 AI 服务」走,列表里点选即切换并记住。 */
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
 
-  const activeId = providers[0]?.id ?? null
+  const activeId = activeProviderId
 
   // 引擎:词级高亮时才逐词发布边界(见 useTts 的 trackBoundary)。
   const tts = useTts({
@@ -395,7 +398,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   useEffect(() => {
     invokeCommand('ai.config.list', undefined)
       .then((response) => {
-        setProviders(response?.providers ?? [])
+        const list = response?.providers ?? []
+        setProviders(list)
+        setActiveProviderId((current) => current ?? resolveActiveProvider(list)?.id ?? null)
       })
       .catch(() => {
         // 云端引擎是可选项;选中时才暴露错误。
@@ -1231,6 +1236,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                     type="button"
                     className={`tts-voice-item${activeId === provider.id ? ' is-active' : ''}`}
                     onClick={() => {
+                      // 真切换并记住 —— 旧实现点了只收起视图,选择器是装饰。
+                      writeActiveProviderId(provider.id)
+                      setActiveProviderId(provider.id)
                       setView('player')
                     }}
                   >

@@ -10,6 +10,7 @@ import {
   type GeneratedQuiz,
 } from '@deepread/ai-core'
 import { invokeCommand } from '../../lib/ipc'
+import { resolveActiveProvider } from '../../lib/ai-active-provider'
 import { Segmented } from './Segmented'
 import { runChatOnce } from '../../lib/ai-chat'
 
@@ -85,7 +86,8 @@ export function LearningDrawer({
     void invokeCommand('ai.config.list', undefined)
       .then((response) => {
         if (cancelled) return
-        setConfigId(response.providers[0]?.id ?? null)
+        // 跟全局「当前 AI 服务」走,不再硬取第一个。
+        setConfigId(resolveActiveProvider(response.providers ?? [])?.id ?? null)
       })
       .catch(() => {
         // Generation needs a provider; the buttons surface the error on use.

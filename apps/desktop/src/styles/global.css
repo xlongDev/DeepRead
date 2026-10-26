@@ -1620,6 +1620,14 @@ button:disabled {
   font-size: 12px;
 }
 
+/* 读架失败态的按钮行:重试 + 导入并排,居中跟空态文案对齐。 */
+.library-empty-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: center;
+  margin-top: var(--space-lg);
+}
+
 .library-empty-note {
   margin: var(--space-xs) 0 0;
   color: var(--color-text-tertiary);
@@ -6124,6 +6132,22 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 @media (prefers-reduced-motion: reduce) {
   .page-flip-chip {
     transition: none;
+  }
+}
+
+/* 触摸设备没有 hover:沿用「悬停才现身」的话,平板上芯片永远 opacity 0
+   —— 按钮可点但看不见。改成常驻半现:可见态配色压到 45%,找得到但不抢
+   正文;按下/点按(iOS 的 sticky hover)走满亮度,反馈照旧。 */
+@media (hover: none) {
+  .page-flip-chip,
+  .page-flip-right .page-flip-chip {
+    opacity: 0.45;
+    transform: none;
+  }
+
+  .page-flip:hover .page-flip-chip,
+  .page-flip:active .page-flip-chip {
+    opacity: 1;
   }
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { toAppError, type AiProviderConfig } from '@deepread/shared'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { resolveActiveProvider, writeActiveProviderId } from '../../lib/ai-active-provider'
 
 export const PROVIDER_PRESETS: readonly {
   readonly label: string
@@ -74,6 +75,8 @@ export function useAiProviders() {
           ...current.filter((provider) => provider.id !== response.provider.id),
         ])
         setActiveId(response.provider.id)
+        // 保存即选中:这次保存的服务对 AI 抽屉 / TTS / 学习工具立即生效并跨会话记住。
+        writeActiveProviderId(response.provider.id)
         setConfigForm(EMPTY_PROVIDER_FORM)
         setError(null)
         onSaved?.(response.provider)
@@ -101,8 +104,10 @@ export function useAiProviders() {
     }
     return invokeCommand('ai.config.list', undefined)
       .then((response) => {
-        setProviders(response?.providers ?? [])
-        setActiveId((current) => current ?? response?.providers?.[0]?.id ?? null)
+        const list = response?.providers ?? []
+        setProviders(list)
+        // 上次选中的服务优先(已删则回落第一个),选择跨会话保持。
+        setActiveId((current) => current ?? resolveActiveProvider(list)?.id ?? null)
         setError(null)
         setLoaded(true)
       })
@@ -204,7 +209,7 @@ export function AiProviderForm({
       />
       <input
         className="field-input"
-        placeholder="Embedding 模型(可选,默认用对话模型)"
+        placeholder="Embedding 模型(建索引问答用,留空则不可用)"
         value={configForm.embeddingModel}
         onChange={(event) => onFormChange({ ...configForm, embeddingModel: event.target.value })}
       />

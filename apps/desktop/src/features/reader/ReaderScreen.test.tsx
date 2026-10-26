@@ -335,6 +335,18 @@ describe('面板开合', () => {
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
   })
 
+  it('内核搜索失败时给出明确错误态,不永远停在「搜索中」', async () => {
+    const { adapter } = await renderReader()
+    adapter.search.mockRejectedValue(new Error('内核搜索崩溃'))
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    const panel = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
+      target: { value: '灯塔' },
+    })
+    fireEvent.click(within(panel).getByTitle('搜索'))
+    await waitFor(() => expect(within(panel).getByRole('alert')).toHaveTextContent('搜索失败'))
+  })
+
   it('AI / 朗读 / 学习三个抽屉各自打开', async () => {
     await renderReader()
     for (const [key, testId] of [
@@ -526,6 +538,42 @@ describe('键盘事件契约', () => {
     expect(fireEvent.keyDown(window, { key: 'ArrowUp' })).toBe(true)
     expect(adapter.nextPage).not.toHaveBeenCalled()
     expect(adapter.previousPage).not.toHaveBeenCalled()
+  })
+
+  it('焦点在输入框时翻页键让位:不翻页、不拦默认,字符能正常打进输入框', async () => {
+    const { adapter } = await renderReader()
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    // fireEvent 返回 true = 未被 preventDefault,空格/字符可以正常输入。
+    expect(fireEvent.keyDown(input, { key: ' ' })).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'ArrowRight' })).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'PageDown' })).toBe(true)
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+    input.remove()
+  })
+
+  it('焦点在进度滑杆上时 ←→ 调滑杆,不翻页', async () => {
+    const { adapter } = await renderReader()
+    const slider = document.createElement('input')
+    slider.type = 'range'
+    document.body.appendChild(slider)
+    expect(fireEvent.keyDown(slider, { key: 'ArrowLeft' })).toBe(true)
+    expect(fireEvent.keyDown(slider, { key: 'ArrowRight' })).toBe(true)
+    expect(adapter.nextPage).not.toHaveBeenCalled()
+    expect(adapter.previousPage).not.toHaveBeenCalled()
+    slider.remove()
+  })
+
+  it('焦点在输入框里 Escape 仍关闭面板(既有行为不因守卫失效)', async () => {
+    await renderReader()
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+    input.remove()
   })
 
   it('阅读尺开着:↑↓ 交给内核移尺并拦住默认滚动;关着时 ↑↓ 仍是未绑定键', async () => {

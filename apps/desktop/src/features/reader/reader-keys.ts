@@ -21,6 +21,17 @@ export interface ReaderKeyEvent {
  * F11 是各平台的通用全屏键;Ctrl+⌘+F 是 macOS 上的替代写法(Tauri 里
  * Cmd+F 会被系统占用,所以要求三个修饰键同时按下)。
  */
+/**
+ * 焦点落在可编辑元素(输入框/文本域/下拉/滑杆/可编辑内容)上时,翻页与阅读尺
+ * 按键必须让位给原生行为 —— 否则在目录搜索框里敲空格会翻页并吞掉空格,
+ * 进度滑杆的 ←→ 也永远调不动滑杆。Escape 与全屏不受此限(见调用方)。
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+}
+
 export function readerKeyAction(event: ReaderKeyEvent): ReaderKeyAction | null {
   if (event.key === 'F11' || (event.key === 'f' && event.ctrlKey && event.metaKey)) {
     return 'fullscreen'

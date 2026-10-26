@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readerKeyAction, type ReaderKeyEvent } from './reader-keys'
+import { isEditableTarget, readerKeyAction, type ReaderKeyEvent } from './reader-keys'
 
 function press(key: string, modifiers: Partial<ReaderKeyEvent> = {}): ReaderKeyEvent {
   return { key, ctrlKey: false, metaKey: false, ...modifiers }
@@ -57,5 +57,28 @@ describe('Escape 与未绑定键', () => {
 
   it('Escape 带修饰键仍是 escape(与系统快捷键冲突时由浏览器先截获)', () => {
     expect(readerKeyAction(press('Escape', { metaKey: true }))).toBe('escape')
+  })
+})
+
+describe('可编辑焦点判定', () => {
+  it('输入框/文本域/下拉/滑杆都算可编辑', () => {
+    const range = document.createElement('input')
+    range.type = 'range'
+    for (const el of [
+      document.createElement('input'),
+      document.createElement('textarea'),
+      document.createElement('select'),
+      range,
+    ]) {
+      expect(isEditableTarget(el)).toBe(true)
+    }
+    // contenteditable 分支 jsdom 未实现 isContentEditable,测不了;真实浏览器
+    // 路径由实现里的 isContentEditable 兜住。
+  })
+
+  it('普通元素、window、null 都不算可编辑(window 上的裸按键不受影响)', () => {
+    expect(isEditableTarget(document.createElement('div'))).toBe(false)
+    expect(isEditableTarget(window)).toBe(false)
+    expect(isEditableTarget(null)).toBe(false)
   })
 })
