@@ -497,12 +497,31 @@ pub fn store_index(conn: &Connection, hash: &str, index: &AiIndexPayload) -> Res
             "ai index is too large",
         ));
     }
-    conn.execute(
+    let tx = conn.unchecked_transaction().map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to begin transaction").with_cause(err)
+    })?;
+    tx.execute(
         "INSERT OR REPLACE INTO ai_index (book_hash, chunks, embedding_model, created_at) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![hash, chunks, index.embedding_model, index.created_at],
     )
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save ai index").with_cause(err))?;
-    Ok(())
+    // 正文搜索行表(book_chunks)随索引重建:先清旧片再写入,两表永远一致。
+    tx.execute("DELETE FROM book_chunks WHERE book_hash = ?1", [hash])
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to reset book chunks").with_cause(err)
+        })?;
+    for chunk in &index.chunks {
+        tx.execute(
+            "INSERT INTO book_chunks (book_hash, label, text) VALUES (?1, ?2, ?3)",
+            rusqlite::params![hash, chunk.label, chunk.text],
+        )
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to save book chunk").with_cause(err)
+        })?;
+    }
+    tx.commit().map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to commit ai index").with_cause(err)
+    })
 }
 
 /// POST /embeddings through the provider and return the vectors.
@@ -937,6 +956,52 @@ mod tests {
         );
         store_artifact(&conn, hash, "concepts", &json!({"concepts": []}), "t").unwrap();
         assert!(load_artifact(&conn, hash, "concepts").unwrap().is_some());
+    }
+
+    #[test]
+    fn store_index_dual_writes_search_rows() {
+        let conn = memory_db();
+        let hash = "23821135d4c62f1428fd15ddb9e91d695402727f43b13a6eb3e9f31fc01b4072";
+        let index = AiIndexPayload {
+            chunks: vec![
+                AiIndexChunk {
+                    label: "第一章".into(),
+                    text: "镇上把灯点亮。".into(),
+                    vector: vec![0.1],
+                },
+                AiIndexChunk {
+                    label: "第二章".into(),
+                    text: "雪落下来。".into(),
+                    vector: vec![0.2],
+                },
+            ],
+            embedding_model: "mock-embedding".into(),
+            created_at: "2026-09-13T00:00:00Z".into(),
+        };
+        store_index(&conn, hash, &index).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM book_chunks WHERE book_hash = ?1",
+                [hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 2, "索引的每个 chunk 都要落一行搜索行表");
+
+        // 重写同一本:旧片清空重建,不残留。
+        let rebuilt = AiIndexPayload {
+            chunks: vec![],
+            ..index.clone()
+        };
+        store_index(&conn, hash, &rebuilt).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM book_chunks WHERE book_hash = ?1",
+                [hash],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[test]

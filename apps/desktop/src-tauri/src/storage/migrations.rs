@@ -156,6 +156,25 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE books ADD COLUMN finished_at TEXT;
     "#,
+    // v10 — 正文搜索的行表:把 ai_index.chunks 的 JSON 数组展开成一行一片。
+    // 此前每次搜索都把全部已索引书的 JSON 拉进内存 serde 解析再子串匹配;
+    // 落成行表后扫描下推 SQLite(C 速度,零解析),中文 substring 语义不变
+    // —— 不上 FTS5:unicode61 对中文不切词,trigram 又要求 ≥3 字符,
+    // 对以中文为主的个人书库反而是负优化。ai_index 原样保留(RAG 还要用
+    // 它的向量);store_index 双写,本迁移负责存量回填。
+    r#"
+    CREATE TABLE book_chunks (
+        id        INTEGER PRIMARY KEY,
+        book_hash TEXT NOT NULL,
+        label     TEXT NOT NULL,
+        text      TEXT NOT NULL
+    );
+    CREATE INDEX idx_book_chunks_hash ON book_chunks (book_hash);
+    INSERT INTO book_chunks (book_hash, label, text)
+    SELECT j.book_hash, json_extract(c.value, '$.label'), json_extract(c.value, '$.text')
+    FROM ai_index j, json_each(j.chunks) c
+    WHERE json_valid(j.chunks);
+    "#,
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), AppError> {

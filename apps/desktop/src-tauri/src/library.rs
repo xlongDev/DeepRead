@@ -310,15 +310,6 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     Ok(books)
 }
 
-/// RAG chunk 的搜索用子集:只用 label/text。**刻意不反序列化 `AiIndexChunk`** ——
-/// 那个结构体带 `vector`,而搜索跟向量无关;用手写的子集,一份被手工改过的索引
-/// (丢了向量列)也照样能搜。
-#[derive(Deserialize)]
-struct ChunkForSearch {
-    label: String,
-    text: String,
-}
-
 /// LIKE 的通配符转义:用户查询里的 `%` / `_` 必须是字面量,否则
 /// "100%" 会匹配一切。`ESCAPE '\'` 与这里的 `\\` 对应。
 fn escape_like(raw: &str) -> String {
@@ -451,48 +442,60 @@ pub fn search_library(conn: &Connection, query: &str) -> Result<LibrarySearchRes
             titles.insert(hash, (display_name, file_name));
         }
     }
-    let mut index_statement = conn
-        .prepare("SELECT book_hash, chunks FROM ai_index")
+    // ② 正文层。v10 起扫描走 book_chunks 行表:LIKE 在 SQLite 里做宽筛
+    // (ASCII 大小写不敏感,与下方定位口径一致),命中行再在 Rust 侧定位
+    // 拼摘录。此前是全量拉 JSON 逐本 serde 解析 —— 书多了这一步是搜索的
+    // 大头。indexed_books 仍以 ai_index 为准(它才是「已建索引」的真值)。
+    let mut hits: Vec<LibrarySearchHit> = Vec::new();
+    let mut chunk_statement = conn
+        .prepare(
+            "SELECT book_hash, label, text FROM book_chunks
+             WHERE text LIKE ?1 ESCAPE '\\'
+             ORDER BY book_hash, id
+             LIMIT 400",
+        )
         .map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to prepare index scan").with_cause(err)
+            AppError::new(ErrorCode::StorageIo, "failed to prepare chunk scan").with_cause(err)
         })?;
-    let rows = index_statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    let rows = chunk_statement
+        .query_map([pattern.clone()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to scan index").with_cause(err)
+            AppError::new(ErrorCode::StorageIo, "failed to scan chunks").with_cause(err)
         })?;
-    let mut hits: Vec<LibrarySearchHit> = Vec::new();
-    let mut indexed_books: u32 = 0;
     for row in rows {
-        let (book_hash, chunks_text) = row.map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to read index row").with_cause(err)
-        })?;
-        indexed_books += 1;
-        let Some((display_name, file_name)) = titles.get(&book_hash) else {
-            continue;
-        };
-        let chunks: Vec<ChunkForSearch> = serde_json::from_str(&chunks_text).unwrap_or_default();
-        for chunk in &chunks {
-            if hits.len() >= MAX_SEARCH_HITS {
-                break;
-            }
-            let Some(position) = find_case_insensitive(&chunk.text, trimmed) else {
-                continue;
-            };
-            hits.push(LibrarySearchHit {
-                book_hash: book_hash.clone(),
-                display_name: display_name.clone(),
-                file_name: file_name.clone(),
-                label: chunk.label.clone(),
-                excerpt: excerpt_around(&chunk.text, trimmed, position),
-            });
-        }
         if hits.len() >= MAX_SEARCH_HITS {
             break;
         }
+        let (book_hash, label, text) = row.map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to read chunk row").with_cause(err)
+        })?;
+        let Some((display_name, file_name)) = titles.get(&book_hash) else {
+            continue;
+        };
+        let Some(position) = find_case_insensitive(&text, trimmed) else {
+            continue;
+        };
+        hits.push(LibrarySearchHit {
+            book_hash,
+            display_name: display_name.clone(),
+            file_name: file_name.clone(),
+            label,
+            excerpt: excerpt_around(&text, trimmed, position),
+        });
     }
+    let indexed_books = conn
+        .query_row("SELECT COUNT(*) FROM ai_index", [], |row| {
+            row.get::<_, u32>(0)
+        })
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "failed to count indexed books").with_cause(err)
+        })?;
 
     Ok(LibrarySearchResponse {
         books,
@@ -517,6 +520,7 @@ pub fn remove_book(conn: &Connection, hash: &str) -> Result<bool, AppError> {
         "bookmarks",
         "cards",
         "ai_index",
+        "book_chunks",
         "ai_artifacts",
         "reading_stats",
     ] {
@@ -1075,6 +1079,7 @@ pub async fn notes_export<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::store_index;
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1487,24 +1492,26 @@ mod tests {
             .unwrap();
         }
         if !chunks.is_empty() {
-            // `chunks` 列是**裸 JSON 数组**(与 `store_index` 写的形状一致),
-            // vector 留空数组:搜索不依赖向量,带不带都能搜。
-            let payload: Vec<serde_json::Value> = chunks
-                .iter()
-                .map(|(label, text)| {
-                    serde_json::json!({ "label": label, "text": text, "vector": [] })
-                })
-                .collect();
-            conn.execute(
-                "INSERT OR REPLACE INTO ai_index (book_hash, chunks, embedding_model, created_at) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    book.hash,
-                    serde_json::to_string(&payload).unwrap(),
-                    "text-embedding-3-small",
-                    "2026-10-13T00:00:00Z"
-                ],
+            // 走真实的 store_index 写路径(它双写 book_chunks 行表),不再
+            // 裸插 ai_index —— 测试造的数据要和运行时一致,否则搜索行表是空的。
+            store_index(
+                conn,
+                &book.hash,
+                &crate::ai::AiIndexPayload {
+                    chunks: chunks
+                        .iter()
+                        .map(|(label, text)| crate::ai::AiIndexChunk {
+                            label: label.to_string(),
+                            text: text.to_string(),
+                            vector: Vec::new(),
+                        })
+                        .collect(),
+                    embedding_model: "mock-embedding".into(),
+                    created_at: "2026-09-13T00:00:00Z".into(),
+                },
             )
             .unwrap();
+            return book.hash;
         }
         book.hash
     }
