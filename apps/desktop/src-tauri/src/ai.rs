@@ -573,6 +573,51 @@ pub fn chat_endpoint(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
+/// 与前端 `createSseParser`(ai-core/sse.ts)同一套容错:事件分隔 `\r?\n\r?\n`,
+/// `data:` 后带不带空格都认,多行 data 以 \n 拼接。部分供应商发 `data:{...}`
+/// (无空格)或 CRLF 行尾 —— 旧实现只认 `data: ` 加 `\n\n`,这类帧整段丢弃。
+fn extract_sse_data(event: &str) -> Option<String> {
+    let payloads: Vec<&str> = event
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .collect();
+    if payloads.is_empty() {
+        return None;
+    }
+    Some(
+        payloads
+            .iter()
+            .map(|payload| payload.trim_start())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// 找最早的事件分隔 `\r?\n\r?\n`,返回 (起点, 分隔符字节数)。
+/// 起点与长度都落在 ASCII 字节上,UTF-8 切片安全。
+fn find_event_boundary(buffer: &str) -> Option<(usize, usize)> {
+    let bytes = buffer.as_bytes();
+    for start in 0..bytes.len() {
+        let mut cursor = start;
+        if bytes[cursor] == b'\r' {
+            cursor += 1;
+            if cursor >= bytes.len() || bytes[cursor] != b'\n' {
+                continue;
+            }
+        } else if bytes[cursor] != b'\n' {
+            continue;
+        }
+        cursor += 1; // 吃掉第一个 \n
+        if cursor < bytes.len() && bytes[cursor] == b'\r' {
+            cursor += 1;
+        }
+        if cursor < bytes.len() && bytes[cursor] == b'\n' {
+            return Some((start, cursor + 1 - start));
+        }
+    }
+    None
+}
+
 /// Stream one chat completion, forwarding raw SSE bytes through the channel.
 /// Public so the integration test can drive it against a local mock server
 /// without a Tauri runtime.
@@ -617,14 +662,10 @@ pub async fn stream_chat(
         match StreamExt::next(&mut stream).await {
             Some(Ok(bytes)) => {
                 buffer.push_str(&String::from_utf8_lossy(&bytes));
-                while let Some(boundary) = buffer.find("\n\n") {
-                    let event = buffer[..boundary].to_string();
-                    buffer.drain(..boundary + 2);
-                    if let Some(data) = event
-                        .lines()
-                        .find_map(|line| line.strip_prefix("data: "))
-                        .map(str::to_string)
-                    {
+                while let Some((start, len)) = find_event_boundary(&buffer) {
+                    let event = buffer[..start].to_string();
+                    buffer.drain(..start + len);
+                    if let Some(data) = extract_sse_data(&event) {
                         on_chunk(data);
                     }
                 }
@@ -636,6 +677,11 @@ pub async fn stream_chat(
             }
             None => break,
         }
+    }
+    // 流结束冲刷残留缓冲:有的服务器最后一个事件不带分隔符就关流
+    // (与前端 createSseParser#end 同语义)。
+    if let Some(data) = extract_sse_data(&buffer) {
+        on_chunk(data);
     }
     Ok(())
 }
@@ -725,10 +771,14 @@ pub async fn ai_embed(
     let key = format!("ai.key.{}", request.config_id);
     let api_key = crate::secrets::get_secret(&secrets, &base, &key)?
         .ok_or_else(|| AppError::new(ErrorCode::AiProviderError, "请先填写该服务的 API Key"))?;
-    let model = config
-        .embedding_model
-        .clone()
-        .unwrap_or_else(|| config.model.clone());
+    // embedding 模型必须显式配置:拿 chat 模型打 /embeddings 必失败,而报错
+    // 来自远端,用户看不出根因是「没填模型」。这里提前拦下,把话说清楚。
+    let model = config.embedding_model.clone().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::AiProviderError,
+            "该服务未配置 Embedding 模型,请在设置 → AI 服务里填写",
+        )
+    })?;
     let url = format!("{}/embeddings", config.base_url.trim_end_matches('/'));
     let client = crate::http();
     let vectors = embed_texts(client, &url, &api_key, &model, &request.texts).await?;
@@ -789,6 +839,41 @@ mod tests {
         assert_eq!(
             chat_endpoint("https://api.example.com/v1/"),
             "https://api.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn sse_data_tolerates_missing_space_and_crlf() {
+        assert_eq!(
+            extract_sse_data("data: {\"a\":1}"),
+            Some("{\"a\":1}".to_string())
+        );
+        // 无空格帧:部分供应商的写法,旧实现会整段丢弃。
+        assert_eq!(
+            extract_sse_data("data:{\"a\":1}"),
+            Some("{\"a\":1}".to_string())
+        );
+        assert_eq!(extract_sse_data(": keep-alive"), None);
+        assert_eq!(extract_sse_data(""), None);
+        // 多行 data 以 \n 拼接(SSE 规范)。
+        assert_eq!(
+            extract_sse_data("data: {\"a\":\ndata: 1}"),
+            Some("{\"a\":\n1}".to_string())
+        );
+    }
+
+    #[test]
+    fn event_boundary_matches_lf_and_crlf() {
+        assert_eq!(find_event_boundary("data: x\n\n"), Some((7, 2)));
+        assert_eq!(find_event_boundary("data: x\r\n\r\n"), Some((7, 4)));
+        assert_eq!(find_event_boundary("data: x\n\r\n"), Some((7, 3)));
+        assert_eq!(find_event_boundary("data: x\r\n\n"), Some((7, 3)));
+        assert_eq!(find_event_boundary("data: x"), None);
+        assert_eq!(find_event_boundary(""), None);
+        // 中文等多字节字符不出现在分隔符匹配里,切片保持 UTF-8 边界安全。
+        assert_eq!(
+            find_event_boundary("data: 夜航\n\ndata: 灯塔\n\n"),
+            Some((12, 2))
         );
     }
 
