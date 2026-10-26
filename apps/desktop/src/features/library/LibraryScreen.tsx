@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Plus, Sparkle, X } from '@phosphor-icons/react'
-import { open, save } from '@tauri-apps/plugin-dialog'
-import { check, type Update } from '@tauri-apps/plugin-updater'
-import { relaunch } from '@tauri-apps/plugin-process'
+import { Plus } from '@phosphor-icons/react'
+import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   dailySeries,
@@ -29,15 +27,7 @@ import {
   type OpenedBook,
 } from '../../lib/book-import'
 import { readCachedCover, writeCachedCover } from '../../lib/cover-store'
-import { downloadText } from '../../lib/download'
-import {
-  exportSnapshot,
-  importSnapshot,
-  importStoredBook,
-  readStorageEstimate,
-  requestPersistentStorage,
-  StorageQuotaError,
-} from '../../lib/web-store'
+import { importStoredBook, requestPersistentStorage, StorageQuotaError } from '../../lib/web-store'
 import { loadBookStats, loadReadingStats, type ReadingStats } from '../../lib/reading-stats'
 import { loadReadingGoals, saveReadingGoals } from '../../lib/reading-goal'
 import { mapWithConcurrency } from '../../lib/pool'
@@ -51,7 +41,6 @@ import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
 import { NotesView } from './NotesView'
 import { ShelfView } from './ShelfView'
-import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
@@ -82,7 +71,7 @@ import {
   type SortKey,
   type ViewMode,
 } from './shelf-view'
-import { AiProviderForm, useAiProviders } from '../settings/AiProviderSettings'
+import { SettingsDialog } from '../settings/SettingsDialog'
 
 // Module-level: survives LibraryScreen remounts (reader roundtrips) within
 // the app run. Blob URLs are per-run by nature, so no cross-restart cache.
@@ -122,11 +111,6 @@ function withViewTransition(apply: () => void): void {
   })
 }
 
-/** 设置弹窗的分区。顺序即左右位置,切换动画的方向由它推出来。
- *  阅读目标不住这里 —— 它住统计页(目标与进度是同一件事)。 */
-const SETTINGS_TABS = ['appearance', 'ai', 'data'] as const
-type SettingsTab = (typeof SETTINGS_TABS)[number]
-
 interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
   /** 并排打开两本(批量条里的「对照阅读」)。 */
@@ -136,9 +120,6 @@ interface LibraryScreenProps {
 
 export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
-  /** 浏览器端「从备份恢复」的文件选择器。用持久 input 而不是临时 create +
-   * click():那样用户一取消,等待 change 的 Promise 就永远悬着。 */
-  const restoreInputRef = useRef<HTMLInputElement>(null)
   /** `?demoShelf` 种下的示例书架;挡住 loadBooks,免得它被真实书架覆盖。 */
   const demoSeeded = useRef(false)
   const [books, setBooks] = useState<readonly ShelfBook[]>([])
@@ -267,12 +248,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   /** 网格一行几本书('auto' = 自适应);与视图模式同一套 localStorage 习惯。 */
   const [shelfColumns, setShelfColumns] = useState<ShelfColumns>(columnsFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance')
-  /**
-   * 切分区时的行进方向。往右切(外观→AI→备份)= 新的一页从右边进来,
-   * 往左切则相反 —— 方向感来自 tab 在 SETTINGS_TABS 里的相对位置。
-   */
-  const [settingsDir, setSettingsDir] = useState<'forward' | 'back'>('forward')
   const [syncOpen, setSyncOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
   const [appTheme, setAppTheme] = useState<AppTheme>(
@@ -283,8 +258,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         ? (localStorage.getItem('deepread.app-theme') as AppTheme)
         : 'pure-white',
   )
-  const [backupBusy, setBackupBusy] = useState(false)
-  const [backupMsg, setBackupMsg] = useState<string | null>(null)
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   /** 正在编辑书籍信息的那一本;null = 弹窗关闭。 */
@@ -318,18 +291,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     withViewTransition(() => setView(next))
   }
 
-  /**
-   * 切设置分区:先定方向,再换页。动画落在 `.settings-body` 上 ——
-   * `key={settingsTab}` 让它随分区重建,动画因此每次都重播。
-   */
-  const changeSettingsTab = (next: SettingsTab): void => {
-    if (next === settingsTab) return
-    setSettingsDir(
-      SETTINGS_TABS.indexOf(next) > SETTINGS_TABS.indexOf(settingsTab) ? 'forward' : 'back',
-    )
-    setSettingsTab(next)
-  }
-
   const [stats, setStats] = useState<ReadingStats | null>(null)
   /** 每本书累计读了多少(排行榜)。 */
   const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
@@ -360,25 +321,11 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   const [notes, setNotes] = useState<readonly NoteEntry[]>([])
   const [notesLoaded, setNotesLoaded] = useState(false)
   const [notesError, setNotesError] = useState<string | null>(null)
-  const [update, setUpdate] = useState<Update | null>(null)
-  const [updateMsg, setUpdateMsg] = useState<string | null>(null)
-  const [updateBusy, setUpdateBusy] = useState(false)
 
   useEffect(() => {
     document.documentElement.dataset['appTheme'] = appTheme
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
-
-  // 设置弹窗保持 Esc 关闭;统计已经是页面,不再需要「关掉」。
-  useEffect(() => {
-    if (!settingsOpen) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      setSettingsOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [settingsOpen])
 
   /**
    * 申请「持久化」存储。
@@ -390,14 +337,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   useEffect(() => {
     if (isTauriRuntime()) return
     void requestPersistentStorage()
-  }, [])
-
-  /** 浏览器存储用量;桌面端没有这个概念(书留在用户自己的磁盘上)。 */
-  const [storageUsage, setStorageUsage] = useState<{ usage: number; quota: number } | null>(null)
-
-  useEffect(() => {
-    if (isTauriRuntime()) return
-    void readStorageEstimate().then(setStorageUsage)
   }, [])
 
   /**
@@ -744,160 +683,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     },
     [forgetBook],
   )
-
-  /**
-   * 备份。
-   *
-   * 桌面端:Rust 把 SQLite 拷一份到用户选的路径。
-   * 浏览器端:把整个 IndexedDB(含书籍字节)序列化成 JSON 下载。**这条分支是
-   * 必须的** —— 浏览器里的数据本来就可能被清掉,而 `save()`(Tauri 的保存对话
-   * 框)在那边根本不存在,直接调会炸。
-   */
-  const runBackup = useCallback(async (): Promise<void> => {
-    if (!isTauriRuntime()) {
-      setBackupBusy(true)
-      try {
-        const { text, bytes, checksum } = await exportSnapshot()
-        downloadText(
-          `deepread-backup-${new Date().toISOString().slice(0, 10)}.json`,
-          text,
-          'application/json',
-        )
-        setBackupMsg(
-          `已备份 ${formatBytes(bytes)} · 校验和 ${checksum.slice(0, 12)}…(校验和已写进备份文件)`,
-        )
-      } catch (backupError) {
-        setBackupMsg(toAppError(backupError).message)
-      } finally {
-        setBackupBusy(false)
-      }
-      return
-    }
-    const path = await save({
-      defaultPath: `deepread-backup-${new Date().toISOString().slice(0, 10)}.db`,
-      filters: [{ name: 'SQLite 备份', extensions: ['db'] }],
-    })
-    if (!path) return
-    setBackupBusy(true)
-    try {
-      const response = await invokeCommand('storage.backup', { path })
-      setBackupMsg(
-        `已备份 ${formatBytes(response.bytes)} · 校验和 ${response.checksum.slice(0, 12)}…`,
-      )
-    } catch (backupError) {
-      setBackupMsg(toAppError(backupError).message)
-    } finally {
-      setBackupBusy(false)
-    }
-  }, [])
-
-  const IGNORED_VERSION_KEY = 'deepread.update.ignored'
-
-  const checkForUpdates = useCallback(async (): Promise<void> => {
-    setUpdateBusy(true)
-    setUpdateMsg(null)
-    try {
-      const ignored = localStorage.getItem(IGNORED_VERSION_KEY)
-      const found = await check()
-      if (found === null) {
-        setUpdate(null)
-        setUpdateMsg('当前已是最新版本。')
-      } else if (found.version === ignored) {
-        setUpdate(null)
-        setUpdateMsg(`已忽略版本 ${ignored},同一版本不再提示。`)
-      } else {
-        setUpdate(found)
-        setUpdateMsg(`发现新版本 ${found.version}。`)
-      }
-    } catch (checkError) {
-      // Honest failure (spec §132): no update source configured or offline.
-      setUpdateMsg(toAppError(checkError).message)
-    } finally {
-      setUpdateBusy(false)
-    }
-  }, [])
-
-  const installUpdate = useCallback(async (): Promise<void> => {
-    const found = update
-    if (!found) return
-    setUpdateBusy(true)
-    setUpdateMsg('正在下载并安装,完成后将自动重启…')
-    try {
-      await found.downloadAndInstall()
-      await relaunch()
-    } catch (installError) {
-      setUpdateMsg(toAppError(installError).message)
-      setUpdateBusy(false)
-    }
-  }, [update])
-
-  const ignoreUpdate = useCallback((): void => {
-    if (update) localStorage.setItem(IGNORED_VERSION_KEY, update.version)
-    setUpdate(null)
-    setUpdateMsg(`已忽略版本 ${update?.version}。`)
-  }, [update])
-
-  /**
-   * 恢复一份 web 端备份。
-   *
-   * 桌面端要旁路读一个 `.sha256` 文件;浏览器端没这回事 —— 校验和就写在备份
-   * 文件里(`exportSnapshot` 放进去的),`importSnapshot` 会先对上再动库。
-   */
-  const restoreBackupFile = useCallback(async (file: File, reload: () => void): Promise<void> => {
-    setBackupBusy(true)
-    try {
-      await importSnapshot(await file.text())
-      setBackupMsg('恢复完成:书架、进度与批注已还原。')
-      reload()
-    } catch (restoreError) {
-      setBackupMsg(toAppError(restoreError).message)
-    } finally {
-      setBackupBusy(false)
-    }
-  }, [])
-
-  const runRestore = useCallback(async (reload: () => void): Promise<void> => {
-    // 浏览器端没有 `open()` 对话框,走隐藏的 file input(见下方 .library-file-input)。
-    if (!isTauriRuntime()) {
-      restoreInputRef.current?.click()
-      return
-    }
-    const backupPath = await open({
-      multiple: false,
-      directory: false,
-      // .db 是本机 SQLite 快照,.json 是浏览器端导出的那份 —— 后者能被收下,
-      // 于是"在浏览器里读的书"可以接着在桌面版读。
-      filters: [{ name: '备份文件', extensions: ['db', 'json'] }],
-    })
-    if (!backupPath || typeof backupPath !== 'string') return
-    // JSON 备份没有旁路的 .sha256 文件:它的校验和是内联在文件里的,而 Rust
-    // 那边靠 serde 的严格解析兜底(见 import_json_snapshot 的说明)。
-    const isBrowserBackup = backupPath.toLowerCase().endsWith('.json')
-    let checksum = ''
-    if (!isBrowserBackup) {
-      const checksumPath = `${backupPath}.sha256`
-      try {
-        const response = await fetch(convertFileSrc(checksumPath))
-        if (response.ok) checksum = (await response.text()).trim()
-      } catch {
-        // checksum file optional; Rust validates integrity regardless
-      }
-      if (!checksum) {
-        setBackupMsg('未找到校验和文件(.sha256),无法确认备份完整性。')
-        return
-      }
-    }
-    setBackupBusy(true)
-    try {
-      await invokeCommand('storage.restore', { path: backupPath, checksum })
-      setBackupMsg('恢复完成:书架、进度与批注已还原。')
-      reload()
-    } catch (restoreError) {
-      setBackupMsg(toAppError(restoreError).message)
-    } finally {
-      setBackupBusy(false)
-    }
-  }, [])
 
   const triggerImport = useCallback((): void => {
     if (isTauriRuntime()) void importFromDialog()
@@ -1443,17 +1228,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     })()
   }
 
-  const {
-    providers: aiProviders,
-    loaded: aiLoaded,
-    activeId: aiActiveId,
-    configForm: aiConfigForm,
-    setConfigForm: setAiConfigForm,
-    saveProvider: saveAiProvider,
-    removeProvider: removeAiProvider,
-    error: aiProviderError,
-  } = useAiProviders()
-
   return (
     <div
       className={`library${dragging ? ' is-dragging' : ''}${sidebarOpen ? '' : ' is-sidebar-hidden'}${isTauriRuntime() ? '' : ' is-web'}`}
@@ -1749,237 +1523,12 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
       )}
 
       {settingsOpen && (
-        <div className="modal-overlay">
-          {/* 遮罩本身不可点:关闭走这个铺满背景的按钮(键盘可达),面板在上层。 */}
-          <button
-            type="button"
-            className="modal-dismiss"
-            aria-label="关闭设置"
-            onClick={() => setSettingsOpen(false)}
-          />
-          <dialog className="modal-panel" open aria-label="设置">
-            <header className="modal-head">
-              <strong className="modal-title">设置</strong>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => setSettingsOpen(false)}
-                title="关闭"
-              >
-                <X size={14} weight="regular" aria-hidden />
-              </button>
-            </header>
-            <SlidingIndicator
-              activeKey={settingsTab}
-              className="settings-tabs"
-              role="tablist"
-              ariaLabel="设置分区"
-              activeSelector="button.is-active"
-            >
-              <button
-                type="button"
-                className={settingsTab === 'appearance' ? 'is-active' : ''}
-                onClick={() => changeSettingsTab('appearance')}
-                role="tab"
-                aria-selected={settingsTab === 'appearance'}
-              >
-                外观
-              </button>
-              <button
-                type="button"
-                className={settingsTab === 'ai' ? 'is-active' : ''}
-                onClick={() => changeSettingsTab('ai')}
-                role="tab"
-                aria-selected={settingsTab === 'ai'}
-              >
-                <Sparkle size={13} weight="fill" aria-hidden /> AI 服务
-              </button>
-              <button
-                type="button"
-                className={settingsTab === 'data' ? 'is-active' : ''}
-                onClick={() => changeSettingsTab('data')}
-                role="tab"
-                aria-selected={settingsTab === 'data'}
-              >
-                备份与更新
-              </button>
-            </SlidingIndicator>
-
-            {/* 分区内容。`key` 让它在换页时重建,滑入动画才会重播;方向跟着
-                tab 的相对位置走(往右切 = 从右边进来)。 */}
-            <div key={settingsTab} className="settings-body" data-dir={settingsDir}>
-              {settingsTab === 'appearance' && (
-                <>
-                  <section className="modal-section">
-                    <p className="modal-section-label">界面主题</p>
-                    <div className="theme-grid">
-                      {APP_THEMES.map((theme) => (
-                        <button
-                          key={theme.id}
-                          type="button"
-                          className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
-                          onClick={() => setAppTheme(theme.id)}
-                          aria-pressed={appTheme === theme.id}
-                        >
-                          <span
-                            className="theme-swatch-color"
-                            style={{ background: theme.swatch, color: theme.ink }}
-                          >
-                            <span
-                              className="theme-swatch-line"
-                              style={{ background: theme.ink, opacity: 0.85 }}
-                            />
-                            <span
-                              className="theme-swatch-line"
-                              style={{ background: theme.ink, opacity: 0.55 }}
-                            />
-                            <span
-                              className="theme-swatch-line"
-                              style={{ background: theme.ink, opacity: 0.35 }}
-                            />
-                            <span
-                              className="theme-swatch-dot"
-                              style={{ background: theme.accent }}
-                            />
-                          </span>
-                          {theme.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                  <section className="modal-section">
-                    <p className="modal-section-label">书架偏好(自动保存)</p>
-                    <p className="ai-privacy">
-                      排序与视图选择自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa
-                      面板设置。
-                    </p>
-                  </section>
-                </>
-              )}
-
-              {settingsTab === 'ai' && (
-                <section className="modal-section">
-                  <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
-                  {/*
-                   * 浏览器端不给表单。填了也存不下 —— 密钥在那边没有安全的地方
-                   * 放(IndexedDB 是明文的),而且直连各家 API 会被 CORS 拦下。
-                   * 与其让用户填完再撞一句「Tauri 运行时不可用」,不如一开始就
-                   * 说清楚;那也是「点了没反应」和「明确说没有」的区别。
-                   */}
-                  {!isTauriRuntime() ? (
-                    <p className="ai-privacy">
-                      AI 助手与云端朗读仅在桌面版提供。浏览器里没有安全存放 API
-                      密钥的地方(本地存储是明文的),直连各家服务也会被跨域策略拦下。
-                    </p>
-                  ) : (
-                    <>
-                      <AiProviderForm
-                        providers={aiProviders}
-                        configForm={aiConfigForm}
-                        onFormChange={setAiConfigForm}
-                        onSave={() => saveAiProvider()}
-                        onRemove={removeAiProvider}
-                        onApplyPreset={(preset) => {
-                          setAiConfigForm((form) => ({
-                            ...form,
-                            name: preset.label,
-                            baseUrl: preset.baseUrl,
-                            model: preset.model,
-                          }))
-                        }}
-                        error={aiProviderError}
-                      />
-                      {aiLoaded && aiProviders.length > 0 && (
-                        <p className="ai-privacy">
-                          配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
-                          {aiProviders.find((provider) => provider.id === aiActiveId)?.name ??
-                            '未选择'}
-                          。
-                        </p>
-                      )}
-                    </>
-                  )}
-                </section>
-              )}
-
-              {settingsTab === 'data' && (
-                <>
-                  <section className="modal-section">
-                    <p className="modal-section-label">备份与恢复</p>
-                    <div className="modal-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => void runBackup()}
-                        disabled={backupBusy}
-                      >
-                        {/* 桌面端要选存到哪;浏览器端直接下载,没有"到哪"这一步。 */}
-                        {backupBusy ? '备份中…' : isTauriRuntime() ? '备份到…' : '导出备份'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => void runRestore(loadBooks)}
-                        disabled={backupBusy}
-                      >
-                        {backupBusy ? '恢复中…' : '从备份恢复…'}
-                      </button>
-                    </div>
-                    {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
-                    {/* 浏览器里书是自己存下来的,空间有上限 —— 在"备份"这一格
-                        顺带如实告诉用户还剩多少,别等写满了才发现。 */}
-                    {!isTauriRuntime() && storageUsage !== null && storageUsage.quota > 0 && (
-                      <p className="library-note">
-                        浏览器已用 {formatBytes(storageUsage.usage)},配额约{' '}
-                        {formatBytes(storageUsage.quota)}。
-                      </p>
-                    )}
-                  </section>
-                  <section className="modal-section">
-                    <p className="modal-section-label">更新</p>
-                    <div className="modal-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => void checkForUpdates()}
-                        disabled={updateBusy}
-                      >
-                        {updateBusy ? '检查中…' : '检查更新'}
-                      </button>
-                      {update !== null && (
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          onClick={() => void installUpdate()}
-                          disabled={updateBusy}
-                        >
-                          下载并安装
-                        </button>
-                      )}
-                      {update !== null && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={ignoreUpdate}
-                          disabled={updateBusy}
-                        >
-                          忽略此版本
-                        </button>
-                      )}
-                    </div>
-                    {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
-                  </section>
-                </>
-              )}
-            </div>
-
-            <footer className="modal-foot">
-              <button type="button" className="btn-primary" onClick={() => setSettingsOpen(false)}>
-                完成
-              </button>
-            </footer>
-          </dialog>
-        </div>
+        <SettingsDialog
+          appTheme={appTheme}
+          onThemeChange={setAppTheme}
+          onRestored={loadBooks}
+          onClose={() => setSettingsOpen(false)}
+        />
       )}
 
       <input
@@ -1991,17 +1540,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         onChange={(event) => {
           void importFromBrowserFiles(Array.from(event.target.files ?? []))
           event.target.value = ''
-        }}
-      />
-      <input
-        ref={restoreInputRef}
-        type="file"
-        accept=".json,application/json"
-        className="visually-hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0]
-          event.target.value = ''
-          if (file !== undefined) void restoreBackupFile(file, loadBooks)
         }}
       />
     </div>
