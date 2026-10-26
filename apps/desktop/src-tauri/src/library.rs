@@ -627,7 +627,18 @@ fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
     .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to read book").with_cause(err))
 }
 
-pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, AppError> {
+/// 导入的「无库阶段」:路径校验 + 格式判定 + 全文件哈希。哈希 100MB+ 的书
+/// 可能要数秒,必须发生在拿数据库锁之前 —— 否则这段时间所有 IPC(包括
+/// 翻页进度保存)都阻塞在 Mutex 上。
+pub struct PreparedImport {
+    path: PathBuf,
+    file_name: String,
+    format: &'static str,
+    hash: String,
+    size: u64,
+}
+
+pub fn prepare_import(raw_path: &str) -> Result<PreparedImport, AppError> {
     let path = PathBuf::from(raw_path);
     let file_name = path
         .file_name()
@@ -651,8 +662,33 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
     }
 
     let (hash, size) = hash_file(&path)?;
-    // Re-importing a known file keeps its added_at and everything the user or the
-    // book itself已经填好的元数据 —— 重新导入通常是因为文件搬了位置,不是要重来一遍。
+    Ok(PreparedImport {
+        path,
+        file_name,
+        format,
+        hash,
+        size,
+    })
+}
+
+pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, AppError> {
+    commit_import(conn, prepare_import(raw_path)?)
+}
+
+/// 导入的「落库阶段」:按哈希 upsert。重导入已知文件保留 added_at 和用户或
+/// 书籍已填好的元数据 —— 重新导入通常是因为文件搬了位置,不是要重来一遍。
+pub fn commit_import(
+    conn: &Connection,
+    prepared: PreparedImport,
+) -> Result<LibraryBook, AppError> {
+    let PreparedImport {
+        path,
+        file_name,
+        format,
+        hash,
+        size,
+    } = prepared;
+    let raw_path = path.to_string_lossy().to_string();
     let existing: Option<ExistingBookMeta> = conn
         .query_row(
             "SELECT added_at, display_name, tags, author, subtitle, publisher, language, finished_at
@@ -834,15 +870,24 @@ pub fn library_list(db: tauri::State<'_, Db>) -> Result<LibraryListResponse, App
 }
 
 #[tauri::command(rename = "library.import")]
-pub fn library_import(
+pub async fn library_import(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     request: LibraryImportRequest,
 ) -> Result<LibraryImportResponse, AppError> {
+    // 哈希在阻塞线程池上做、且发生在拿数据库锁之前:大书哈希数秒期间,
+    // 其他命令(翻页进度保存等)全程照常工作。
+    let path = request.path;
+    let prepared =
+        tauri::async_runtime::spawn_blocking(move || prepare_import(&path))
+            .await
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "import task failed").with_cause(err)
+            })??;
     let conn =
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
-    let book = import_book(&conn, &request.path)?;
+    let book = commit_import(&conn, prepared)?;
     // Allow the asset protocol to serve exactly this file (user picked it, so
     // this does not widen the scope to any directory).
     app.asset_protocol_scope()
