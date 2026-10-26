@@ -930,7 +930,14 @@ export class FoliateAdapter implements ReaderEngine {
       const response = await fetch(source.url)
       if (this.#destroyed) return
       if (!response.ok) {
-        throw new AppError(ErrorCodes.bookOpenFailed, `无法读取书籍数据(${source.url})。`)
+        // 桌面端最常见原因是书文件被移动/删除(asset 协议 404)。给用户能读的
+        // 书名和下一步,别把百分号编码的 asset URL 整串甩到报错页;URL 与
+        // 状态码进 context,排查走日志。
+        throw new AppError(
+          ErrorCodes.bookOpenFailed,
+          `无法读取「${source.name ?? '该书'}」的文件,它可能已被移动或删除,请重新导入。`,
+          { context: { url: source.url, status: response.status } },
+        )
       }
       const blob = await response.blob()
       // The kernel dispatches zip-based formats by file extension/type, which a
