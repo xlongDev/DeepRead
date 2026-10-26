@@ -2436,7 +2436,9 @@ button:disabled {
 }
 
 .segmented button.is-active {
-  background: var(--color-surface);
+  /* 夜间主题里 surface ≈ 面板底,纯 surface 的选中底会隐身;掺一点文字色
+     保证对 track(surface 82%)永远有对比,浅色下只是轻微变灰。 */
+  background: color-mix(in srgb, var(--color-text-primary) 12%, var(--color-surface));
   color: var(--color-accent);
   font-weight: var(--font-weight-medium);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
@@ -2453,7 +2455,7 @@ button:disabled {
   top: 0;
   left: 0;
   border-radius: var(--radius-full);
-  background: var(--color-surface);
+  background: color-mix(in srgb, var(--color-text-primary) 12%, var(--color-surface));
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
   transition:
     translate 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),

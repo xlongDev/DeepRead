@@ -14,6 +14,10 @@ import { convertFileSrc } from '../../lib/book-import'
  *
  * 新增的三张各补一个空缺:苔绿是久读护眼的豆沙绿,牛皮纸是比羊皮更沉的
  * 复古纸,冷夜蓝给夜读一个冷调选择(原来的「夜间」是暖黑,看久了发闷)。
+ * 第二批(同样追加在末尾)补的是无彩与纯黑:云灰是无彩冷白纸(羊皮/牛皮/
+ * 苔绿全都带色偏),石墨是中性深灰(「夜间」偏棕、「冷夜蓝」偏蓝),纯黑给
+ * OLED 屏一个真正不发光的选择 —— 三张都按 Apple 的二元节奏取色,油墨一律
+ * 不用纯黑/纯白(#2c2c2e / #cdcac4 / #b6b3ad),免得高对比刺眼。
  * `colorScheme` 驱动两件事:内核的配色注入,以及 PDF 夜间重着色
  * (engine `#applyPDFPageColors` 取 dark 的 fg/bg);夜读模式的一键切换
  * 取第一张 dark(见 ReaderScreen 的 night toggle)。
@@ -42,6 +46,18 @@ export const READER_THEMES: readonly { readonly label: string; readonly theme: R
   {
     label: '冷夜蓝',
     theme: { name: 'NightBlue', background: '#121a22', foreground: '#aebecb', colorScheme: 'dark' },
+  },
+  {
+    label: '云灰',
+    theme: { name: 'Cloud', background: '#f2f3f5', foreground: '#2c2c2e', colorScheme: 'light' },
+  },
+  {
+    label: '石墨',
+    theme: { name: 'Graphite', background: '#1c1c1e', foreground: '#cdcac4', colorScheme: 'dark' },
+  },
+  {
+    label: '纯黑',
+    theme: { name: 'Oled', background: '#000000', foreground: '#b6b3ad', colorScheme: 'dark' },
   },
 ]
 

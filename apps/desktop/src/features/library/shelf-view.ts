@@ -144,6 +144,9 @@ export type AppTheme =
   | 'oled'
   | 'liquid-glass'
   | 'mist'
+  | 'graphite'
+  | 'midnight'
+  | 'sand'
 
 export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   added: '最近添加',
@@ -169,6 +172,9 @@ export const APP_THEMES: readonly {
   { id: 'oled', label: 'OLED 纯黑', swatch: '#000000', ink: '#e8e5df', accent: '#7d9ef7' },
   { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec', ink: '#1c2430', accent: '#3d6deb' },
   { id: 'mist', label: '晨雾', swatch: '#ecf0f4', ink: '#1e2732', accent: '#3d6deb' },
+  { id: 'graphite', label: '石墨', swatch: '#1c1c1e', ink: '#f5f5f7', accent: '#0a84ff' },
+  { id: 'midnight', label: '午夜', swatch: '#0b1220', ink: '#eef2fa', accent: '#7aa2ff' },
+  { id: 'sand', label: '沙丘', swatch: '#e9e4dc', ink: '#2b2823', accent: '#0a6ccd' },
 ]
 
 export const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {

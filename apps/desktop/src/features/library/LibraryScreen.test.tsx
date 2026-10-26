@@ -20,6 +20,7 @@ import {
   type NoteEntry,
 } from '@deepread/shared'
 import { LibraryScreen } from './LibraryScreen'
+import { APP_THEMES } from './shelf-view'
 import { invokeCommand } from '../../lib/ipc'
 import { readCachedCover } from '../../lib/cover-store'
 import { extractCover } from '@deepread/reader-adapter'
@@ -1031,7 +1032,9 @@ describe('LibraryScreen 弹窗', () => {
     expect(within(dialog).getByText('外观')).toBeInTheDocument()
     expect(within(dialog).getByText('AI 服务')).toBeInTheDocument()
     expect(within(dialog).getByText('备份与更新')).toBeInTheDocument()
-    expect(document.querySelectorAll('.theme-swatch').length).toBe(9)
+    // 个数从 APP_THEMES 派生:加主题不该让这条断言变红(它锁的是
+    // 「列全了」,不是「有 12 个」)。
+    expect(document.querySelectorAll('.theme-swatch').length).toBe(APP_THEMES.length)
   })
 
   it('备份与更新分区提供备份、恢复、检查更新三个动作', async () => {
