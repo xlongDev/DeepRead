@@ -122,6 +122,7 @@ import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
+import { newTaskId } from '../../lib/ai-chat'
 import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
@@ -1515,7 +1516,7 @@ export function ReaderScreen({
       error: null,
       loading: true,
     })
-    const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+    const taskId = newTaskId()
     let buffer = ''
     const parser = createSseParser((data) => {
       const delta = extractDelta(data)
@@ -1951,7 +1952,7 @@ export function ReaderScreen({
   const inferChapterCandidates = useCallback(async (): Promise<readonly ChapterRuleCandidate[]> => {
     const provider = aiProviders[0]
     if (provider === undefined) return []
-    const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+    const taskId = newTaskId()
     let full = ''
     const parser = createSseParser((data) => {
       const delta = extractDelta(data)

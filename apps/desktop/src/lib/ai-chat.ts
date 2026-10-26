@@ -8,8 +8,13 @@ import { extractDelta, type ChatMessage } from '@deepread/ai-core'
 import { AppError, coerceErrorCode, toAppError } from '@deepread/shared'
 import { invokeCommand, invokeStreamingCommand } from './ipc'
 
+/** 流式 AI 任务的 id:此前这个模板串在 AiDrawer/ReaderScreen/这里各复制了一份。 */
+export function newTaskId(): string {
+  return `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+}
+
 export function runChatOnce(configId: string, messages: readonly ChatMessage[]): Promise<string> {
-  const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+  const taskId = newTaskId()
   return new Promise<string>((resolve, reject) => {
     let text = ''
     let settled = false

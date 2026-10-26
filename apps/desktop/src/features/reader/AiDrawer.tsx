@@ -50,9 +50,57 @@ import {
   type ConversionRule,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
+import { newTaskId } from '../../lib/ai-chat'
 import { useAiProviders } from '../settings/AiProviderSettings'
 import { GraphView } from './GraphView'
 import { DropdownMenu } from '../../components/DropdownMenu'
+
+/* ---------- 浏览器 dev 的 mock 通道 ----------
+   浏览器模式没有 Rust 代理,直连本地 mock 服务跑通完整流式管线。此前
+   embeddings 与 chat 的 fetch+读流样板在本文件里各复制了两三份,收拢到这。 */
+
+/** mock embeddings:文本 → 向量。 */
+async function mockEmbed(texts: readonly string[]): Promise<readonly number[][]> {
+  const response = await fetch('/mock-ai/v1/embeddings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer sk-mock-test-key' },
+    body: JSON.stringify({ model: 'mock-embedding', input: [...texts] }),
+  })
+  if (!response.ok) throw new Error(`mock embeddings 错误(${response.status})`)
+  const payload = (await response.json()) as { data: { embedding: number[] }[] }
+  return payload.data.map((item) => item.embedding)
+}
+
+/** mock 流式对话:delta 逐段交给 onDelta,返回完整文本。key 取 ?mockKey=。 */
+async function streamMockChat(
+  messages: readonly ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<string> {
+  const mockKey = new URLSearchParams(window.location.search).get('mockKey') ?? 'sk-mock-test-key'
+  const response = await fetch(chatEndpoint('/mock-ai/v1'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${mockKey}` },
+    body: buildChatBody({ model: 'mock-model', messages: [...messages] }),
+  })
+  if (!response.ok || !response.body) throw new Error(`mock 服务错误(${response.status})`)
+  let full = ''
+  const parser = createSseParser((data) => {
+    const delta = extractDelta(data)
+    if (delta.type === 'delta') {
+      full += delta.text
+      onDelta(delta.text)
+    }
+  })
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    parser.push(decoder.decode(value, { stream: true }))
+  }
+  parser.end()
+  return full
+}
 
 interface AiDrawerProps {
   /** Current selection text (if any) is offered as quick context. */
@@ -161,29 +209,16 @@ export function AiDrawer({
     setIndexStatus('building')
     try {
       const chunks = buildRagChunks(sections)
-      let vectors: number[][]
+      let vectors: readonly number[][]
       if (isTauriRuntime() && activeId) {
         const response = await invokeCommand('ai.embed', {
-          taskId: `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
+          taskId: newTaskId(),
           configId: activeId,
           texts: chunks.map((chunk) => chunk.text),
         })
         vectors = response.vectors
       } else {
-        const response = await fetch('/mock-ai/v1/embeddings', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: 'Bearer sk-mock-test-key',
-          },
-          body: JSON.stringify({
-            model: 'mock-embedding',
-            input: chunks.map((chunk) => chunk.text),
-          }),
-        })
-        if (!response.ok) throw new Error(`mock embeddings 错误(${response.status})`)
-        const payload = (await response.json()) as { data: { embedding: number[] }[] }
-        vectors = payload.data.map((item) => item.embedding)
+        vectors = await mockEmbed(chunks.map((chunk) => chunk.text))
       }
       const index: AiIndexPayload = {
         chunks: chunks.map((chunk, i) => ({
@@ -249,40 +284,21 @@ export function AiDrawer({
         content: string
       }[],
     ): Promise<string> => {
+      if (!isTauriRuntime() || !activeId) {
+        return streamMockChat(chatMessages, () => {})
+      }
       let full = ''
       const parser = createSseParser((data) => {
         const delta = extractDelta(data)
         if (delta.type === 'delta') full += delta.text
       })
-      if (isTauriRuntime() && activeId) {
-        const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-        await invokeStreamingCommand(
-          'ai.chat',
-          { taskId, configId: activeId, messages: [...chatMessages] },
-          (event) => {
-            if (event.type === 'chunk') parser.push(event.data)
-          },
-        )
-      } else {
-        const response = await fetch(chatEndpoint('/mock-ai/v1'), {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: 'Bearer sk-mock-test-key',
-          },
-          body: buildChatBody({ model: 'mock-model', messages: chatMessages }),
-        })
-        if (!response.ok || !response.body) {
-          throw new Error(`mock 服务错误(${response.status})`)
-        }
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          parser.push(decoder.decode(value, { stream: true }))
-        }
-      }
+      await invokeStreamingCommand(
+        'ai.chat',
+        { taskId: newTaskId(), configId: activeId, messages: [...chatMessages] },
+        (event) => {
+          if (event.type === 'chunk') parser.push(event.data)
+        },
+      )
       parser.end()
       return full
     },
@@ -310,7 +326,6 @@ export function AiDrawer({
   const generateInsight = useCallback(
     async (kind: 'summary' | 'outline' | 'timeline' | 'concepts'): Promise<void> => {
       if (insightPhase === 'streaming' || sections.length === 0) return
-      const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
       const insightMessages =
         kind === 'summary'
           ? buildSummaryMessages(sections, title)
@@ -322,41 +337,8 @@ export function AiDrawer({
       setInsightPhase('streaming')
       setBusyKind(kind)
       setError(null)
-      let full = ''
-      const parser = createSseParser((data) => {
-        const delta = extractDelta(data)
-        if (delta.type === 'delta') full += delta.text
-      })
       try {
-        if (isTauriRuntime() && activeId) {
-          await invokeStreamingCommand(
-            'ai.chat',
-            { taskId, configId: activeId, messages: [...insightMessages] },
-            (event) => {
-              if (event.type === 'chunk') parser.push(event.data)
-            },
-          )
-        } else {
-          const response = await fetch(chatEndpoint('/mock-ai/v1'), {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              authorization: 'Bearer sk-mock-test-key',
-            },
-            body: buildChatBody({ model: 'mock-model', messages: insightMessages }),
-          })
-          if (!response.ok || !response.body) {
-            throw new Error(`mock 服务错误(${response.status})`)
-          }
-          const reader = response.body.getReader()
-          const decoder = new TextDecoder()
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-            parser.push(decoder.decode(value, { stream: true }))
-          }
-        }
-        parser.end()
+        const full = await streamChatText(insightMessages)
         if (kind === 'summary') {
           const insight = parseSummaryInsight(full)
           await persistArtifact(kind, insight as unknown as Record<string, unknown>)
@@ -385,7 +367,7 @@ export function AiDrawer({
         setBusyKind(null)
       }
     },
-    [activeId, insightPhase, persistArtifact, sections, title],
+    [insightPhase, persistArtifact, sections, streamChatText, title],
   )
 
   const runAiRepair = useCallback(async (): Promise<void> => {
@@ -509,7 +491,7 @@ export function AiDrawer({
     const configId = activeId
     if (!question || phase === 'streaming' || (!browserMode && !configId)) return
 
-    const taskId = `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+    const taskId = newTaskId()
     taskIdRef.current = taskId
 
     // System context per scope (spec §34): selection / current chapter / RAG.
@@ -529,22 +511,13 @@ export function AiDrawer({
         let queryVector: readonly number[]
         if (isTauriRuntime() && activeId) {
           const embedResponse = await invokeCommand('ai.embed', {
-            taskId: `task-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`,
+            taskId: newTaskId(),
             configId: activeId,
             texts: [question],
           })
           queryVector = embedResponse.vectors[0] ?? []
         } else {
-          const embedFetch = await fetch('/mock-ai/v1/embeddings', {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              authorization: 'Bearer sk-mock-test-key',
-            },
-            body: JSON.stringify({ model: 'mock-embedding', input: [question] }),
-          })
-          const payload = (await embedFetch.json()) as { data: { embedding: number[] }[] }
-          queryVector = payload.data[0]?.embedding ?? []
+          queryVector = (await mockEmbed([question]))[0] ?? []
         }
         retrieved = retrieve(index.chunks, queryVector)
       } catch {
@@ -581,74 +554,45 @@ export function AiDrawer({
     setError(null)
     requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }))
 
-    const parser = createSseParser((data) => {
-      const delta = extractDelta(data)
-      if (delta.type === 'delta') {
-        setMessages((current) => {
-          const last = current[current.length - 1]
-          if (!last || last.role !== 'assistant') return current
-          return [
-            ...current.slice(0, -1),
-            { role: 'assistant', content: last.content + delta.text, streaming: true },
-          ]
-        })
-      }
-    })
-    // Browser (non-Tauri) dev path: talk straight to a local mock server so
-    // the full stream pipeline is exercisable without the Rust proxy. The key
-    // comes from ?mockKey= and is never persisted.
-    if (!isTauriRuntime()) {
-      const params = new URLSearchParams(window.location.search)
-      const mockKey = params.get('mockKey')
-      const mockBase: string = '/mock-ai/v1'
-      if (!mockKey) {
-        setPhase('error')
-        setError('浏览器模式请加 ?mockKey=sk-mock-test-key 以启用 mock 服务。')
-        return
-      }
-      const response = await fetch(chatEndpoint(mockBase), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${mockKey}`,
-        },
-        body: buildChatBody({ model: 'mock-model', messages: outbound }),
+    const pushDelta = (text: string): void => {
+      setMessages((current) => {
+        const last = current[current.length - 1]
+        if (!last || last.role !== 'assistant') return current
+        return [
+          ...current.slice(0, -1),
+          { role: 'assistant', content: last.content + text, streaming: true },
+        ]
       })
-      if (!response.ok || !response.body) {
-        setPhase('error')
-        setError(`mock 服务错误(${response.status})`)
-        return
-      }
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        parser.push(decoder.decode(value, { stream: true }))
-      }
-      parser.end()
+    }
+    const markDone = (): void => {
       setPhase('idle')
       setMessages((current) => {
         const last = current[current.length - 1]
         if (!last || last.role !== 'assistant') return current
         return [...current.slice(0, -1), { role: 'assistant', content: last.content }]
       })
-      return
+      taskIdRef.current = null
     }
-
+    // Browser (non-Tauri) dev path: talk straight to a local mock server so
+    // the full stream pipeline is exercisable without the Rust proxy. The key
+    // comes from ?mockKey= and is never persisted. Tauri goes through the
+    // Rust proxy; both branches converge on pushDelta/markDone.
     try {
+      if (!isTauriRuntime()) {
+        await streamMockChat(outbound, pushDelta)
+        markDone()
+        return
+      }
+      const parser = createSseParser((data) => {
+        const delta = extractDelta(data)
+        if (delta.type === 'delta') pushDelta(delta.text)
+      })
       await invokeStreamingCommand(
         'ai.chat',
         { taskId, configId: configId ?? '', messages: [...outbound] },
         (event) => {
           if (event.type === 'done' || event.type === 'cancelled') {
-            setPhase('idle')
-            setMessages((current) => {
-              const last = current[current.length - 1]
-              if (!last || last.role !== 'assistant') return current
-              return [...current.slice(0, -1), { role: 'assistant', content: last.content }]
-            })
-            taskIdRef.current = null
+            markDone()
           } else if (event.type === 'error') {
             setPhase('error')
             setError(`${event.data.code}:${event.data.message}`)
