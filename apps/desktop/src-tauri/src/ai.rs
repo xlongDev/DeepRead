@@ -318,7 +318,7 @@ pub const MAX_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 /// Validate the artifact kind against the protocol enum.
 pub fn validate_artifact_kind(kind: &str) -> Result<(), AppError> {
     match kind {
-        "summary" | "outline" | "notes" | "characters" | "timeline" | "concepts" => Ok(()),
+        "summary" | "outline" | "notes" | "characters" | "timeline" | "concepts" | "chat" => Ok(()),
         other => Err(
             AppError::new(ErrorCode::SystemValidation, "未知的 artifact 类型")
                 .with_context("kind", Value::String(other.to_string())),
@@ -923,6 +923,7 @@ mod tests {
             Some(artifact)
         );
         assert_eq!(load_artifact(&conn, hash, "notes").unwrap(), None);
+        store_artifact(&conn, hash, "chat", &json!({"messages": []}), "t").unwrap();
         assert!(store_artifact(&conn, hash, "evil", &json!({}), "t").is_err());
         assert!(load_artifact(&conn, "../../evil", "summary").is_err());
         // B7 graph kinds round-trip through the same validation.

@@ -799,6 +799,8 @@ export const artifactKindSchema = z.enum([
   'characters',
   'timeline',
   'concepts',
+  /** 聊天记录(AiDrawer 的持久化会话)。 */
+  'chat',
 ])
 export const aiArtifactGetRequestSchema = z.object({
   bookHash,

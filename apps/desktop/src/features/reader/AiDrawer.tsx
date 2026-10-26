@@ -245,6 +245,37 @@ export function AiDrawer({
     }
   }, [activeId, bookHash, providers, sections])
 
+  // 聊天历史:开抽屉时恢复上次的会话(仅 user/assistant 两种角色)。
+  useEffect(() => {
+    let cancelled = false
+    const read = isTauriRuntime()
+      ? invokeCommand('ai.artifact.get', { bookHash, kind: 'chat' }).then(
+          (response) => response.payload,
+        )
+      : Promise.resolve(browserArtifactsRef.current.get(`${bookHash}-chat`)?.payload ?? null)
+    read
+      .then((payload) => {
+        if (cancelled || payload === null || typeof payload !== 'object') return
+        const list = (payload as { messages?: unknown }).messages
+        if (!Array.isArray(list)) return
+        const restored: ChatUiMessage[] = []
+        for (const item of list) {
+          const role = (item as { role?: unknown }).role
+          const content = (item as { content?: unknown }).content
+          if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') continue
+          if (content.trim() === '') continue
+          restored.push({ role, content })
+        }
+        if (restored.length > 0) setMessages(restored.slice(-60))
+      })
+      .catch(() => {
+        // 历史读不到就从空白开始,不是错误。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bookHash])
+
   // Load persisted insights once per drawer open.
   useEffect(() => {
     let cancelled = false
@@ -320,6 +351,31 @@ export function AiDrawer({
     },
     [bookHash],
   )
+
+  /** 一轮问答完成就把整份聊天记录重写进 kind=chat 的 artifact。
+   *  上限 60 条(30 轮),更老的丢弃 —— 聊天是会话不是档案。 */
+  const persistChat = useCallback(
+    (chat: readonly ChatUiMessage[]): void => {
+      const transcript = chat
+        .filter((message) => message.role !== 'system' && message.content.trim() !== '')
+        .slice(-60)
+        .map(({ role, content }) => ({ role, content }))
+      if (transcript.length === 0) return
+      void persistArtifact('chat', {
+        messages: transcript,
+      } as unknown as Record<string, unknown>).catch(() => {
+        // 历史写不进不拦着聊:下一轮成功时整份重写会补上。
+      })
+    },
+    [persistArtifact],
+  )
+
+  // phase 离开 streaming 的那一刻,当前 messages 就是完成的会话快照。
+  const prevPhaseRef = useRef<StreamPhase>('idle')
+  useEffect(() => {
+    if (prevPhaseRef.current === 'streaming' && phase !== 'streaming') persistChat(messages)
+    prevPhaseRef.current = phase
+  }, [phase, messages, persistChat])
 
   // Generate a structured insight via the streaming chat path; validates the
   // assembled JSON with zod before persisting (spec §118).
