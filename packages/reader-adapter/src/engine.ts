@@ -509,8 +509,11 @@ export function buildReaderCSS(
     ...(layout.writingMode !== undefined
       ? [`html, body { writing-mode: ${layout.writingMode} !important; }`]
       : []),
+    // 行高:与 font-family 同病 —— 纯继承属性,书若把 line-height 写在后代类上
+    // (calibre 标题类常见),只压 body 会被继承规则甩掉,读者调行距等于没调。
+    // 压到 body * 上,读者行距控制全局统一生效。
     ...(layout.lineHeight !== undefined
-      ? [`body { line-height: ${layout.lineHeight} !important; }`]
+      ? [`body, body * { line-height: ${layout.lineHeight} !important; }`]
       : []),
     // 段间距:仅当用户显式选择时注入,undefined 保持原书段落排版。
     ...(layout.paragraphMargin !== undefined
@@ -523,9 +526,14 @@ export function buildReaderCSS(
     ...(layout.textIndent !== undefined
       ? [`p { text-indent: ${layout.textIndent}em !important; }`]
       : []),
-    // 字重:覆盖正文级元素但不碰标题——标题保留书籍自己的层级。
+    // 字重:与 font-family 同源 —— 要盖住 calibre 的 <span class="calibreN">
+    // 行内载体(只列块级元素会漏掉它们),同时排除 h1–h6:`:not(h*)` 让标题
+    // 不被这条规则匹配,书的标题 font-weight 声明(无论是否 !important)原样保留,
+    // 维持书籍层级。body 本体也在内,保证 body 自己的声明被覆盖。
     ...(layout.fontWeight !== undefined
-      ? [`body, p, li, dd, blockquote, div { font-weight: ${layout.fontWeight} !important; }`]
+      ? [
+          `body, body *:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6) { font-weight: ${layout.fontWeight} !important; }`,
+        ]
       : []),
     // 字体只压 body 是错的:calibre 导出的中文书几乎每段都套一层
     // `<span class="calibreN">`,书自己的 CSS 里就写着 font-family(PingFang SC
