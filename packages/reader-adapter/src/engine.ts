@@ -1454,6 +1454,7 @@ export class FoliateAdapter implements ReaderEngine {
     if (view.isFixedLayout) return null
     let total = 0
     let cjk = 0
+    let batch = 0
     for (const section of view.book.sections) {
       if (section.linear === 'no' || typeof section.createDocument !== 'function') continue
       try {
@@ -1463,6 +1464,12 @@ export class FoliateAdapter implements ReaderEngine {
         cjk += countCjkChars(text)
       } catch {
         // 单节解析失败不拖垮整体统计(受损章节按 0 字计)。
+      }
+      // 每 20 节让出主线程一拍:createDocument 是整节 DOM 解析,大书几百节
+      // 一口气跑完会卡死开书后的第一屏(滚动/翻页输入全被占住)。yield 到
+      // 宏任务队列,输入事件得以插队处理。
+      if (++batch % 20 === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve))
       }
     }
     this.#bookCharStats = { total, cjk }
