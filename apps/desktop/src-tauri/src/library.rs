@@ -54,6 +54,9 @@ pub struct LibraryBook {
     /// Reading fraction from `progress`, joined in so the shelf needs one query
     /// instead of one `reader.state.get` per book.
     pub progress: Option<f64>,
+    /// 最近一次保存进度的时刻(`progress.updated_at`)。「继续阅读」按它挑
+    /// 出上次在读的那本;null = 从未打开过。
+    pub last_read_at: Option<String>,
     /// First moment the book's progress reached 100% (`state.updated_at` at the
     /// time); `None` for unread, unfinished, or finished before v9. The yearly
     /// reading goal counts books whose finish date falls in the current year.
@@ -268,6 +271,7 @@ fn row_to_book(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryBook> {
         size: row.get::<_, i64>("size")? as u64,
         added_at: row.get("added_at")?,
         progress: row.get("progress")?,
+        last_read_at: row.get("last_read_at")?,
         finished_at: row.get("finished_at")?,
         tags: parse_tags(row.get::<_, String>("tags").unwrap_or_default().as_str()),
     })
@@ -286,7 +290,7 @@ pub fn list_books(conn: &Connection) -> Result<Vec<LibraryBook>, AppError> {
     let mut statement = conn
         .prepare(
             "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                    b.finished_at, b.tags, p.fraction AS progress
+                    b.finished_at, b.tags, p.fraction AS progress, p.updated_at AS last_read_at
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
              ORDER BY b.added_at DESC, b.rowid DESC",
@@ -394,7 +398,7 @@ pub fn search_library(conn: &Connection, query: &str) -> Result<LibrarySearchRes
     let mut statement = conn
         .prepare(
             "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                    b.finished_at, b.tags, p.fraction AS progress
+                    b.finished_at, b.tags, p.fraction AS progress, p.updated_at AS last_read_at
              FROM books b
              LEFT JOIN progress p ON p.book_hash = b.hash
              WHERE COALESCE(b.display_name, '') LIKE ?1 ESCAPE '\\'
@@ -617,7 +621,7 @@ pub fn set_book_info(
 fn get_book(conn: &Connection, hash: &str) -> Result<LibraryBook, AppError> {
     conn.query_row(
         "SELECT b.hash, b.file_name, b.display_name, b.author, b.subtitle, b.publisher, b.language, b.format, b.path, b.size, b.added_at,
-                b.finished_at, b.tags, p.fraction AS progress
+                b.finished_at, b.tags, p.fraction AS progress, p.updated_at AS last_read_at
          FROM books b
          LEFT JOIN progress p ON p.book_hash = b.hash
          WHERE b.hash = ?1",
@@ -715,6 +719,9 @@ pub fn commit_import(conn: &Connection, prepared: PreparedImport) -> Result<Libr
     let book = LibraryBook {
         hash: hash.clone(),
         file_name,
+        // 新导入的书没有进度;重导入时进度行仍在,但这份快照只描述书本身
+        // —— 进度相关字段由末尾 get_book 的重读补齐。
+        last_read_at: None,
         display_name: existing.as_ref().and_then(|meta| meta.display_name.clone()),
         author: existing.as_ref().and_then(|meta| meta.author.clone()),
         subtitle: existing.as_ref().and_then(|meta| meta.subtitle.clone()),
@@ -1170,6 +1177,7 @@ mod tests {
         let book = LibraryBook {
             hash: "0".repeat(64),
             file_name: "a.epub".into(),
+            last_read_at: Some("2026-09-10T00:00:00Z".into()),
             display_name: Some("A Book".into()),
             author: Some("A Writer".into()),
             subtitle: None,
@@ -1193,6 +1201,7 @@ mod tests {
         assert_eq!(json["finishedAt"], serde_json::Value::Null);
         assert_eq!(json["addedAt"], "2026-09-09T00:00:00Z");
         assert_eq!(json["progress"], 0.25);
+        assert_eq!(json["lastReadAt"], "2026-09-10T00:00:00Z");
         assert_eq!(json["tags"][0], "技术");
     }
 

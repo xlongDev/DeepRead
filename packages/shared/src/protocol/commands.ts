@@ -572,6 +572,8 @@ export const libraryBookSchema = z.object({
   size: z.number().int().min(0),
   addedAt: iso8601,
   progress: z.number().min(0).max(1).nullable(),
+  /** 最近一次保存进度的时刻;从未打开过为 null。书架「继续阅读」按它挑书。 */
+  lastReadAt: iso8601.nullable(),
   /** 读完时间(进度第一次到 100% 时的 state.updatedAt);没读完/没盖章为 null。 */
   finishedAt: iso8601.nullable(),
   tags: z.array(z.string().min(1).max(32)).max(20),

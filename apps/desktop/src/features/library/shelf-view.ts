@@ -71,6 +71,17 @@ export const SORT_DEFAULT_DIR: Readonly<Record<SortKey, SortDir>> = {
  * 未开始读的书(进度为 null)在**两个方向**下都沉底:升序时把它们顶到最前
  * 面,是把「没读过」当成了「进度最小」,那不是用户想看的。
  */
+/** 「继续阅读」:最近一次保存过进度的那本(没打开过任何书时是 null)。
+ *  与排序无关 —— 无论书架当前按什么排,这一条永远浮现最上面。 */
+export function pickContinueReading(books: readonly ShelfBook[]): ShelfBook | null {
+  let latest: ShelfBook | null = null
+  for (const book of books) {
+    if (book.lastReadAt === null) continue
+    if (latest === null || book.lastReadAt > latest.lastReadAt!) latest = book
+  }
+  return latest
+}
+
 export function sortBooks(
   books: readonly LibraryBook[],
   key: SortKey,

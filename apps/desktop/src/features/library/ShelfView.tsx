@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  BookOpen,
   ArrowUp,
   Check,
   CheckSquare,
@@ -32,6 +33,7 @@ import {
   BULK_CONFIRM,
   coverPalette,
   FAVORITE_TAG,
+  pickContinueReading,
   formatBytes,
   isFavorite,
   SUGGESTED_TAGS,
@@ -147,6 +149,8 @@ export function ShelfView({
    * 能被右键与键盘(Shift+F10 / 菜单键)唤起,否则触屏和键盘用户够不到
    * 这些动作 —— 那是无障碍红线,不是体验偏好。
    */
+  /** 上次在读的那本:横条浮现的依据(与排序无关)。 */
+  const continueBook = pickContinueReading(books)
   const [menuHash, setMenuHash] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   /** 「打标签」浮层锚在哪张卡片上。与操作菜单分开:入口不同,别互相顶开。 */
@@ -404,6 +408,37 @@ export function ShelfView({
           <Plus size={15} weight="bold" aria-hidden /> 导入
         </button>
       </div>
+
+      {books.length > 0 && continueBook !== null && (
+        <button
+          type="button"
+          className="continue-reading"
+          onClick={() => onOpenBook(continueBook)}
+          title={`打开《${shelfTitle(continueBook)}》`}
+        >
+          <span
+            className="continue-reading-cover"
+            aria-hidden
+            style={{
+              background: `linear-gradient(160deg, ${coverPalette(continueBook.hash)[0]}, ${
+                coverPalette(continueBook.hash)[1]
+              })`,
+            }}
+          >
+            {shelfTitle(continueBook).charAt(0)}
+          </span>
+          <span className="continue-reading-main">
+            <strong>继续阅读</strong>
+            <span className="continue-reading-title">
+              {shelfTitle(continueBook)}
+              {continueBook.progress !== null
+                ? ` · 读到 ${Math.round(continueBook.progress * 100)}%`
+                : ''}
+            </span>
+          </span>
+          <BookOpen size={15} weight="regular" aria-hidden />
+        </button>
+      )}
 
       {books.length === 0 ? (
         <p className="shelf-none">没有匹配“{emptyHint}”的书。</p>

@@ -1620,6 +1620,64 @@ button:disabled {
   font-size: 12px;
 }
 
+/* 继续阅读横条:书架在排序之外永远浮现「上次在读的那本」。
+   玻璃条 + 确定性渐变小封面,整条可点,安静但不隐形。 */
+.continue-reading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  margin: 0 0 var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.continue-reading:hover {
+  border-color: var(--color-accent);
+}
+
+.continue-reading-cover {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 15px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.continue-reading-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.continue-reading-main strong {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.continue-reading-title {
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 读架失败态的按钮行:重试 + 导入并排,居中跟空态文案对齐。 */
 .library-empty-actions {
   display: flex;

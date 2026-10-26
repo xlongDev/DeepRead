@@ -16,6 +16,11 @@ author: string | null, subtitle: string | null, publisher: string | null, langua
  */
 progress: number | null, 
 /**
+ * 最近一次保存进度的时刻(`progress.updated_at`)。「继续阅读」按它挑
+ * 出上次在读的那本;null = 从未打开过。
+ */
+lastReadAt: string | null, 
+/**
  * First moment the book's progress reached 100% (`state.updated_at` at the
  * time); `None` for unread, unfinished, or finished before v9. The yearly
  * reading goal counts books whose finish date falls in the current year.

@@ -173,9 +173,13 @@ function run<T>(
 
 export async function listStoredBooks(): Promise<readonly StoredBook[]> {
   const rows = await run<StoredBook[]>(STORE_BOOKS, 'readonly', (store) => store.getAll())
-  // 旧记录(finishedAt 这一项之前存的)没有这个字段:统一补 null,别让
-  // undefined 冒充"有完成时间"流过类型系统。
-  return (rows ?? []).map((book) => ({ ...book, finishedAt: book.finishedAt ?? null }))
+  // 旧记录(finishedAt/lastReadAt 这两项之前存的)没有这些字段:统一补 null,
+  // 别让 undefined 冒充"有时间戳"流过类型系统。
+  return (rows ?? []).map((book) => ({
+    ...book,
+    lastReadAt: book.lastReadAt ?? null,
+    finishedAt: book.finishedAt ?? null,
+  }))
 }
 
 export async function putStoredBook(book: StoredBook): Promise<void> {

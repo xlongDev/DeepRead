@@ -39,6 +39,7 @@ function book(hash: string, name = '示例书'): StoredBook {
     path: '',
     size: 1024,
     addedAt: '2026-09-30T00:00:00.000Z',
+    lastReadAt: null,
     finishedAt: null,
     tags: [],
   }

@@ -115,6 +115,7 @@ describe('mergeLibrary', () => {
     size: 1,
     addedAt: '2026-09-01T00:00:00Z',
     progress: null,
+    lastReadAt: null,
     finishedAt: null,
     tags: [],
     ...overrides,

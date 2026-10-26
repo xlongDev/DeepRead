@@ -16,6 +16,7 @@ import type { ShelfBook } from './shelf-view'
 
 const book = (overrides: Partial<ShelfBook>): ShelfBook => ({
   hash: 'a'.repeat(64),
+  lastReadAt: null,
   fileName: '夜航书.epub',
   displayName: null,
   author: null,
