@@ -72,3 +72,18 @@ jobs:
       # 与仓库一致 —— 过期即红(改了 Rust DTO 忘记重新生成/提交就会在这里挂)。
       - name: Generated protocol types are up to date
         run: git diff --exit-code packages/shared/src/protocol/generated/
+
+  # security-audit.md 遗留项①:Rust 依赖的 advisory 扫描。阻断式 —— 有告警
+  # 就该停下来处理,而不是红灯习惯化。RustSec 数据库随每次运行刷新。
+  audit:
+    name: Rust dependencies (cargo audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies
+        run: cargo audit

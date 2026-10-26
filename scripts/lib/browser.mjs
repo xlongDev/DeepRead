@@ -15,7 +15,13 @@ import { join } from 'node:path'
  * 已知的可用副本。回退时明确警告 —— 别让「跑过了」被误读成「本项目能跑」。
  */
 export async function loadPlaywright() {
-  const fallbacks = ['/Users/xiaolong/ai-resume-mvp/node_modules/playwright/index.mjs']
+  // 回退顺序:环境变量 > 本项目依赖 > 已知的机器特定副本(历史行为,带警告)。
+  // DEEPREAD_PLAYWRIGHT_PATH 让别的机器不用改这份文件也能指路。
+  const envPath = process.env.DEEPREAD_PLAYWRIGHT_PATH
+  const fallbacks = [
+    ...(envPath ? [envPath] : []),
+    '/Users/xiaolong/ai-resume-mvp/node_modules/playwright/index.mjs',
+  ]
   try {
     return { module: await import('playwright'), fallback: false }
   } catch {
@@ -25,7 +31,7 @@ export async function loadPlaywright() {
       return { module: await import(path), fallback: true }
     }
   }
-  throw new Error('找不到 playwright。请在本项目安装,或改这里的回退路径。')
+  throw new Error('找不到 playwright。请在本项目安装,或设 DEEPREAD_PLAYWRIGHT_PATH。')
 }
 
 /** 扫描 ms-playwright 缓存目录,而不是写死版本号 —— 那个号会随浏览器升级变。 */
