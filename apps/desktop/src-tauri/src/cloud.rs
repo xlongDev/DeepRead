@@ -526,11 +526,112 @@ pub async fn cloud_backup(
     let put = webdav_put_bytes(&endpoint, &username, &password, &remote_path, &body).await;
     let _ = std::fs::remove_file(&temp);
     put?;
+    // 保留策略:只留最近 BACKUP_KEEP 份,删掉更老的。尽力而为 —— 删除失败
+    // 不影响这次备份的结果,下一个备份周期还会再清。
+    let stale = list_backups(&endpoint, &username, &password)
+        .await
+        .map(|names| prune_backups(&names, BACKUP_KEEP))
+        .unwrap_or_default();
+    for name in stale {
+        let _ = webdav_delete(&endpoint, &username, &password, &format!("backups/{name}")).await;
+    }
     Ok(CloudBackupResponse {
         remote_path,
         bytes,
         checksum,
     })
+}
+
+/// 云端备份保留份数(超出后最旧的被清掉)。
+const BACKUP_KEEP: usize = 10;
+
+/// 列出云端 backups/ 目录里的快照文件名(deepread-*.db,不含路径)。
+async fn list_backups(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+) -> Result<Vec<String>, AppError> {
+    let url = format!(
+        "{}/{}/backups",
+        endpoint.trim_end_matches('/'),
+        CLOUD_BASE_PATH
+    );
+    let response = webdav_client()
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").expect("valid method"),
+            &url,
+        )
+        .basic_auth(username, Some(password))
+        .header("Depth", "1")
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::new(ErrorCode::SyncProviderError, "无法连接 WebDAV 服务")
+                .with_cause(err)
+                .retryable()
+        })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        // 还没有任何备份:没有可清理的东西。
+        return Ok(Vec::new());
+    }
+    if !response.status().is_success() && response.status().as_u16() != 207 {
+        return Err(AppError::new(
+            ErrorCode::SyncProviderError,
+            format!("WebDAV 列目录失败({})", response.status().as_u16()),
+        )
+        .retryable());
+    }
+    let body = response.text().await.map_err(|err| {
+        AppError::new(ErrorCode::SyncProviderError, "WebDAV 响应传输中断").with_cause(err)
+    })?;
+    Ok(propfind_hrefs(&body)
+        .iter()
+        .filter_map(|href| href.rsplit('/').next().map(str::to_string))
+        .filter(|name| name.starts_with("deepread-") && name.ends_with(".db"))
+        .collect())
+}
+
+/// 纯函数:文件名按字典序(= 时间序)保留最新 keep 份,返回应删除的旧文件名。
+fn prune_backups(names: &[String], keep: usize) -> Vec<String> {
+    let mut sorted = names.to_vec();
+    sorted.sort();
+    let cut = sorted.len().saturating_sub(keep);
+    sorted.truncate(cut);
+    sorted
+}
+
+/// DELETE a remote document(备份保留策略用)。404 视为已删除。
+async fn webdav_delete(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+    path: &str,
+) -> Result<(), AppError> {
+    let url = format!(
+        "{}/{}/{}",
+        endpoint.trim_end_matches('/'),
+        CLOUD_BASE_PATH,
+        path.trim_start_matches('/')
+    );
+    let response = webdav_client()
+        .delete(&url)
+        .basic_auth(username, Some(password))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::new(ErrorCode::SyncProviderError, "无法连接 WebDAV 服务")
+                .with_cause(err)
+                .retryable()
+        })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND || response.status().is_success() {
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::SyncProviderError,
+        format!("WebDAV 删除失败({})", response.status().as_u16()),
+    )
+    .with_context("path", serde_json::Value::from(path))
+    .retryable())
 }
 
 async fn webdav_put_bytes(
@@ -761,6 +862,22 @@ async fn webdav_get_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prune_backups_keeps_newest_and_returns_oldest_for_deletion() {
+        let names: Vec<String> = [
+            "deepread-2026-01-03.db",
+            "deepread-2026-01-01.db",
+            "deepread-2026-01-02.db",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // 字典序 = 时间序(文件名即 RFC3339);留 2 份,最老的 1 份该删。
+        assert_eq!(prune_backups(&names, 2), vec!["deepread-2026-01-01.db"]);
+        assert_eq!(prune_backups(&names, 10), Vec::<String>::new());
+        assert_eq!(prune_backups(&[], 5), Vec::<String>::new());
+    }
 
     #[test]
     fn endpoint_must_be_http() {
