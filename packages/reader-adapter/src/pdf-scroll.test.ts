@@ -6,11 +6,18 @@ import { PdfScrollStrip, pageOffsets, topPageIndex } from './pdf-scroll'
 /** jsdom 没有 IntersectionObserver / ResizeObserver,也没有布局(clientWidth
  *  恒 0、scrollTop 写不进去)—— 测试里给足最小桩,其余走真实 DOM 路径。 */
 class FakeIntersectionObserver {
+  static all: FakeIntersectionObserver[] = []
   constructor(
     private readonly callback: (entries: { target: Element; isIntersecting: boolean }[]) => void,
-  ) {}
+  ) {
+    FakeIntersectionObserver.all.push(this)
+  }
   observe(target: Element): void {
     this.callback([{ target, isIntersecting: true }])
+  }
+  /** 测试手动触发一帧观察结果(虚拟化的卸载/重挂就靠它驱动)。 */
+  trigger(target: Element, isIntersecting: boolean): void {
+    this.callback([{ target, isIntersecting }])
   }
   unobserve(): void {}
   disconnect(): void {}
@@ -63,6 +70,7 @@ describe('PdfScrollStrip', () => {
   let strip: PdfScrollStrip
 
   beforeEach(() => {
+    FakeIntersectionObserver.all = []
     globalThis.IntersectionObserver =
       FakeIntersectionObserver as unknown as typeof IntersectionObserver
     globalThis.ResizeObserver = class {
@@ -182,5 +190,29 @@ describe('PdfScrollStrip', () => {
     strip.rerenderMounted()
     expect(onZoom).toHaveBeenCalledTimes(1)
     expect(onZoom.mock.calls[0]?.[0]).toMatchObject({ scale: 1.94 })
+  })
+
+  describe('虚拟化:滑出观察窗卸载,滚回来重挂', () => {
+    it('离开视口的页拆 iframe、占位保留,再进入视口原样重挂', async () => {
+      await mountStrip([
+        { width: 400, height: 600 },
+        { width: 200, height: 400 },
+      ])
+      const container = host.querySelector('.pdf-scroll')!
+      const wrappers = [...container.querySelectorAll<HTMLElement>('.pdf-scroll-page')]
+      expect(container.querySelectorAll('iframe')).toHaveLength(2)
+
+      // 第 0 页滑出观察窗(±1 屏外):iframe 拆掉,占位高度不动 —— 滚动几何
+      // 与页码定位都靠占位,不能塌。
+      FakeIntersectionObserver.all[0]!.trigger(wrappers[0]!, false)
+      expect(wrappers[0]!.querySelector('iframe')).toBeNull()
+      expect(wrappers[0]!.style.height).toBe('1164px')
+
+      // 滚回来:按同一约定重挂。
+      FakeIntersectionObserver.all[0]!.trigger(wrappers[0]!, true)
+      const iframe = wrappers[0]!.querySelector('iframe')
+      expect(iframe?.getAttribute('sandbox')).toBe('allow-same-origin allow-scripts')
+      expect(iframe?.getAttribute('scrolling')).toBe('no')
+    })
   })
 })

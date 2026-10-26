@@ -16,8 +16,10 @@
  * SectionProgress 精确插值,见 progress.js#getProgress)。划词、简繁、chrome
  * 唤醒等挂在 view 'load' 上的逻辑因此原样复用。
  *
- * `ponytail`: 全部页面一次性 load() 拿自然尺寸(只建 blob,不渲染画布),
- * 挂载后不卸载 —— 长书(上千页)会累积已渲染页,将来卡顿再加虚拟化窗口。
+ * 全部页面一次性 load() 拿自然尺寸(只建 blob,不渲染画布,便宜);渲染层
+ * 则虚拟化:页滑出观察窗(视口 ±1 屏)就卸载 iframe,滚回来重挂 —— 上千页
+ * 的长书不再累积已渲染页。观察窗既是预渲染距离也是保留距离,一个参数两个
+ * 用处。
  */
 
 import type { FixedLayoutPage, FoliateBook } from 'foliate-js/view.js'
@@ -120,8 +122,12 @@ export class PdfScrollStrip {
         ? new IntersectionObserver(
             (entries) => {
               for (const entry of entries) {
-                if (!entry.isIntersecting) continue
-                this.#mountPage(Number((entry.target as HTMLElement).dataset.index))
+                const index = Number((entry.target as HTMLElement).dataset.index)
+                if (entry.isIntersecting) {
+                  this.#mountPage(index)
+                } else {
+                  this.#unmountPage(index)
+                }
               }
             },
             // 视口上下各一屏:连续滚动时下一页在进入视口前就已渲染完。
@@ -252,6 +258,16 @@ export class PdfScrollStrip {
     iframe.src = page.src
     wrapper.append(iframe)
     this.#iframes[index] = iframe
+  }
+
+  /** 页滑出观察窗(视口 ±1 屏)就拆 iframe:canvas 与文本层随文档释放,
+   *  占位(wrapper 高度)不动 —— 滚回来时 #mountPage 原样重挂。观察窗
+   *  边界抖动的代价是单页重渲染,可接受。 */
+  #unmountPage(index: number): void {
+    const iframe = this.#iframes[index]
+    if (!iframe) return
+    iframe.remove()
+    this.#iframes[index] = null
   }
 
   #renderPage(index: number): void {
