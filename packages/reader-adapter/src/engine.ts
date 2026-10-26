@@ -466,6 +466,9 @@ const FONT_STACKS: Readonly<Record<string, string>> = {
   sans: '-apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif',
 }
 
+/** 等宽类元素:读者选的字体管不到它们(代码本来就该等宽)。 */
+const MONO_STACK = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
+
 function resolveFontStack(fontFamily: string | undefined): string | undefined {
   if (fontFamily === undefined) return undefined
   const named = FONT_STACKS[fontFamily]
@@ -475,7 +478,7 @@ function resolveFontStack(fontFamily: string | undefined): string | undefined {
   return `"${fontFamily.replace(/["\\]/g, '')}", "PingFang SC", sans-serif`
 }
 
-function buildReaderCSS(
+export function buildReaderCSS(
   theme: ReaderTheme,
   layout: {
     fontSize?: number
@@ -524,7 +527,17 @@ function buildReaderCSS(
     ...(layout.fontWeight !== undefined
       ? [`body, p, li, dd, blockquote, div { font-weight: ${layout.fontWeight} !important; }`]
       : []),
-    ...(fontStack ? [`body { font-family: ${fontStack} !important; }`] : []),
+    // 字体只压 body 是错的:calibre 导出的中文书几乎每段都套一层
+    // `<span class="calibreN">`,书自己的 CSS 里就写着 font-family(PingFang SC
+    // / FZFangSong …),后代元素上的声明永远赢过继承下来的 body 值,body 上的
+    // !important 也救不了(它只跟 body 自己的声明比)。所以压到 body * 上;
+    // !important 对书里那些普通类选择器有效。等宽元素留一手,不能被读者口味换掉。
+    ...(fontStack
+      ? [
+          `body, body * { font-family: ${fontStack} !important; }`,
+          `code, pre, kbd, samp, code *, pre *, kbd *, samp * { font-family: ${MONO_STACK} !important; }`,
+        ]
+      : []),
     `html, body { background: ${theme.background} !important; color: ${theme.foreground} !important; }`,
     // 滚动模式内核把上下 padding 清零,这里由我们补回舒适的阅读留白
     ...(flow === 'scrolled' ? [`body { padding: 56px 0 120px !important; }`] : []),
