@@ -468,6 +468,8 @@ const FONT_STACKS: Readonly<Record<string, string>> = {
 
 /** 等宽类元素:读者选的字体管不到它们(代码本来就该等宽)。 */
 const MONO_STACK = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
+/** 搜索命中高亮的淡蓝:三个阅读主题上都读得到、又压得住正文。 */
+const SEARCH_HIT_COLOR = 'rgba(61, 109, 235, 0.28)'
 
 /**
  * 继承属性的覆盖总线:纯继承属性(line-height / font-family…)要压过书自己的
@@ -583,6 +585,8 @@ export class FoliateAdapter implements ReaderEngine {
   /** 已经挂上 create-overlayer 监听的 renderer:view.open 每次都换一个新的
    *  paginator,WeakSet 按实例去重,不会在同一个上挂两条。 */
   readonly #watchedRenderers = new WeakSet<object>()
+  /** 当前在屏的搜索命中高亮 id(`search:` 命名空间)。 */
+  readonly #searchHitIds = new Set<string>()
   #theme: ReaderTheme | null = null
   #layout: {
     fontSize?: number
@@ -1531,6 +1535,53 @@ export class FoliateAdapter implements ReaderEngine {
       style: annotation.style,
       ...(typeof placed?.index === 'number' ? { index: placed.index } : {}),
     })
+  }
+
+  /**
+   * 目录搜索的命中高亮:命中处画淡蓝高亮,翻页走远再回来经注册表重放。
+   * 与用户划线同一条 addAnnotation 通路,但 id 挂在 `search:` 命名空间下,
+   * 清除时只摘自己的,不碰划线。
+   */
+  async showSearchHits(cfis: readonly string[]): Promise<void> {
+    await this.clearSearchHits()
+    const view = this.#requireView()
+    let n = 0
+    for (const cfi of cfis) {
+      if (!cfi) continue
+      try {
+        const placed = await view.addAnnotation({
+          value: cfi,
+          color: SEARCH_HIT_COLOR,
+          style: 'highlight',
+        })
+        const id = `search:${n++}`
+        this.#searchHitIds.add(id)
+        this.#annotations.set(id, {
+          cfi,
+          color: SEARCH_HIT_COLOR,
+          style: 'highlight',
+          ...(typeof placed?.index === 'number' ? { index: placed.index } : {}),
+        })
+      } catch {
+        // 单条锚点失效跳过:搜索高亮是辅助视觉,不该因为一条坏 CFI 整体失败。
+      }
+    }
+  }
+
+  async clearSearchHits(): Promise<void> {
+    const view = this.#view
+    if (!view) return
+    for (const id of this.#searchHitIds) {
+      const cfi = this.#annotations.cfiOf(id)
+      if (cfi === undefined) continue
+      try {
+        await view.deleteAnnotation({ value: cfi })
+      } catch {
+        // 内核里已经不在了(翻页销毁等):摘登记即可。
+      }
+      this.#annotations.delete(id)
+    }
+    this.#searchHitIds.clear()
   }
 
   async removeAnnotation(annotationId: string): Promise<void> {

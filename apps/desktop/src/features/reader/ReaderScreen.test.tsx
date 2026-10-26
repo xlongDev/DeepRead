@@ -335,6 +335,26 @@ describe('面板开合', () => {
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
   })
 
+  it('搜索成功后把命中处交给内核画高亮,面板关闭时摘除', async () => {
+    const { adapter } = await renderReader({
+      searchResults: [
+        { location: { cfi: 'epubcfi(/6/4!2/2)', progress: 0 }, excerpt: '把灯点亮' },
+        { location: { cfi: '', progress: 0 }, excerpt: '无 CFI 的命中跳过' },
+      ],
+    })
+    fireEvent.click(screen.getByTitle('目录与搜索'))
+    const panel = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
+      target: { value: '灯' },
+    })
+    fireEvent.click(within(panel).getByTitle('搜索'))
+    await waitFor(() => expect(adapter.showSearchHits).toHaveBeenCalledWith(['epubcfi(/6/4!2/2)']))
+
+    // 关面板:高亮一并摘除。
+    fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(adapter.clearSearchHits).toHaveBeenCalled())
+  })
+
   it('内核搜索失败时给出明确错误态,不永远停在「搜索中」', async () => {
     const { adapter } = await renderReader()
     adapter.search.mockRejectedValue(new Error('内核搜索崩溃'))

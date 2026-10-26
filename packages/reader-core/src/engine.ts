@@ -92,6 +92,15 @@ export interface ReaderEngine {
    * 移动走 {@link moveReadingRuler} / {@link wheelReadingRuler},走到版心末尾
    * 由引擎自己翻页,文首文末停住。固定排版与竖排暂不支持。
    */
+  /**
+   * 搜索命中高亮(可选能力):把目录搜索的命中处画成淡蓝高亮。翻页离开
+   * 再回来要能重放(走标注注册表),新搜索/关面板时用 {@link clearSearchHits}
+   * 摘除。引擎不支持时调用方静默跳过。
+   */
+  showSearchHits?(cfis: readonly string[]): Promise<void>
+  /** 摘除全部搜索命中高亮。 */
+  clearSearchHits?(): Promise<void>
+
   setReadingRuler?(options: ReadingRulerOptions | null): void
   /** 阅读尺上下移一行;没有尺时是空操作。 */
   moveReadingRuler?(direction: -1 | 1): Promise<void>

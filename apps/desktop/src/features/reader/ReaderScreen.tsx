@@ -1189,6 +1189,13 @@ export function ReaderScreen({
     }
   }, [showChrome])
 
+  // 目录面板不在屏时,搜索命中高亮一并摘除 —— 查完就走,高亮不该赖在书上。
+  // (含 Esc、点关闭、切到别的面板三条路;引擎不支持时是空操作。)
+  useEffect(() => {
+    if (openPanel === 'toc') return
+    void adapterRef.current?.clearSearchHits?.().catch(() => {})
+  }, [openPanel])
+
   // 方向键切页:window 与书内 iframe 两个入口共用同一处理。
   const handleReaderKey = useCallback(
     (event: KeyboardEvent): void => {
@@ -2071,6 +2078,10 @@ export function ReaderScreen({
           .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
       )
       setSearchState('done')
+      // 命中处上屏:淡蓝高亮标出每一条,翻页重放;新搜索或关面板时摘除。
+      void adapterRef.current
+        ?.showSearchHits?.(results.map((r) => r.location.cfi ?? '').filter(Boolean))
+        .catch(() => {})
     } catch {
       // 内核搜索失败要有明确终态 —— 否则 searchState 永远停在「搜索中」。
       setSearchState('error')
