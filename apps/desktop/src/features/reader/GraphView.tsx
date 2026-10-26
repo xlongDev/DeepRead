@@ -49,14 +49,25 @@ export function GraphView({ spec, onClose }: GraphViewProps) {
   const [viewBox, setViewBox] = useState(() => ({ x: 0, y: 0, w: layout.width, h: layout.height }))
   const dragRef = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
 
+  // 主题色在渲染时解析成具体值:SVG 表现属性不支持 var(),导出的文件也因此
+  // 自带真实颜色(所见即所得)。羊皮/夜间主题下图谱不再是白底色块。
+  const themeColors = useMemo(() => {
+    const source = document.querySelector('.reader-scope') ?? document.documentElement
+    const styles = getComputedStyle(source)
+    const pick = (name: string, fallback: string): string => {
+      const value = styles.getPropertyValue(name).trim()
+      return value !== '' ? value : fallback
+    }
+    return {
+      background: pick('--reader-bg', '#ffffff'),
+      foreground: pick('--reader-fg', '#1d1b17'),
+      accent: pick('--color-accent', '#3d6deb'),
+    }
+  }, [])
+
   const svg = useMemo(
-    () =>
-      graphSvgString(graph, layout, {
-        background: '#ffffff',
-        foreground: '#1d1b17',
-        accent: '#3d6deb',
-      }),
-    [graph, layout],
+    () => graphSvgString(graph, layout, themeColors),
+    [graph, layout, themeColors],
   )
 
   // Wheel zoom around the cursor: shrink/grow the viewBox, clamped so the

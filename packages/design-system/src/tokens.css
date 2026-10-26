@@ -13,6 +13,8 @@
   --color-text-tertiary: #9c968b;
   --color-accent: #3d6deb;
   --color-accent-soft: rgba(61, 109, 235, 0.12);
+  /* 彩底(accent/danger 及其混合)上的文字与图标。 */
+  --color-on-accent: #ffffff;
   --color-border: rgba(29, 27, 23, 0.1);
   --color-highlight: rgba(255, 255, 255, 0.65);
   --color-danger: #c4453d;
@@ -80,6 +82,8 @@
   --color-text-tertiary: #6f6a61;
   --color-accent: #6e93f6;
   --color-accent-soft: rgba(110, 147, 246, 0.16);
+  /* 彩底(accent/danger 及其混合)上的文字与图标;夜间同样是白。 */
+  --color-on-accent: #ffffff;
   --color-border: rgba(236, 233, 227, 0.12);
   --color-highlight: rgba(255, 255, 255, 0.08);
   --color-danger: #e0706a;

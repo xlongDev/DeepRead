@@ -355,7 +355,7 @@ button:disabled {
     var(--color-accent),
     color-mix(in srgb, var(--color-accent) 62%, #7c4dcf)
   );
-  color: #ffffff;
+  color: var(--color-on-accent);
   box-shadow: 0 1px 3px color-mix(in srgb, var(--color-accent) 45%, transparent);
   flex-shrink: 0;
 }
@@ -456,7 +456,7 @@ button:disabled {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   padding: 9px 18px;
@@ -746,7 +746,7 @@ button:disabled {
 .book-remove.is-confirm {
   opacity: 1;
   transform: scale(1.06);
-  color: #ffffff;
+  color: var(--color-on-accent);
   background: var(--color-danger);
   border-color: var(--color-danger);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--color-danger) 35%, transparent);
@@ -877,7 +877,7 @@ button:disabled {
 .card-action-icon.is-confirming,
 .card-action-icon.is-confirming:hover {
   background: var(--color-danger);
-  color: #ffffff;
+  color: var(--color-on-accent);
 }
 
 /* 按下的反馈:图标按钮没有 hover 之外的手感,按下缩一点是最省也最通用的
@@ -1172,7 +1172,7 @@ button:disabled {
   background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  color: #ffffff;
+  color: var(--color-on-accent);
   /* 进入批量态时圆圈从中心弹出来;checked 时背景/边框平滑过渡到 accent。
      错开 30ms 让封面封边的蓝色 ring 先出现,圆圈再弹。 */
   transform-origin: center;
@@ -1428,7 +1428,7 @@ button:disabled {
   border: 0;
   border-radius: var(--radius-md);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   cursor: pointer;
   transition: opacity var(--duration-fast) var(--ease-out);
 }
@@ -2726,7 +2726,7 @@ button:disabled {
   border-radius: var(--radius-full);
   padding: 9px 18px;
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
@@ -3723,7 +3723,7 @@ button:disabled {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   font-size: 11.5px;
   padding: 6px 12px;
   cursor: pointer;
@@ -3779,7 +3779,7 @@ button:disabled {
 .ai-msg-user {
   align-self: flex-end;
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   border-bottom-right-radius: 6px;
 }
 
@@ -3825,7 +3825,7 @@ button:disabled {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   cursor: pointer;
 }
 
@@ -5064,7 +5064,7 @@ dialog.modal-panel {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5439,7 +5439,7 @@ dialog.modal-panel {
   place-items: center;
   border-radius: var(--radius-full);
   background: var(--color-danger);
-  color: #ffffff;
+  color: var(--color-on-accent);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   animation: scale-pop var(--duration-fast) var(--ease-emphasized);
 }
@@ -5707,7 +5707,7 @@ dialog.modal-panel {
   height: 32px;
   margin: 0 2px;
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-accent);
   opacity: 1;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 45%, transparent);
 }
