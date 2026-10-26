@@ -677,10 +677,7 @@ pub fn import_book(conn: &Connection, raw_path: &str) -> Result<LibraryBook, App
 
 /// 导入的「落库阶段」:按哈希 upsert。重导入已知文件保留 added_at 和用户或
 /// 书籍已填好的元数据 —— 重新导入通常是因为文件搬了位置,不是要重来一遍。
-pub fn commit_import(
-    conn: &Connection,
-    prepared: PreparedImport,
-) -> Result<LibraryBook, AppError> {
+pub fn commit_import(conn: &Connection, prepared: PreparedImport) -> Result<LibraryBook, AppError> {
     let PreparedImport {
         path,
         file_name,
@@ -878,12 +875,11 @@ pub async fn library_import(
     // 哈希在阻塞线程池上做、且发生在拿数据库锁之前:大书哈希数秒期间,
     // 其他命令(翻页进度保存等)全程照常工作。
     let path = request.path;
-    let prepared =
-        tauri::async_runtime::spawn_blocking(move || prepare_import(&path))
-            .await
-            .map_err(|err| {
-                AppError::new(ErrorCode::StorageIo, "import task failed").with_cause(err)
-            })??;
+    let prepared = tauri::async_runtime::spawn_blocking(move || prepare_import(&path))
+        .await
+        .map_err(|err| {
+            AppError::new(ErrorCode::StorageIo, "import task failed").with_cause(err)
+        })??;
     let conn =
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;

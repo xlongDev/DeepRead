@@ -117,27 +117,9 @@ pub struct StateSetResponse {
     pub saved_at: String,
 }
 
-pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, AppError> {
-    validate_hash(hash)?;
-    let progress = conn
-        .query_row(
-            "SELECT cfi, fraction, updated_at FROM progress WHERE book_hash = ?1",
-            [hash],
-            |row| {
-                Ok(StoredProgress {
-                    cfi: row.get(0)?,
-                    fraction: row.get(1)?,
-                })
-            },
-        )
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(
-                AppError::new(ErrorCode::StorageIo, "failed to read progress").with_cause(other),
-            ),
-        })?;
-
+/// 读回某本书的全部批注(rowid 序)。load_state 与 store_state 的
+/// 「没变就不重写」判定共用同一读取路径,比较口径天然一致。
+fn read_annotations(conn: &Connection, hash: &str) -> Result<Vec<StoredAnnotation>, AppError> {
     let mut statement = conn
         .prepare("SELECT id, cfi, color, style, note, excerpt, updated_at, deleted FROM annotations WHERE book_hash = ?1 ORDER BY rowid")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query annotations").with_cause(err))?;
@@ -169,7 +151,10 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
         .map_err(|err| {
             AppError::new(ErrorCode::StorageIo, "failed to read annotation row").with_cause(err)
         })?;
+    Ok(annotations)
+}
 
+fn read_bookmarks(conn: &Connection, hash: &str) -> Result<Vec<StoredBookmark>, AppError> {
     let mut statement = conn
         .prepare("SELECT id, cfi, label, created_at, deleted FROM bookmarks WHERE book_hash = ?1 ORDER BY created_at, rowid")
         .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to query bookmarks").with_cause(err))?;
@@ -190,6 +175,32 @@ pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, 
         .map_err(|err| {
             AppError::new(ErrorCode::StorageIo, "failed to read bookmark row").with_cause(err)
         })?;
+    Ok(bookmarks)
+}
+
+pub fn load_state(conn: &Connection, hash: &str) -> Result<Option<ReaderState>, AppError> {
+    validate_hash(hash)?;
+    let progress = conn
+        .query_row(
+            "SELECT cfi, fraction, updated_at FROM progress WHERE book_hash = ?1",
+            [hash],
+            |row| {
+                Ok(StoredProgress {
+                    cfi: row.get(0)?,
+                    fraction: row.get(1)?,
+                })
+            },
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(
+                AppError::new(ErrorCode::StorageIo, "failed to read progress").with_cause(other),
+            ),
+        })?;
+
+    let annotations = read_annotations(conn, hash)?;
+    let bookmarks = read_bookmarks(conn, hash)?;
 
     if progress.is_none() && annotations.is_empty() && bookmarks.is_empty() {
         return Ok(None);
@@ -218,6 +229,11 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
             "too many annotations",
         ));
     }
+    // 批注/书签没变就不重写:阅读中高频保存的只有进度(15s 一次),
+    // 全量 DELETE+INSERT 会成倍放大 WAL 写。比较用与读取同一路径的内存快照,
+    // 顺序不一致按「变了」处理(重写是正确路径,只是不省)。
+    let annotations_changed = read_annotations(conn, hash)? != state.annotations;
+    let bookmarks_changed = read_bookmarks(conn, hash)? != state.bookmarks;
     let tx = conn.unchecked_transaction().map_err(|err| {
         AppError::new(ErrorCode::StorageIo, "failed to begin transaction").with_cause(err)
     })?;
@@ -225,14 +241,18 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
         .map_err(|err| {
             AppError::new(ErrorCode::StorageIo, "failed to reset progress").with_cause(err)
         })?;
-    tx.execute("DELETE FROM annotations WHERE book_hash = ?1", [hash])
-        .map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to reset annotations").with_cause(err)
-        })?;
-    tx.execute("DELETE FROM bookmarks WHERE book_hash = ?1", [hash])
-        .map_err(|err| {
-            AppError::new(ErrorCode::StorageIo, "failed to reset bookmarks").with_cause(err)
-        })?;
+    if annotations_changed {
+        tx.execute("DELETE FROM annotations WHERE book_hash = ?1", [hash])
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to reset annotations").with_cause(err)
+            })?;
+    }
+    if bookmarks_changed {
+        tx.execute("DELETE FROM bookmarks WHERE book_hash = ?1", [hash])
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageIo, "failed to reset bookmarks").with_cause(err)
+            })?;
+    }
 
     if let Some(progress) = &state.progress {
         tx.execute(
@@ -255,36 +275,40 @@ pub fn store_state(conn: &Connection, hash: &str, state: &ReaderState) -> Result
             })?;
         }
     }
-    for annotation in &state.annotations {
-        tx.execute(
-            "INSERT INTO annotations (id, book_hash, cfi, color, style, note, excerpt, updated_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                annotation.id,
-                hash,
-                annotation.cfi,
-                annotation.color,
-                annotation.style,
-                annotation.note,
-                annotation.excerpt,
-                annotation.updated_at,
-                annotation.deleted
-            ],
-        )
-        .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save annotation").with_cause(err))?;
+    if annotations_changed {
+        for annotation in &state.annotations {
+            tx.execute(
+                "INSERT INTO annotations (id, book_hash, cfi, color, style, note, excerpt, updated_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    annotation.id,
+                    hash,
+                    annotation.cfi,
+                    annotation.color,
+                    annotation.style,
+                    annotation.note,
+                    annotation.excerpt,
+                    annotation.updated_at,
+                    annotation.deleted
+                ],
+            )
+            .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save annotation").with_cause(err))?;
+        }
     }
-    for bookmark in &state.bookmarks {
-        tx.execute(
-            "INSERT INTO bookmarks (id, book_hash, cfi, label, created_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                bookmark.id,
-                hash,
-                bookmark.cfi,
-                bookmark.label,
-                bookmark.created_at,
-                bookmark.deleted
-            ],
-        )
-        .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save bookmark").with_cause(err))?;
+    if bookmarks_changed {
+        for bookmark in &state.bookmarks {
+            tx.execute(
+                "INSERT INTO bookmarks (id, book_hash, cfi, label, created_at, deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    bookmark.id,
+                    hash,
+                    bookmark.cfi,
+                    bookmark.label,
+                    bookmark.created_at,
+                    bookmark.deleted
+                ],
+            )
+            .map_err(|err| AppError::new(ErrorCode::StorageIo, "failed to save bookmark").with_cause(err))?;
+        }
     }
     tx.commit().map_err(|err| {
         AppError::new(ErrorCode::StorageIo, "failed to commit reader state").with_cause(err)
@@ -1071,6 +1095,37 @@ mod tests {
             }],
             updated_at: "2026-09-09T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn store_state_skips_rewrite_when_annotations_and_bookmarks_unchanged() {
+        let conn = memory_db();
+        let hash = "c".repeat(64);
+        seed_book(&conn, &hash);
+
+        let mut state = sample();
+        store_state(&conn, &hash, &state).unwrap();
+        // 只推进进度(阅读中 15s 一次的就是这种保存):批注/书签原样保留,
+        // 分离写的意义就在这 —— 以前这次保存会 DELETE+重插全部划线。
+        state.progress = Some(StoredProgress {
+            cfi: "epubcfi(/6/6)".into(),
+            fraction: 0.57,
+        });
+        state.updated_at = "2026-09-09T00:05:00Z".into();
+        store_state(&conn, &hash, &state).unwrap();
+        let reloaded = load_state(&conn, &hash).unwrap().unwrap();
+        assert_eq!(reloaded.annotations, state.annotations);
+        assert_eq!(reloaded.bookmarks, state.bookmarks);
+        assert_eq!(reloaded.progress.as_ref().unwrap().fraction, 0.57);
+
+        // 批注真变了(改 note):必须如实落库,省写不能吞掉变化。
+        state.annotations[0].note = Some("AI 解释已写入".into());
+        store_state(&conn, &hash, &state).unwrap();
+        let reloaded = load_state(&conn, &hash).unwrap().unwrap();
+        assert_eq!(
+            reloaded.annotations[0].note.as_deref(),
+            Some("AI 解释已写入")
+        );
     }
 
     #[test]
