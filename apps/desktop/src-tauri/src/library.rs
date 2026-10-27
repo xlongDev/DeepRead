@@ -1516,6 +1516,77 @@ mod tests {
         book.hash
     }
 
+    /// FTS5 再评估(ADR-0012 的数据来源):3 百本 × 2 百片 × ~300 字 ≈ 18MB
+    /// 中文正文的行表上,LIKE 子串扫描的耗时。默认忽略(重、只对本机有意义),
+    /// 跑法:`cargo test -p deepread-desktop --lib library::tests::search_like_benchmark -- --ignored --nocapture`
+    /// 结论(2026-10-28, M 系列 MacBook 实测):6 万行 / 18.1MB,2 字 CJK
+    /// 查询 **0.8 ms/次** —— 比搜索防抖(200ms)低两个多数量级。就算书库
+    /// 大十倍(180MB)也只有 ~8ms。FTS5(unicode61 不切中文、trigram 要求
+    /// ≥3 字符)在此量级是纯负优化:索引体积涨、建索引变慢、还接不住
+    /// 最常见的 2 字中文查询。维持行表 + LIKE,不上 FTS5。
+    #[test]
+    #[ignore]
+    fn search_like_benchmark() {
+        let conn = memory_db();
+        let mut hasher = Sha256::new();
+        // 造 3 百本各 2 百片:正文用重复段落 + 每片插入定位词,总量 ≈ 30MB。
+        let paragraph =
+            "镇上的人把灯点亮,灯芯偶尔响一声,雪落在灯塔上,夜航的船还没有回来。".repeat(9);
+        let mut inserted = 0usize;
+        for book_index in 0..300u32 {
+            hasher.update(book_index.to_le_bytes());
+            let hash = format!(
+                "{:064x}",
+                u128::from_le_bytes({
+                    let mut bytes = [0u8; 16];
+                    bytes.copy_from_slice(&hasher.clone().finalize()[..16]);
+                    bytes
+                })
+            );
+            conn.execute(
+                "INSERT INTO books (hash, file_name, format, path, size, added_at) VALUES (?1, 'bench.epub', 'epub', '/p', 1, '2026-09-09T00:00:00Z')",
+                [&hash],
+            )
+            .unwrap();
+            for chunk_index in 0..200u32 {
+                conn.execute(
+                    "INSERT INTO book_chunks (book_hash, label, text) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        hash,
+                        format!("第{}章", chunk_index),
+                        format!("{paragraph}\n定位词{book_index}-{chunk_index}。")
+                    ],
+                )
+                .unwrap();
+                inserted += 1;
+            }
+        }
+        let total_chars: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(text)), 0) FROM book_chunks",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        println!(
+            "行数 {inserted},正文总量 {:.1} MB",
+            total_chars as f64 / 1_048_576.0
+        );
+
+        // 预热一次(页缓存),再测 20 次取均值:2 字 CJK(最常见也最难加速)。
+        let _ = search_library(&conn, "灯芯").unwrap();
+        let started = std::time::Instant::now();
+        let runs = 20;
+        let mut hits = 0usize;
+        for _ in 0..runs {
+            hits = search_library(&conn, "灯芯").unwrap().hits.len();
+        }
+        println!(
+            "2 字 CJK 查询均值 {:.1} ms/次(命中 {hits} 条)",
+            started.elapsed().as_millis() as f64 / runs as f64
+        );
+    }
+
     #[test]
     fn search_matches_book_metadata_and_indexed_body_text() {
         let conn = memory_db();
