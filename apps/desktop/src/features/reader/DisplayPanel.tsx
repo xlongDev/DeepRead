@@ -33,6 +33,9 @@ interface DisplayPanelProps {
   readonly rulerSettings: ReadingRulerSettings
   readonly updateRuler: (patch: Partial<ReadingRulerSettings>) => void
   readonly toggleRuler: () => void
+  readonly wakeLockEnabled: boolean
+  readonly wakeLockSupported: boolean
+  readonly onWakeLockChange: (enabled: boolean) => void
 }
 
 export function DisplayPanel({
@@ -48,6 +51,9 @@ export function DisplayPanel({
   rulerSettings,
   updateRuler,
   toggleRuler,
+  wakeLockEnabled,
+  wakeLockSupported,
+  onWakeLockChange,
 }: DisplayPanelProps) {
   return (
     <section className="reader-settings reader-display" aria-label="显示设置">
@@ -166,6 +172,27 @@ export function DisplayPanel({
           ? '阅读尺暂不支持固定排版(PDF / 漫画)与竖排正文。'
           : '滚轮与 ↑↓ 移动聚焦行,走到页尾自动翻页;当前排版是滚动时,移动后当前行会回到视口中间。分页排版只高亮、不滚动页面。'}
       </p>
+      <div className="settings-row">
+        <span className="settings-label">屏幕常亮</span>
+        <div className="stats-toggles">
+          <button
+            type="button"
+            className={`stats-toggle${wakeLockEnabled ? ' is-on' : ''}`}
+            role="switch"
+            aria-checked={wakeLockEnabled}
+            disabled={!wakeLockSupported}
+            onClick={() => onWakeLockChange(!wakeLockEnabled)}
+          >
+            <span className="stats-toggle-label">阅读时保持屏幕常亮</span>
+            <span className="stats-toggle-track" aria-hidden>
+              <span className="stats-toggle-thumb" />
+            </span>
+          </button>
+        </div>
+      </div>
+      {!wakeLockSupported && (
+        <p className="ai-privacy">当前环境不支持屏幕常亮(Wake Lock),开关仅在支持的设备上生效。</p>
+      )}
     </section>
   )
 }

@@ -106,6 +106,12 @@ import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { ReaderBottomBar } from './ReaderBottomBar'
 import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
 import { FootnotePopup } from './FootnotePopup'
+import {
+  acquireWakeLock,
+  isWakeLockSupported,
+  loadWakeLockEnabled,
+  persistWakeLockEnabled,
+} from './wake-lock'
 import { DisplayPanel } from './DisplayPanel'
 import { newTaskId } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
@@ -501,6 +507,9 @@ export function ReaderScreen({
   const [fontBusy, setFontBusy] = useState(false)
   /** 翻页动画:滑动/覆盖/仿真/淡入。 */
   const [pageTurnStyle, setPageTurnStyle] = useState<PageTurnStyle>(loadPageTurnStyle)
+  /** 屏幕常亮:阅读态持有 Wake Lock(移动端最痛;桌面不支持时入口禁用)。 */
+  const [wakeLockEnabled, setWakeLockEnabled] = useState(loadWakeLockEnabled)
+  const wakeLockSupported = isWakeLockSupported()
   const [statsSettings, setStatsSettings] = useState<StatsSettings>(loadStatsSettings)
   const sectionIndexRef = useRef(0)
   /** 本章字数请求的序号:乱序返回时丢弃过期结果。 */
@@ -1263,6 +1272,43 @@ export function ReaderScreen({
     },
     [typography],
   )
+
+  /** 屏幕常亮开关:落库 + state(生命周期 effect 即刻申请/释放)。 */
+  const changeWakeLock = useCallback((enabled: boolean): void => {
+    setWakeLockEnabled(enabled)
+    persistWakeLockEnabled(enabled)
+  }, [])
+
+  // Wake Lock 生命周期:阅读态持有;系统规范是页面隐藏即自动释放,
+  // 恢复可见后重申一次(锁的句柄换了,旧句柄 release 幂等)。
+  useEffect(() => {
+    if (phase !== 'reading' || !wakeLockEnabled || !wakeLockSupported) return
+    let cancelled = false
+    let session: { release: () => void } | null = null
+    const acquire = (): void => {
+      if (cancelled) return
+      void acquireWakeLock().then((acquired) => {
+        if (cancelled) {
+          acquired.release()
+          return
+        }
+        session = acquired
+      })
+    }
+    acquire()
+    const onVisibility = (): void => {
+      if (document.visibilityState !== 'visible') return
+      session?.release()
+      session = null
+      acquire()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisibility)
+      session?.release()
+    }
+  }, [phase, wakeLockEnabled, wakeLockSupported])
 
   /** 换阅读背景:state 即时换色,落库并通知内核(与正文同屏,换档立刻看得见)。 */
   const changeTheme = useCallback(
@@ -2331,6 +2377,9 @@ export function ReaderScreen({
             rulerSettings={rulerSettings}
             updateRuler={updateRuler}
             toggleRuler={toggleRuler}
+            wakeLockEnabled={wakeLockEnabled}
+            wakeLockSupported={wakeLockSupported}
+            onWakeLockChange={changeWakeLock}
           />
         )}
 

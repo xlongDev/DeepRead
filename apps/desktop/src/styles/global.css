@@ -2586,7 +2586,8 @@ button:disabled {
 }
 
 .reader-top {
-  top: 14px;
+  /* 刘海屏安全区:桌面 env() 恒 0,取 max 即桌面原值。 */
+  top: max(14px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -2606,9 +2607,9 @@ button:disabled {
    解出 454px > 栏宽 384px,右 margin 被顶成负值溢出栏外),得由 max-width
    按包含块宽度收口,超宽时再靠 flex 子项收缩。 */
 .reader-bottom {
-  bottom: 16px;
-  left: 16px;
-  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
   width: fit-content;
   max-width: calc(100% - 32px);
   margin-inline: auto;
@@ -6202,11 +6203,11 @@ dialog.modal-panel {
 }
 
 .page-flip-left {
-  left: 0;
+  left: max(0px, env(safe-area-inset-left));
 }
 
 .page-flip-right {
-  right: 0;
+  right: max(0px, env(safe-area-inset-right));
 }
 
 /* 芯片配色走 quiet chrome,状态模型三档(底色/箭头色跟随主题变量不过渡,
