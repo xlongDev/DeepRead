@@ -345,9 +345,24 @@ export function materializeCustomDefaults(settings: TypographySettings): Typogra
  * 既有语义,排版状态收拢成单一对象时原样抽成纯函数(行为一字不改)。
  * themeIndex(即时换色)与 zhConvert(切档重开书)生命周期不同,不归这里管。
  */
+/** updateLayout 的补丁形状:显式 `undefined` = 复位到原书排版。 */
+export interface LayoutPatch {
+  viewMode?: ViewMode
+  originalLayout?: boolean
+  fontSize?: number | undefined
+  lineHeight?: number | undefined
+  fontFamily?: string | undefined
+  fontWeight?: number | undefined
+  pageMargin?: number
+  pageMarginBlock?: number
+  paragraphMargin?: number | undefined
+  textIndent?: number | undefined
+  writingMode?: WritingModeChoice | undefined
+}
+
 export function mergeTypography(
   current: TypographySettings,
-  patch: Partial<TypographySettings>,
+  patch: LayoutPatch,
 ): TypographySettings {
   return {
     viewMode: patch.viewMode ?? current.viewMode,

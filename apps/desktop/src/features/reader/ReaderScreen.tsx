@@ -12,10 +12,8 @@ import {
   Headphones,
   List,
   MagnifyingGlass,
-  Minus,
   Moon,
   PencilSimple,
-  Plus,
   Ruler,
   SlidersHorizontal,
   Sparkle,
@@ -76,24 +74,18 @@ import {
   FONT_FAMILY_OPTIONS,
   FONT_SIZE_DEFAULT,
   FONT_SIZES,
-  FONT_STACK_PREVIEW,
-  FONT_WEIGHT_OPTIONS,
   HIGHLIGHT_COLOR,
   HIGHLIGHT_PALETTE,
   layoutOverrides,
-  LINE_HEIGHT_OPTIONS,
   loadPageTurnStyle,
   loadRulerSettings,
   loadStatsSettings,
   loadTypography,
   materializeCustomDefaults,
   mergeTypography,
+  type LayoutPatch,
   PAGE_MARGIN_BLOCK_DEFAULT,
-  PAGE_MARGIN_BLOCK_OPTIONS,
   PAGE_MARGIN_INLINE_DEFAULT,
-  PAGE_MARGIN_INLINE_OPTIONS,
-  PAGE_TURN_OPTIONS,
-  PARAGRAPH_MARGIN_OPTIONS,
   persistPageTurnStyle,
   persistRulerSettings,
   persistStatsSettings,
@@ -101,33 +93,26 @@ import {
   loadTranslateTarget,
   persistTranslateTarget,
   READER_THEMES,
-  RULER_DIM_OPTIONS,
-  RULER_FOCUS_LINES,
-  TEXT_INDENT_OPTIONS,
-  VIEW_MODE_OPTIONS,
-  WRITING_MODE_OPTIONS,
-  ZH_CONVERT_OPTIONS,
   withAlpha,
   type PageTurnStyle,
   type ReadingRulerSettings,
   type StatsSettings,
   type TypographySettings,
   type ViewMode,
-  type WritingModeChoice,
 } from './reader-options'
 import { buildReadingStats } from './reading-indicators'
 import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
-import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
 import { TranslationCard, type TranslationCardState } from './TranslationCard'
 import { LookupCard, type LookupResult } from './LookupCard'
+import { SettingsPanel } from './SettingsPanel'
+import { DisplayPanel } from './DisplayPanel'
 import { newTaskId } from '../../lib/ai-chat'
 import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { ParallelPicker } from './ParallelPicker'
-import { Segmented } from './Segmented'
 import {
   anchorFromRect,
   placeCompanionCard,
@@ -1226,19 +1211,7 @@ export function ReaderScreen({
   )
 
   const updateLayout = useCallback(
-    (patch: {
-      viewMode?: ViewMode
-      originalLayout?: boolean
-      fontSize?: number | undefined
-      lineHeight?: number | undefined
-      fontFamily?: string | undefined
-      fontWeight?: number | undefined
-      pageMargin?: number
-      pageMarginBlock?: number
-      paragraphMargin?: number | undefined
-      textIndent?: number | undefined
-      writingMode?: WritingModeChoice | undefined
-    }): void => {
+    (patch: LayoutPatch): void => {
       const merged = mergeTypography(typography, patch)
       // 切到自定义排版:还没选过的维度先落到标准档 —— 否则「关了原书排版」
       // 在画面上什么都不变(每项仍是 undefined = 书自己的值),读者只会以为
@@ -1253,6 +1226,33 @@ export function ReaderScreen({
     },
     [typography],
   )
+
+  /** 换阅读背景:state 即时换色,落库并通知内核(与正文同屏,换档立刻看得见)。 */
+  const changeTheme = useCallback(
+    (index: number): void => {
+      const option = READER_THEMES[index]
+      if (option === undefined) return
+      setThemeIndex(index)
+      persistTypography({ ...typography, themeIndex: index })
+      void adapterRef.current?.setTheme(option.theme)
+    },
+    [typography],
+  )
+
+  /** 底栏信息开关:state 即时生效,落库跨会话记住。 */
+  const changeStatsSetting = (key: 'progress' | 'words' | 'time'): void => {
+    setStatsSettings((current) => {
+      const next = { ...current, [key]: !current[key] }
+      persistStatsSettings(next)
+      return next
+    })
+  }
+
+  /** 翻页动画档:state 即时生效,落库跨会话记住。 */
+  const changePageTurnStyle = (style: PageTurnStyle): void => {
+    setPageTurnStyle(style)
+    persistPageTurnStyle(style)
+  }
 
   /** 切简繁档位:state 进 open effect 依赖 → 整体重开书(见开书 effect)。 */
   const changeZhConvert = useCallback((variant: ZhConvertVariant): void => {
@@ -2293,433 +2293,42 @@ export function ReaderScreen({
         )}
 
         {openPanel === 'settings' && (
-          <section className="reader-settings" aria-label="排版设置">
-            {/* 主题:与正文同屏,换档立刻看得见。 */}
-            <div className="settings-group">
-              <span className="settings-group-label">阅读背景</span>
-              <div className="reader-theme-row">
-                {READER_THEMES.map((option, index) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
-                    style={{
-                      background: option.theme.background,
-                      color: option.theme.foreground,
-                    }}
-                    onClick={() => {
-                      setThemeIndex(index)
-                      persistTypography({ themeIndex: index })
-                      void adapterRef.current?.setTheme(option.theme)
-                    }}
-                    aria-pressed={themeIndex === index}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 原书排版总开关(默认开):开着由书决定,关掉逐项重写。 */}
-            <div className="settings-group">
-              <button
-                type="button"
-                className={`settings-toggle${typography.originalLayout ? ' is-on' : ''}`}
-                role="switch"
-                aria-checked={typography.originalLayout}
-                onClick={() => updateLayout({ originalLayout: !typography.originalLayout })}
-                title={typography.originalLayout ? '关闭后逐项自定义排版' : '恢复这本书自己的排版'}
-              >
-                <span className="settings-toggle-label">原书排版</span>
-                <span className="settings-toggle-track" aria-hidden>
-                  <span className="settings-toggle-thumb" />
-                </span>
-              </button>
-              <p className="settings-hint">
-                {typography.originalLayout
-                  ? '行距、段间距、缩进、字重与方向都用书自己的;字体仍可自选。'
-                  : '按下面的档位重写这本书的排版;任一档位还能单独选回「原书」。'}
-              </p>
-            </div>
-
-            {/* 自定义排版:这几项在「原书排版」下由书决定,不开入口 —— 一排
-                按不动的灰按钮只会让人以为坏了。关掉开关就整组出现。 */}
-            {!typography.originalLayout && (
-              <div className="settings-group">
-                <span className="settings-group-label">正文</span>
-                <div className="settings-stack">
-                  <div className="settings-row">
-                    <span className="settings-label">行距</span>
-                    <Segmented>
-                      {LINE_HEIGHT_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          className={typography.lineHeight === option.value ? 'is-active' : ''}
-                          onClick={() => updateLayout({ lineHeight: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </Segmented>
-                  </div>
-                  <div className="settings-row">
-                    <span className="settings-label">段间距</span>
-                    <Segmented>
-                      {PARAGRAPH_MARGIN_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          className={typography.paragraphMargin === option.value ? 'is-active' : ''}
-                          onClick={() => updateLayout({ paragraphMargin: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </Segmented>
-                  </div>
-                  <div className="settings-row">
-                    <span className="settings-label">段首缩进</span>
-                    <Segmented>
-                      {TEXT_INDENT_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          className={typography.textIndent === option.value ? 'is-active' : ''}
-                          onClick={() => updateLayout({ textIndent: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </Segmented>
-                  </div>
-                  <div className="settings-row">
-                    <span className="settings-label">字重</span>
-                    <Segmented>
-                      {FONT_WEIGHT_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          className={typography.fontWeight === option.value ? 'is-active' : ''}
-                          style={{ fontWeight: option.cssWeight }}
-                          onClick={() => updateLayout({ fontWeight: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </Segmented>
-                  </div>
-                  <div className="settings-row">
-                    <span className="settings-label">排版方向</span>
-                    <Segmented>
-                      {WRITING_MODE_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          className={typography.writingMode === option.value ? 'is-active' : ''}
-                          onClick={() => updateLayout({ writingMode: option.value })}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </Segmented>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 字号与两把边距:阅读舒适度,与是否「原书排版」无关。 */}
-            <div className="settings-group">
-              <span className="settings-group-label">页面</span>
-              <div className="settings-stack">
-                <div className="settings-row">
-                  <span className="settings-label">字号</span>
-                  <div className="segmented">
-                    <button
-                      type="button"
-                      className="chrome-button"
-                      onClick={() => changeFontSize(-1)}
-                      title="减小字号"
-                    >
-                      <Minus size={14} weight="regular" aria-hidden />
-                    </button>
-                    <span className="segmented-value">
-                      {typography.fontSize ?? FONT_SIZE_DEFAULT}px
-                    </span>
-                    <button
-                      type="button"
-                      className="chrome-button"
-                      onClick={() => changeFontSize(1)}
-                      title="增大字号"
-                    >
-                      <Plus size={14} weight="regular" aria-hidden />
-                    </button>
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-label">左右边距</span>
-                  <Segmented>
-                    {PAGE_MARGIN_INLINE_OPTIONS.map((option) => (
-                      <button
-                        key={option.label}
-                        type="button"
-                        className={typography.pageMargin === option.value ? 'is-active' : ''}
-                        onClick={() => updateLayout({ pageMargin: option.value })}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </Segmented>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-label">上下边距</span>
-                  <Segmented>
-                    {PAGE_MARGIN_BLOCK_OPTIONS.map((option) => (
-                      <button
-                        key={option.label}
-                        type="button"
-                        className={typography.pageMarginBlock === option.value ? 'is-active' : ''}
-                        onClick={() => updateLayout({ pageMarginBlock: option.value })}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </Segmented>
-                </div>
-              </div>
-            </div>
-
-            {/* 字体独立于总开关:读哪本书都用自己的字体是阅读口味,不是「书的
-                排版」—— 两种模式下都给入口,选「原书」才回到书自带的字体。 */}
-            <div className="settings-group">
-              <span className="settings-group-label">字体</span>
-              <Segmented className="segmented-wrap">
-                {FONT_FAMILY_OPTIONS.map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={typography.fontFamily === option.value ? 'is-active' : ''}
-                    style={
-                      option.value !== undefined && FONT_STACK_PREVIEW[option.value]
-                        ? { fontFamily: FONT_STACK_PREVIEW[option.value] }
-                        : undefined
-                    }
-                    onClick={() => updateLayout({ fontFamily: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-                {customFonts.map((font) => (
-                  <button
-                    key={font.id}
-                    type="button"
-                    className={typography.fontFamily === font.name ? 'is-active' : ''}
-                    onClick={() => updateLayout({ fontFamily: font.name })}
-                    title={`${font.name}(点按使用;长按列表删除)`}
-                  >
-                    {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
-                  </button>
-                ))}
-              </Segmented>
-              <div className="font-custom-row">
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => void importReadingFont()}
-                  disabled={fontBusy}
-                >
-                  <Plus size={13} weight="bold" aria-hidden />
-                  {fontBusy ? '导入中…' : '导入字体'}
-                </button>
-                {customFontInUse !== null && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost font-remove"
-                    onClick={() => void removeReadingFont(customFontInUse)}
-                    title="删除当前使用的自定义字体"
-                  >
-                    <Trash size={13} aria-hidden /> 删除当前字体
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <span className="settings-group-label">文字与词典</span>
-              <div className="settings-stack">
-                <div className="settings-row">
-                  <span className="settings-label">简繁转换</span>
-                  {/* 二级菜单:9 档全展开会占掉半个面板(还会把字体行挤出视口),
-                      触发器只显示当前档位,点开才是完整列表。 */}
-                  <DropdownMenu
-                    value={zhConvert}
-                    options={ZH_CONVERT_OPTIONS}
-                    onChange={changeZhConvert}
-                    ariaLabel="简繁转换"
-                    title="转换正文与目录;切换后重新打开本书生效"
-                    themeVars={readerVars}
-                  />
-                </div>
-                {dictionaries.map((dictionary) => (
-                  <div key={dictionary.id} className="settings-row dictionary-row">
-                    <span className="settings-label">
-                      {dictionary.name} · {dictionary.wordCount}
-                    </span>
-                    <button
-                      type="button"
-                      className="chrome-button"
-                      onClick={() => void removeDictionary(dictionary.id)}
-                      title="移除词典"
-                    >
-                      <X size={12} weight="regular" aria-hidden />
-                    </button>
-                  </div>
-                ))}
-                <div className="settings-row">
-                  <span className="settings-label">导入词典</span>
-                  <div className="segmented">
-                    <button type="button" onClick={() => void importDictionary()}>
-                      选择 .ifo
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {panelProblem !== null && (
-              <p className="lookup-empty" role="alert">
-                {panelProblem}
-              </p>
-            )}
-          </section>
+          <SettingsPanel
+            typography={typography}
+            themeIndex={themeIndex}
+            onThemeChange={changeTheme}
+            updateLayout={updateLayout}
+            changeFontSize={changeFontSize}
+            customFonts={customFonts}
+            fontBusy={fontBusy}
+            importReadingFont={importReadingFont}
+            removeReadingFont={removeReadingFont}
+            customFontInUse={customFontInUse}
+            zhConvert={zhConvert}
+            changeZhConvert={changeZhConvert}
+            dictionaries={dictionaries}
+            removeDictionary={removeDictionary}
+            importDictionary={importDictionary}
+            panelProblem={panelProblem}
+            themeVars={readerVars}
+          />
         )}
 
         {openPanel === 'display' && (
-          <section className="reader-settings reader-display" aria-label="显示设置">
-            <div className="settings-group">
-              <span className="settings-group-label">显示</span>
-              <div className="stats-toggles">
-                {(
-                  [
-                    { key: 'progress', label: '进度条与页码' },
-                    { key: 'words', label: '字数' },
-                    { key: 'time', label: '预计时间' },
-                  ] as const
-                ).map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={`stats-toggle${statsSettings[item.key] ? ' is-on' : ''}`}
-                    role="switch"
-                    aria-checked={statsSettings[item.key]}
-                    onClick={() => {
-                      setStatsSettings((current) => {
-                        const next = { ...current, [item.key]: !current[item.key] }
-                        persistStatsSettings(next)
-                        return next
-                      })
-                    }}
-                  >
-                    <span className="stats-toggle-label">{item.label}</span>
-                    <span className="stats-toggle-track" aria-hidden>
-                      <span className="stats-toggle-thumb" />
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-group">
-              <span className="settings-group-label">翻页动画</span>
-              <Segmented>
-                {PAGE_TURN_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={pageTurnStyle === option.value ? 'is-active' : ''}
-                    onClick={() => {
-                      setPageTurnStyle(option.value)
-                      persistPageTurnStyle(option.value)
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </Segmented>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">方式</span>
-              <Segmented>
-                {VIEW_MODE_OPTIONS.filter(
-                  (option) => option.value !== 'scroll' || scrollModeSupported,
-                ).map((option) => (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={typography.viewMode === option.value ? 'is-active' : ''}
-                    onClick={() => updateLayout({ viewMode: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </Segmented>
-            </div>
-            <div className="settings-group">
-              <span className="settings-group-label">阅读尺</span>
-              <div className="stats-toggles">
-                <button
-                  type="button"
-                  className={`stats-toggle${rulerActive ? ' is-on' : ''}`}
-                  role="switch"
-                  aria-checked={rulerActive}
-                  disabled={!rulerSupported}
-                  onClick={toggleRuler}
-                >
-                  <span className="stats-toggle-label">聚焦当前行,淡化其他行</span>
-                  <span className="stats-toggle-track" aria-hidden>
-                    <span className="stats-toggle-thumb" />
-                  </span>
-                </button>
-              </div>
-            </div>
-            {rulerActive && (
-              <>
-                <div className="settings-row">
-                  <span className="settings-label">聚焦行数</span>
-                  <Segmented>
-                    {RULER_FOCUS_LINES.map((count) => (
-                      <button
-                        key={count}
-                        type="button"
-                        className={rulerSettings.focusLines === count ? 'is-active' : ''}
-                        onClick={() => updateRuler({ focusLines: count })}
-                      >
-                        {count}
-                      </button>
-                    ))}
-                  </Segmented>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-label">淡化</span>
-                  <Segmented>
-                    {RULER_DIM_OPTIONS.map((option) => (
-                      <button
-                        key={option.label}
-                        type="button"
-                        className={rulerSettings.dimOpacity === option.value ? 'is-active' : ''}
-                        onClick={() => updateRuler({ dimOpacity: option.value })}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </Segmented>
-                </div>
-              </>
-            )}
-            <p className="ai-privacy">
-              {!rulerSupported
-                ? '阅读尺暂不支持固定排版(PDF / 漫画)与竖排正文。'
-                : '滚轮与 ↑↓ 移动聚焦行,走到页尾自动翻页;当前排版是滚动时,移动后当前行会回到视口中间。分页排版只高亮、不滚动页面。'}
-            </p>
-          </section>
+          <DisplayPanel
+            typography={typography}
+            updateLayout={updateLayout}
+            scrollModeSupported={scrollModeSupported}
+            statsSettings={statsSettings}
+            onStatsToggle={changeStatsSetting}
+            pageTurnStyle={pageTurnStyle}
+            onPageTurnChange={changePageTurnStyle}
+            rulerActive={rulerActive}
+            rulerSupported={rulerSupported}
+            rulerSettings={rulerSettings}
+            updateRuler={updateRuler}
+            toggleRuler={toggleRuler}
+          />
         )}
 
         {openPanel === 'toc' && (
