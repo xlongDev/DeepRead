@@ -594,6 +594,11 @@ export function ReaderScreen({
             : 0
         const cfi = location.cfi
         progressRef.current = cfi !== undefined ? { cfi, fraction } : progressRef.current
+        // ponytail: setProgress 触发整个 ReaderScreen 重渲染 —— 滚动模式高频
+        // relocate 时的已知上限。面板拆出后,关闭状态的面板在 JSX 里短路,
+        // 实际开销只剩底栏与顶栏的内联子树;若实测滚动卡顿,升级路径是把
+        // progress 消费者(底栏滑杆/页码/书签态)下沉为订阅组件再 memo,
+        // 而不是在这里做节流(节流会让滑杆回弹)。
         setProgress({
           cfi: cfi ?? null,
           fraction,
