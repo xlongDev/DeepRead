@@ -7,7 +7,6 @@ import {
   CaretLeft,
   CaretRight,
   Columns,
-  Copy,
   CornersOut,
   GraduationCap,
   Headphones,
@@ -54,7 +53,6 @@ import {
   reviewRepair,
   inflateGzip,
   lookupWord,
-  sanitizeDefinitionHtml,
   type DefinitionField,
   type EngineCallbacks,
   type EngineSelection,
@@ -106,7 +104,6 @@ import {
   RULER_DIM_OPTIONS,
   RULER_FOCUS_LINES,
   TEXT_INDENT_OPTIONS,
-  TRANSLATE_TARGETS,
   VIEW_MODE_OPTIONS,
   WRITING_MODE_OPTIONS,
   ZH_CONVERT_OPTIONS,
@@ -123,6 +120,8 @@ import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { AiDrawer } from './AiDrawer'
+import { TranslationCard, type TranslationCardState } from './TranslationCard'
+import { LookupCard, type LookupResult } from './LookupCard'
 import { newTaskId } from '../../lib/ai-chat'
 import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
@@ -440,7 +439,7 @@ export function ReaderScreen({
   const [lookup, setLookup] = useState<{
     word: string
     rect: { top: number; left: number }
-    results: readonly { dictName: string; word: string; fields: readonly DefinitionField[] }[]
+    results: readonly LookupResult[]
   } | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [repairReview, setRepairReview] = useState<{
@@ -508,15 +507,7 @@ export function ReaderScreen({
   /** AI 服务列表:翻译要显示用的哪个 provider/model(成本诚实)。 */
   const [aiProviders, setAiProviders] = useState<readonly AiProviderConfig[]>([])
   /** 划选翻译的浮层状态;null = 没在翻译。 */
-  const [translation, setTranslation] = useState<{
-    readonly rect: { readonly top: number; readonly left: number }
-    readonly lang: string | null
-    readonly body: string
-    readonly provider: string
-    readonly truncated: boolean
-    readonly error: string | null
-    readonly loading: boolean
-  } | null>(null)
+  const [translation, setTranslation] = useState<TranslationCardState | null>(null)
   /** 目标语言:null = 没手动选过,跟着书的语言走(见 effectiveTranslateTarget)。 */
   const [translateTarget, setTranslateTarget] = useState<string | null>(loadTranslateTarget)
   /** 目标语言的实际取值:没手动选过时,中文书译英、其余译中。 */
@@ -3153,127 +3144,26 @@ export function ReaderScreen({
         )}
 
         {translation !== null && (
-          <div
-            className="lookup-card translate-card"
-            aria-label="翻译"
-            style={{
-              // rect.top 已是避开划词工具算好的落点(见 runTranslate),这里只做
-              // 视口兜底;卡片 max-height 由 CSS 管,流式变高时自己滚。
-              top: Math.min(Math.max(64, translation.rect.top ?? 100), window.innerHeight - 300),
-              left: Math.max(12, Math.min(translation.rect.left ?? 100, window.innerWidth - 340)),
+          <TranslationCard
+            translation={translation}
+            targetLanguage={effectiveTranslateTarget}
+            themeVars={readerVars}
+            onTargetLanguageChange={(target) => {
+              setTranslateTarget(target)
+              persistTranslateTarget(target)
             }}
-          >
-            <div className="lookup-head">
-              <strong>翻译 → {effectiveTranslateTarget}</strong>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => setTranslation(null)}
-                title="关闭"
-              >
-                <X size={12} weight="regular" aria-hidden />
-              </button>
-            </div>
-            <DropdownMenu
-              className="tts-card-dropdown"
-              ariaLabel="翻译目标语言"
-              themeVars={readerVars}
-              value={effectiveTranslateTarget}
-              options={TRANSLATE_TARGETS.map((target) => ({ value: target, label: target }))}
-              onChange={(target) => {
-                setTranslateTarget(target)
-                persistTranslateTarget(target)
-              }}
-            >
-              <span className="tts-card-value">{effectiveTranslateTarget}</span>
-              <span className="tts-card-label">目标语言</span>
-            </DropdownMenu>
-            {translation.truncated && (
-              <p className="reader-toc-empty">
-                选中内容超过 {TRANSLATE_MAX_CHARS} 字,只译了前 {TRANSLATE_MAX_CHARS} 字。
-              </p>
-            )}
-            {translation.error !== null ? (
-              <p className="ai-error" role="alert">
-                {translation.error}
-              </p>
-            ) : (
-              <p className="translate-body">
-                {translation.body === ''
-                  ? translation.loading
-                    ? '翻译中…'
-                    : '没有返回译文。'
-                  : translation.body}
-              </p>
-            )}
-            <div className="translate-foot">
-              {/* 成本诚实:这译文是谁出的、用的哪个模型,直接写在卡片上。 */}
-              <span className="translate-provider">{translation.provider}</span>
-              <div className="translate-actions">
-                {translation.lang !== null && (
-                  <span className="translate-provider">源语言 {translation.lang}</span>
-                )}
-                <button
-                  type="button"
-                  className="chrome-button"
-                  onClick={() => void navigator.clipboard?.writeText(translation.body)}
-                  title="复制译文"
-                >
-                  <Copy size={12} weight="regular" aria-hidden />
-                </button>
-              </div>
-            </div>
-          </div>
+            onClose={() => setTranslation(null)}
+          />
         )}
 
         {(lookupLoading || lookup !== null) && (
-          <div
-            className="lookup-card"
-            style={{
-              // 同翻译卡:rect.top 已是避开工具条算好的落点,这里只做视口兑底。
-              top: Math.min(
-                Math.max(64, lookup?.rect.top ?? selection?.rect.top ?? 100),
-                window.innerHeight - 260,
-              ),
-              left: Math.max(12, Math.min(lookup?.rect.left ?? 100, window.innerWidth - 320)),
-            }}
-          >
-            <div className="lookup-head">
-              <strong>{lookup?.word ?? '查询中…'}</strong>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => setLookup(null)}
-                title="关闭"
-              >
-                <X size={12} weight="regular" aria-hidden />
-              </button>
-            </div>
-            {lookupLoading && <p className="lookup-empty">查询中…</p>}
-            {lookup !== null && lookup.results.length === 0 && !lookupLoading && (
-              <p className="lookup-empty">词典中没有这个词条。</p>
-            )}
-            {lookup?.results.map((result, index) => (
-              <div key={`${result.dictName}-${index}`} className="lookup-entry">
-                <p className="lookup-dict">{result.dictName}</p>
-                {result.fields.map((field, fieldIndex) =>
-                  field.type === 'html' ? (
-                    <div
-                      key={fieldIndex}
-                      className="lookup-def"
-                      dangerouslySetInnerHTML={{
-                        __html: sanitizeDefinitionHtml(field.content, new DOMParser()),
-                      }}
-                    />
-                  ) : (
-                    <div key={fieldIndex} className="lookup-def">
-                      {field.content}
-                    </div>
-                  ),
-                )}
-              </div>
-            ))}
-          </div>
+          <LookupCard
+            word={lookup?.word ?? null}
+            rect={lookup?.rect ?? selection?.rect ?? null}
+            loading={lookupLoading}
+            results={lookup?.results ?? []}
+            onClose={() => setLookup(null)}
+          />
         )}
 
         {notice !== null && (
