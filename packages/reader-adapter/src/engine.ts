@@ -33,6 +33,7 @@ import {
 } from '@deepread/reader-core'
 import type {
   FoliateAnnotation,
+  FoliateBook,
   FoliateRenderer,
   FoliateTocItem,
   View,
@@ -40,6 +41,7 @@ import type {
 } from 'foliate-js/view.js'
 import type { PDFPageColors } from './books/vendor/foliate-pdf.js'
 import { Overlayer } from 'foliate-js/overlayer.js'
+import { FootnoteHandler } from 'foliate-js/footnotes.js'
 import { isSupported } from './format'
 import { AnnotationRegistry } from './annotation-registry'
 import { PdfScrollStrip } from './pdf-scroll'
@@ -293,6 +295,19 @@ export interface EngineCallbacks {
   onRelocate?: (location: EngineLocation) => void
   onSelection?: (selection: EngineSelection | null) => void
   onShowAnnotation?: (cfi: string) => void
+  /**
+   * 脚注浮层渲染完成(FootnoteHandler 'render'):view 是内核渲染好脚注
+   * 内容的二级 foliate-view 元素,宿主负责挂进弹层展示与关闭时释放。
+   */
+  onFootnote?: (detail: FootnoteRenderDetail) => void
+}
+
+/** 脚注弹层的宿主载荷(内核 render 事件的宿主相关子集)。 */
+export interface FootnoteRenderDetail {
+  /** 渲染好脚注内容的二级 foliate-view 自定义元素(内核已注册)。 */
+  readonly view: HTMLElement
+  /** EPUB 类型标注:footnote / endnote / biblioentry / definition / note。 */
+  readonly type: string | null
 }
 
 /**
@@ -895,6 +910,47 @@ export class FoliateAdapter implements ReaderEngine {
     view.addEventListener('show-annotation', (event) => {
       const { value } = (event as CustomEvent).detail as { value: string }
       this.#callbacks.onShowAnnotation?.(value)
+    })
+    // 脚注弹层:内核 FootnoteHandler 接管 external-link 事件 —— 它只对
+    // 脚注类链接 preventDefault 并渲染二级视图;普通外链不拦,内核照旧
+    // window.open。书对象从 view 惰性读:视图建好时还没 open,book 要等
+    // open 才有。
+    const footnotes = new FootnoteHandler()
+    view.addEventListener('external-link', (event) => {
+      const book = (view as unknown as { book?: FoliateBook }).book
+      if (book === undefined) return
+      void Promise.resolve(footnotes.handle(book, event as CustomEvent)).catch(() => {
+        // 脚注解析失败(坏锚点等)不值得打断阅读;内核已自己 log。
+      })
+    })
+    footnotes.addEventListener('render', (event) => {
+      const detail = (event as CustomEvent).detail as {
+        view: HTMLElement
+        type: string | null
+      }
+      // 二级视图主题化:与正文同一套阅读 CSS(滚动流;内核默认样式是白底,
+      // 夜间阅读会是一块白板)。字号沿用当前排版;弹层内边距收小 ——
+      // buildReaderCSS 的 scrolled 留白是给整屏正文用的,追加规则在同
+      // 优先级下后写者胜。
+      if (this.#theme !== null) {
+        try {
+          const renderer = (
+            detail.view as unknown as {
+              renderer?: {
+                setAttribute?: (name: string, value: string) => void
+                setStyles?: (css: string) => void
+              }
+            }
+          ).renderer
+          renderer?.setAttribute?.('flow', 'scrolled')
+          renderer?.setStyles?.(
+            `${buildReaderCSS(this.#theme, this.#layout, 'scrolled')}\nbody { padding: 12px 16px !important; }`,
+          )
+        } catch {
+          // 主题化失败不影响可读:内核默认样式兜底。
+        }
+      }
+      this.#callbacks.onFootnote?.({ view: detail.view, type: detail.type })
     })
     this.#view = view
     this.#guardRendererAnimated(view)

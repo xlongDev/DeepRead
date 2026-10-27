@@ -105,6 +105,7 @@ import { LookupCard, type LookupResult } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
 import { TocPanel, MAX_SHOWN_SEARCH_RESULTS } from './TocPanel'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
+import { FootnotePopup } from './FootnotePopup'
 import { DisplayPanel } from './DisplayPanel'
 import { newTaskId } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
@@ -483,6 +484,8 @@ export function ReaderScreen({
   const effectiveTranslateTarget =
     translateTarget ?? (bookLanguage?.toLowerCase().startsWith('zh') ? 'English' : '中文')
   const [panelProblem, setPanelProblem] = useState<string | null>(null)
+  /** 脚注弹层:内核渲染好内容的二级视图元素;null = 关闭。 */
+  const [footnote, setFootnote] = useState<{ view: HTMLElement; type: string | null } | null>(null)
   /** 旧版 per-book 自定义正则(B7.2 之前的实现):给规则面板做一键导入用。 */
   const legacyChapterPattern =
     typeof localStorage === 'undefined'
@@ -626,6 +629,9 @@ export function ReaderScreen({
         // 点按/翻页(空选区)不打扰 chrome 的显隐节奏;真正划选文本才唤起。
         if (sel !== null) showChromeRef.current()
       },
+      onFootnote: (detail) => {
+        setFootnote({ view: detail.view, type: detail.type })
+      },
       onShowAnnotation: (cfi) => {
         setSelection(null)
         setActiveAnnotation(cfi)
@@ -705,6 +711,7 @@ export function ReaderScreen({
       onRelocate: (location) => callbacksRef.current.onRelocate?.(location),
       onSelection: (sel) => callbacksRef.current.onSelection?.(sel),
       onShowAnnotation: (cfi) => callbacksRef.current.onShowAnnotation?.(cfi),
+      onFootnote: (detail) => callbacksRef.current.onFootnote?.(detail),
       onKeyDown: (event) => handleReaderKeyRef.current(event),
       // 正文 iframe 上的指针活动转发:chrome 收起后鼠标在书上动一动就能
       // 唤回顶栏/底栏(否则设置面板在沉浸模式下点不到)。
@@ -1167,6 +1174,8 @@ export function ReaderScreen({
         // Esc 归 TtsDrawer:它把自己收起成迷你条(播放不中断)。这里若跟着
         // 清 openPanel,抽屉在「最小化动画第一帧」就被卸载,用户看到的是
         // 「按 Esc 面板直接关了,没有小条」。
+      } else if (footnote !== null) {
+        // Esc 归脚注弹层(弹层自己的监听负责关),别把面板一起收了。
       } else {
         setOpenPanel(null)
         setSelection(null)
@@ -1174,7 +1183,7 @@ export function ReaderScreen({
         setNoteDraft(null)
       }
     },
-    [turnPage, toggleFullscreen, hidden, ttsMounted, paneActive, rulerActive],
+    [turnPage, toggleFullscreen, hidden, ttsMounted, footnote, paneActive, rulerActive],
   )
 
   useEffect(() => {
@@ -2549,6 +2558,18 @@ export function ReaderScreen({
             loading={lookupLoading}
             results={lookup?.results ?? []}
             onClose={() => setLookup(null)}
+          />
+        )}
+
+        {footnote !== null && (
+          <FootnotePopup
+            view={footnote.view}
+            type={footnote.type}
+            onClose={() => {
+              // 内核视图释放(paginator/iframe),元素摘除由弹层卸载负责。
+              ;(footnote.view as unknown as { close?: () => void }).close?.()
+              setFootnote(null)
+            }}
           />
         )}
 

@@ -278,3 +278,27 @@ declare module 'foliate-js/vendor/zip.js' {
     constructor(encoding?: string)
   }
 }
+
+declare module 'foliate-js/footnotes.js' {
+  /** 'render' 事件载荷:二级视图已把脚注内容渲染进 body。 */
+  export interface FootnoteRenderInfo {
+    readonly view: HTMLElement
+    readonly href: string
+    readonly type: string | null
+    readonly hidden: boolean
+    readonly target: Element
+  }
+
+  /**
+   * 接管 view 的 external-link 事件:脚注类链接(noteref / role/type 标注 /
+   * 上标"maybe")preventDefault 后渲染二级 foliate-view 并先后派发
+   * 'before-render' 与 'render';普通外链不拦,内核照旧 window.open。
+   */
+  export class FootnoteHandler extends EventTarget {
+    detectFootnotes: boolean
+    handle(
+      book: import('foliate-js/view.js').FoliateBook,
+      event: CustomEvent<{ a: HTMLAnchorElement; href: string; follow?: boolean }>,
+    ): Promise<void> | undefined
+  }
+}
