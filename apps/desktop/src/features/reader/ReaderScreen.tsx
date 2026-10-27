@@ -89,6 +89,7 @@ import {
   loadStatsSettings,
   loadTypography,
   materializeCustomDefaults,
+  mergeTypography,
   PAGE_MARGIN_BLOCK_DEFAULT,
   PAGE_MARGIN_BLOCK_OPTIONS,
   PAGE_MARGIN_INLINE_DEFAULT,
@@ -389,43 +390,33 @@ export function ReaderScreen({
   })
   const [annotations, setAnnotations] = useState<readonly AnnotationRecord[]>([])
   const [bookmarks, setBookmarks] = useState<readonly BookmarkRecord[]>([])
-  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode)
-  /** 原书排版总开关(默认开:书自己的排版赢)。 */
-  const [originalLayout, setOriginalLayout] = useState<boolean>(
-    () => storedTypography.originalLayout ?? true,
-  )
-  /** undefined = 读者还没动过(切到自定义排版时才会落到 18px,见
-      `materializeCustomDefaults`);面板显示与下发仍按 16 兜底。 */
-  const [fontSize, setFontSize] = useState<number | undefined>(() => storedTypography.fontSize)
-  const [lineHeight, setLineHeight] = useState<number | undefined>(
-    () => storedTypography.lineHeight,
-  )
-  const [fontFamily, setFontFamily] = useState<string | undefined>(
-    () => storedTypography.fontFamily,
-  )
   /**
-   * 页边距 · 左右(px)。内核没有横向边距属性,这一路由栏宽上限模拟(见
-   * reader-adapter 的 #maxInlineSize):数字越大留白越宽、栏越窄。
+   * 排版与版式的单一状态面:过去是 11 个独立 useState,又在 settingsRef
+   * effect 与 updateLayout 里手工拼装同步 —— 收拢为一个对象,唯一变更入口
+   * 是 updateLayout(patch)(合并语义见 reader-options 的 mergeTypography,
+   * 显式 undefined = 复位到原书排版)。themeIndex(即时换色)与
+   * zhConvert(切档重开书)生命周期不同,仍是独立 state。
    */
-  const [pageMargin, setPageMargin] = useState<number>(
-    () => storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
-  )
-  /** 页边距 · 上下(px):直接是 paginator 的 margin 属性。 */
-  const [pageMarginBlock, setPageMarginBlock] = useState<number>(
-    () => storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
-  )
-  const [paragraphMargin, setParagraphMargin] = useState<number | undefined>(
-    () => storedTypography.paragraphMargin,
-  )
-  const [textIndent, setTextIndent] = useState<number | undefined>(
-    () => storedTypography.textIndent,
-  )
-  const [fontWeight, setFontWeight] = useState<number | undefined>(
-    () => storedTypography.fontWeight,
-  )
-  const [writingMode, setWritingMode] = useState<WritingModeChoice | undefined>(
-    () => storedTypography.writingMode,
-  )
+  const [typography, setTypography] = useState<TypographySettings>(() => ({
+    originalLayout: storedTypography.originalLayout ?? true,
+    viewMode: initialViewMode,
+    /** undefined = 读者还没动过(切到自定义排版时才会落到 18px,见
+        `materializeCustomDefaults`);面板显示与下发仍按 16 兜底。 */
+    fontSize: storedTypography.fontSize,
+    lineHeight: storedTypography.lineHeight,
+    fontFamily: storedTypography.fontFamily,
+    /**
+     * 页边距 · 左右(px)。内核没有横向边距属性,这一路由栏宽上限模拟(见
+     * reader-adapter 的 #maxInlineSize):数字越大留白越宽、栏越窄。
+     */
+    pageMargin: storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
+    /** 页边距 · 上下(px):直接是 paginator 的 margin 属性。 */
+    pageMarginBlock: storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
+    paragraphMargin: storedTypography.paragraphMargin,
+    textIndent: storedTypography.textIndent,
+    fontWeight: storedTypography.fontWeight,
+    writingMode: storedTypography.writingMode,
+  }))
   const [zhConvert, setZhConvert] = useState<ZhConvertVariant>(
     () => storedTypography.zhConvert ?? 'none',
   )
@@ -436,7 +427,8 @@ export function ReaderScreen({
    * 文本层,量不出行盒;竖排的「行」是竖列,蒙版要整块换轴。两档不给入口,
    * 免得用户开了只看见一块歪掉的暗区。
    */
-  const rulerSupported = !isFixedLayoutFormat(book.format) && writingMode !== 'vertical-rl'
+  const rulerSupported =
+    !isFixedLayoutFormat(book.format) && typography.writingMode !== 'vertical-rl'
   const rulerActive = rulerSupported && rulerSettings.enabled
   const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
     [],
@@ -560,36 +552,8 @@ export function ReaderScreen({
   }, [openPanel])
 
   useEffect(() => {
-    settingsRef.current = {
-      originalLayout,
-      viewMode,
-      fontSize,
-      lineHeight,
-      fontFamily,
-      fontWeight,
-      themeIndex,
-      pageMargin,
-      pageMarginBlock,
-      paragraphMargin,
-      textIndent,
-      writingMode,
-      zhConvert,
-    }
-  }, [
-    originalLayout,
-    viewMode,
-    fontSize,
-    lineHeight,
-    fontFamily,
-    fontWeight,
-    themeIndex,
-    pageMargin,
-    pageMarginBlock,
-    paragraphMargin,
-    textIndent,
-    writingMode,
-    zhConvert,
-  ])
+    settingsRef.current = { ...typography, themeIndex, zhConvert }
+  }, [typography, themeIndex, zhConvert])
 
   const saveNow = useCallback((): void => {
     void invokeCommand('reader.state.set', {
@@ -1148,7 +1112,8 @@ export function ReaderScreen({
       // 键盘连翻时这是唯一该动的地方:按钮/键盘/尺走到页尾都汇到这里。
       turnWakeUntilRef.current = Date.now() + TURN_WAKE_SUPPRESS_MS
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      const animated = pageTurnStyle !== 'none' && !reducedMotion && viewMode !== 'scroll'
+      const animated =
+        pageTurnStyle !== 'none' && !reducedMotion && typography.viewMode !== 'scroll'
       // 滑动档 = 内核动画;其余档位 = 宿主动画(内核瞬间翻)。
       const kernelAnimated = animated && pageTurnStyle === 'slide'
       const flip = (): Promise<void> =>
@@ -1165,7 +1130,7 @@ export function ReaderScreen({
               host,
               layers: adapter.flipLeafLayers?.() ?? [],
               dir,
-              columns: viewMode === 'dual' ? 2 : 1,
+              columns: typography.viewMode === 'dual' ? 2 : 1,
               flip,
             }).catch(() => false)
             if (turned) return
@@ -1178,7 +1143,7 @@ export function ReaderScreen({
       }
       await flip().catch(() => {})
     },
-    [pageTurnStyle, viewMode],
+    [pageTurnStyle, typography.viewMode],
   )
 
   useEffect(() => {
@@ -1283,54 +1248,19 @@ export function ReaderScreen({
       textIndent?: number | undefined
       writingMode?: WritingModeChoice | undefined
     }): void => {
-      // `in` checks, not ?? merges: an explicit undefined means "reset to the
-      // book's own typography" and must win over the previous setting.
-      const merged: TypographySettings = {
-        viewMode: patch.viewMode ?? viewMode,
-        originalLayout: 'originalLayout' in patch ? patch.originalLayout : originalLayout,
-        fontSize: 'fontSize' in patch ? patch.fontSize : fontSize,
-        lineHeight: 'lineHeight' in patch ? patch.lineHeight : lineHeight,
-        fontFamily: 'fontFamily' in patch ? patch.fontFamily : fontFamily,
-        fontWeight: 'fontWeight' in patch ? patch.fontWeight : fontWeight,
-        pageMargin: patch.pageMargin ?? pageMargin,
-        pageMarginBlock: patch.pageMarginBlock ?? pageMarginBlock,
-        paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : paragraphMargin,
-        textIndent: 'textIndent' in patch ? patch.textIndent : textIndent,
-        writingMode: 'writingMode' in patch ? patch.writingMode : writingMode,
-      }
+      const merged = mergeTypography(typography, patch)
       // 切到自定义排版:还没选过的维度先落到标准档 —— 否则「关了原书排版」
       // 在画面上什么都不变(每项仍是 undefined = 书自己的值),读者只会以为
       // 开关坏了。只在「开 → 关」的跳变瞬间物化;关着的时候再点「原书」档
       // (显式 undefined)必须原样保留,不然那一项永远弹回标准档、点不亮。
-      const switchingToCustom = merged.originalLayout === false && originalLayout !== false
+      const switchingToCustom =
+        merged.originalLayout === false && typography.originalLayout !== false
       const next = switchingToCustom ? materializeCustomDefaults(merged) : merged
-      setOriginalLayout(next.originalLayout ?? true)
-      setViewMode(next.viewMode ?? 'single')
-      setFontSize(next.fontSize)
-      setLineHeight(next.lineHeight)
-      setFontFamily(next.fontFamily)
-      setFontWeight(next.fontWeight)
-      setPageMargin(next.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT)
-      setPageMarginBlock(next.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT)
-      setParagraphMargin(next.paragraphMargin)
-      setTextIndent(next.textIndent)
-      setWritingMode(next.writingMode)
+      setTypography(next)
       persistTypography(next)
       void adapterRef.current?.setLayout(readerLayout(next))
     },
-    [
-      viewMode,
-      originalLayout,
-      fontSize,
-      lineHeight,
-      fontFamily,
-      fontWeight,
-      pageMargin,
-      pageMarginBlock,
-      paragraphMargin,
-      textIndent,
-      writingMode,
-    ],
+    [typography],
   )
 
   /** 切简繁档位:state 进 open effect 依赖 → 整体重开书(见开书 effect)。 */
@@ -1359,7 +1289,7 @@ export function ReaderScreen({
 
   const changeFontSize = (delta: number): void => {
     const current = FONT_SIZES.indexOf(
-      (fontSize ?? FONT_SIZE_DEFAULT) as (typeof FONT_SIZES)[number],
+      (typography.fontSize ?? FONT_SIZE_DEFAULT) as (typeof FONT_SIZES)[number],
     )
     updateLayout({
       fontSize:
@@ -1881,12 +1811,12 @@ export function ReaderScreen({
         await invokeCommand('fonts.remove', { id: target.id })
         const fonts = await invokeCommand('fonts.list', undefined)
         setCustomFonts(fonts)
-        if (fontFamily === name) updateLayout({ fontFamily: undefined })
+        if (typography.fontFamily === name) updateLayout({ fontFamily: undefined })
       } catch (fontError) {
         setPanelProblem(toAppError(fontError).message ?? null)
       }
     },
-    [customFonts, fontFamily, updateLayout],
+    [customFonts, typography.fontFamily, updateLayout],
   )
 
   const removeDictionary = useCallback(async (id: string): Promise<void> => {
@@ -2103,6 +2033,13 @@ export function ReaderScreen({
   /** 当前点中的那条划线(CFI 是内核回传的锚点;墓碑不算数,否则刚删完的
    *  划线会在工具条上残留一帧「还在编辑」的假象)。 */
   const activeRecord = annotations.find((a) => a.cfi === activeAnnotation && !a.deleted)
+  /** 当前用的字体是自定义导入(不在内置档里)才给「删除字体」入口;
+   *  取值在渲染期定死成局部常量 —— 回调闭包里属性窄化会失效。 */
+  const customFontInUse =
+    typography.fontFamily !== undefined &&
+    !FONT_FAMILY_OPTIONS.some((option) => option.value === typography.fontFamily)
+      ? typography.fontFamily
+      : null
   /** 「本章」= 当前页 CFI 所在的那一节;解析不出就按全书给,好过给个错的。 */
   const currentChapter = progress.cfi === null ? null : cfiChapter(progress.cfi)
   const shownAnnotations =
@@ -2396,11 +2333,11 @@ export function ReaderScreen({
             <div className="settings-group">
               <button
                 type="button"
-                className={`settings-toggle${originalLayout ? ' is-on' : ''}`}
+                className={`settings-toggle${typography.originalLayout ? ' is-on' : ''}`}
                 role="switch"
-                aria-checked={originalLayout}
-                onClick={() => updateLayout({ originalLayout: !originalLayout })}
-                title={originalLayout ? '关闭后逐项自定义排版' : '恢复这本书自己的排版'}
+                aria-checked={typography.originalLayout}
+                onClick={() => updateLayout({ originalLayout: !typography.originalLayout })}
+                title={typography.originalLayout ? '关闭后逐项自定义排版' : '恢复这本书自己的排版'}
               >
                 <span className="settings-toggle-label">原书排版</span>
                 <span className="settings-toggle-track" aria-hidden>
@@ -2408,7 +2345,7 @@ export function ReaderScreen({
                 </span>
               </button>
               <p className="settings-hint">
-                {originalLayout
+                {typography.originalLayout
                   ? '行距、段间距、缩进、字重与方向都用书自己的;字体仍可自选。'
                   : '按下面的档位重写这本书的排版;任一档位还能单独选回「原书」。'}
               </p>
@@ -2416,7 +2353,7 @@ export function ReaderScreen({
 
             {/* 自定义排版:这几项在「原书排版」下由书决定,不开入口 —— 一排
                 按不动的灰按钮只会让人以为坏了。关掉开关就整组出现。 */}
-            {!originalLayout && (
+            {!typography.originalLayout && (
               <div className="settings-group">
                 <span className="settings-group-label">正文</span>
                 <div className="settings-stack">
@@ -2427,7 +2364,7 @@ export function ReaderScreen({
                         <button
                           key={option.label}
                           type="button"
-                          className={lineHeight === option.value ? 'is-active' : ''}
+                          className={typography.lineHeight === option.value ? 'is-active' : ''}
                           onClick={() => updateLayout({ lineHeight: option.value })}
                         >
                           {option.label}
@@ -2442,7 +2379,7 @@ export function ReaderScreen({
                         <button
                           key={option.label}
                           type="button"
-                          className={paragraphMargin === option.value ? 'is-active' : ''}
+                          className={typography.paragraphMargin === option.value ? 'is-active' : ''}
                           onClick={() => updateLayout({ paragraphMargin: option.value })}
                         >
                           {option.label}
@@ -2457,7 +2394,7 @@ export function ReaderScreen({
                         <button
                           key={option.label}
                           type="button"
-                          className={textIndent === option.value ? 'is-active' : ''}
+                          className={typography.textIndent === option.value ? 'is-active' : ''}
                           onClick={() => updateLayout({ textIndent: option.value })}
                         >
                           {option.label}
@@ -2472,7 +2409,7 @@ export function ReaderScreen({
                         <button
                           key={option.label}
                           type="button"
-                          className={fontWeight === option.value ? 'is-active' : ''}
+                          className={typography.fontWeight === option.value ? 'is-active' : ''}
                           style={{ fontWeight: option.cssWeight }}
                           onClick={() => updateLayout({ fontWeight: option.value })}
                         >
@@ -2488,7 +2425,7 @@ export function ReaderScreen({
                         <button
                           key={option.label}
                           type="button"
-                          className={writingMode === option.value ? 'is-active' : ''}
+                          className={typography.writingMode === option.value ? 'is-active' : ''}
                           onClick={() => updateLayout({ writingMode: option.value })}
                         >
                           {option.label}
@@ -2515,7 +2452,9 @@ export function ReaderScreen({
                     >
                       <Minus size={14} weight="regular" aria-hidden />
                     </button>
-                    <span className="segmented-value">{fontSize ?? FONT_SIZE_DEFAULT}px</span>
+                    <span className="segmented-value">
+                      {typography.fontSize ?? FONT_SIZE_DEFAULT}px
+                    </span>
                     <button
                       type="button"
                       className="chrome-button"
@@ -2533,7 +2472,7 @@ export function ReaderScreen({
                       <button
                         key={option.label}
                         type="button"
-                        className={pageMargin === option.value ? 'is-active' : ''}
+                        className={typography.pageMargin === option.value ? 'is-active' : ''}
                         onClick={() => updateLayout({ pageMargin: option.value })}
                       >
                         {option.label}
@@ -2548,7 +2487,7 @@ export function ReaderScreen({
                       <button
                         key={option.label}
                         type="button"
-                        className={pageMarginBlock === option.value ? 'is-active' : ''}
+                        className={typography.pageMarginBlock === option.value ? 'is-active' : ''}
                         onClick={() => updateLayout({ pageMarginBlock: option.value })}
                       >
                         {option.label}
@@ -2568,7 +2507,7 @@ export function ReaderScreen({
                   <button
                     key={option.label}
                     type="button"
-                    className={fontFamily === option.value ? 'is-active' : ''}
+                    className={typography.fontFamily === option.value ? 'is-active' : ''}
                     style={
                       option.value !== undefined && FONT_STACK_PREVIEW[option.value]
                         ? { fontFamily: FONT_STACK_PREVIEW[option.value] }
@@ -2583,7 +2522,7 @@ export function ReaderScreen({
                   <button
                     key={font.id}
                     type="button"
-                    className={fontFamily === font.name ? 'is-active' : ''}
+                    className={typography.fontFamily === font.name ? 'is-active' : ''}
                     onClick={() => updateLayout({ fontFamily: font.name })}
                     title={`${font.name}(点按使用;长按列表删除)`}
                   >
@@ -2601,17 +2540,16 @@ export function ReaderScreen({
                   <Plus size={13} weight="bold" aria-hidden />
                   {fontBusy ? '导入中…' : '导入字体'}
                 </button>
-                {fontFamily !== undefined &&
-                  !FONT_FAMILY_OPTIONS.some((option) => option.value === fontFamily) && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost font-remove"
-                      onClick={() => void removeReadingFont(fontFamily)}
-                      title="删除当前使用的自定义字体"
-                    >
-                      <Trash size={13} aria-hidden /> 删除当前字体
-                    </button>
-                  )}
+                {customFontInUse !== null && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost font-remove"
+                    onClick={() => void removeReadingFont(customFontInUse)}
+                    title="删除当前使用的自定义字体"
+                  >
+                    <Trash size={13} aria-hidden /> 删除当前字体
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2725,7 +2663,7 @@ export function ReaderScreen({
                   <button
                     key={option.label}
                     type="button"
-                    className={viewMode === option.value ? 'is-active' : ''}
+                    className={typography.viewMode === option.value ? 'is-active' : ''}
                     onClick={() => updateLayout({ viewMode: option.value })}
                   >
                     {option.label}

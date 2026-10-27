@@ -339,6 +339,31 @@ export function materializeCustomDefaults(settings: TypographySettings): Typogra
   }
 }
 
+/**
+ * 排版补丁合并:显式 `undefined` 意味着「复位到书自己的排版」,必须用
+ * `'in' patch` 判定而不是 `??` 合并 —— 这是 ReaderScreen.updateLayout 的
+ * 既有语义,排版状态收拢成单一对象时原样抽成纯函数(行为一字不改)。
+ * themeIndex(即时换色)与 zhConvert(切档重开书)生命周期不同,不归这里管。
+ */
+export function mergeTypography(
+  current: TypographySettings,
+  patch: Partial<TypographySettings>,
+): TypographySettings {
+  return {
+    viewMode: patch.viewMode ?? current.viewMode,
+    originalLayout: 'originalLayout' in patch ? patch.originalLayout : current.originalLayout,
+    fontSize: 'fontSize' in patch ? patch.fontSize : current.fontSize,
+    lineHeight: 'lineHeight' in patch ? patch.lineHeight : current.lineHeight,
+    fontFamily: 'fontFamily' in patch ? patch.fontFamily : current.fontFamily,
+    fontWeight: 'fontWeight' in patch ? patch.fontWeight : current.fontWeight,
+    pageMargin: patch.pageMargin ?? current.pageMargin,
+    pageMarginBlock: patch.pageMarginBlock ?? current.pageMarginBlock,
+    paragraphMargin: 'paragraphMargin' in patch ? patch.paragraphMargin : current.paragraphMargin,
+    textIndent: 'textIndent' in patch ? patch.textIndent : current.textIndent,
+    writingMode: 'writingMode' in patch ? patch.writingMode : current.writingMode,
+  }
+}
+
 const TYPOGRAPHY_KEY = 'deepread.reader.typography'
 let cachedTypography: TypographySettings | null = null
 

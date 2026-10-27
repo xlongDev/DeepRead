@@ -7,6 +7,7 @@ import {
   loadStatsSettings,
   loadTypography,
   materializeCustomDefaults,
+  mergeTypography,
   PAGE_MARGIN_BLOCK_DEFAULT,
   PAGE_MARGIN_BLOCK_OPTIONS,
   PAGE_MARGIN_INLINE_DEFAULT,
@@ -15,6 +16,7 @@ import {
   persistStatsSettings,
   persistTypography,
   TEXT_INDENT_OPTIONS,
+  type TypographySettings,
 } from './reader-options'
 
 beforeEach(() => {
@@ -227,5 +229,33 @@ describe('页边距与段首缩进档位表', () => {
 
   it('段首缩进:不缩进 / 1 字符 / 2 字符', () => {
     expect(TEXT_INDENT_OPTIONS.map((option) => option.value)).toEqual([0, 1, 2])
+  })
+})
+
+describe('mergeTypography(补丁合并)', () => {
+  const base: TypographySettings = {
+    originalLayout: false,
+    fontSize: 18,
+    fontFamily: 'kaiti',
+    pageMargin: 96,
+  }
+
+  it('普通字段 ?? 合并,补丁未提到的保留现值', () => {
+    expect(mergeTypography(base, { fontSize: 20 })).toMatchObject({
+      fontSize: 20,
+      fontFamily: 'kaiti',
+      pageMargin: 96,
+    })
+  })
+
+  it("显式 undefined = 复位到原书排版,必须赢过现值('in' 判定)", () => {
+    expect(mergeTypography(base, { fontFamily: undefined }).fontFamily).toBeUndefined()
+    // 没提 fontFamily 的补丁不能把现值冲掉。
+    expect(mergeTypography(base, { fontSize: 16 }).fontFamily).toBe('kaiti')
+  })
+
+  it('originalLayout 只有显式给出才翻转(切换开关的瞬间)', () => {
+    expect(mergeTypography(base, { fontSize: 20 }).originalLayout).toBe(false)
+    expect(mergeTypography(base, { originalLayout: true }).originalLayout).toBe(true)
   })
 })
