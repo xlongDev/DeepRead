@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowLeft,
-  ArrowRight,
   BookmarkSimple,
   CaretLeft,
   CaretRight,
@@ -96,7 +95,6 @@ import {
   type TypographySettings,
   type ViewMode,
 } from './reader-options'
-import { buildReadingStats } from './reading-indicators'
 import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
@@ -105,6 +103,8 @@ import { LookupCard, type LookupResult } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
 import { TocPanel, MAX_SHOWN_SEARCH_RESULTS } from './TocPanel'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
+import { ReaderBottomBar } from './ReaderBottomBar'
+import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
 import { FootnotePopup } from './FootnotePopup'
 import { DisplayPanel } from './DisplayPanel'
 import { newTaskId } from '../../lib/ai-chat'
@@ -224,6 +224,36 @@ function findTocItem(items: readonly TocItem[], label: string): TocItem | null {
   return null
 }
 
+/** 顶栏书签键:进度经 store 订阅(高频 relocate 只重渲染这一颗键),
+    书签列表走 props(memo 后变更才重渲染)。点亮 = 当页 CFI 正好有书签。 */
+const BookmarkButton = memo(function BookmarkButton({
+  progressStore,
+  bookmarks,
+  onToggle,
+}: {
+  readonly progressStore: ProgressStore
+  readonly bookmarks: readonly BookmarkRecord[]
+  readonly onToggle: () => void
+}) {
+  const { cfi } = useProgressSnapshot(progressStore)
+  const bookmarked = cfi !== null && bookmarks.some((b) => b.cfi === cfi)
+  return (
+    <button
+      type="button"
+      className="chrome-button"
+      onClick={onToggle}
+      title={bookmarked ? '移除书签' : '在此页添加书签'}
+    >
+      <BookmarkSimple
+        size={18}
+        weight={bookmarked ? 'fill' : 'regular'}
+        aria-hidden
+        color={bookmarked ? 'var(--color-accent)' : undefined}
+      />
+    </button>
+  )
+})
+
 function cfiChapter(cfi: string): string | null {
   const match = /epubcfi\(\/(\d+)\/(\d+)/.exec(cfi)
   return match === null ? null : `${match[1]}/${match[2]}`
@@ -281,7 +311,12 @@ export function ReaderScreen({
   const searchInputRef = useRef<HTMLInputElement>(null)
   /** 浏览器端导入阅读字体的文件选择器(桌面端走 openFileDialog)。 */
   const fontInputRef = useRef<HTMLInputElement>(null)
-  const progressRef = useRef<{ cfi: string; fraction: number } | null>(null)
+  /**
+   * 进度外部 store:relocate 高频写入零重渲染,消费只在底栏与书签键两片
+   * 叶件(见 progress-store.ts)。get() 同时是 saveNow / 书签 / 跳转的
+   * 「当前页」真值源 —— 原 progressRef 镜像由它取代。
+   */
+  const [progressStore] = useState(createProgressStore)
   const annotationsRef = useRef<readonly AnnotationRecord[]>([])
   const bookmarksRef = useRef<readonly BookmarkRecord[]>([])
   const openPanelRef = useRef<OpenPanel | null>(null)
@@ -341,11 +376,6 @@ export function ReaderScreen({
   const [title, setTitle] = useState(book.name)
   const [toc, setToc] = useState<readonly TocItem[]>([])
   const [chromeVisible, setChromeVisible] = useState(true)
-  const [progress, setProgress] = useState<{
-    cfi: string | null
-    fraction: number
-    location: { current: number; total: number } | undefined
-  }>({ cfi: null, fraction: 0, location: undefined })
   const [selection, setSelection] = useState<EngineSelection | null>(null)
   const [activeAnnotation, setActiveAnnotation] = useState<string | null>(null)
   /** 编辑模式划词工具的锚点:划线的实测选区框。点中的是已有划线时没有
@@ -423,6 +453,10 @@ export function ReaderScreen({
   const [openPanel, setOpenPanel] = useState<OpenPanel | null>(null)
   const [bookLanguage, setBookLanguage] = useState<string | undefined>(undefined)
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
+  /** 当前章的 CFI 章节键:relocate 里值变化才 setState —— TocPanel 的
+      「本章」过滤与批注列表都按它,章节不切换就不重渲染。 */
+  const [currentChapter, setCurrentChapter] = useState<string | null>(null)
+  const currentChapterRef = useRef<string | null>(null)
   const [ttsMinimized, setTtsMinimized] = useState(false)
   const [ttsActive, setTtsActive] = useState(false)
   /**
@@ -519,10 +553,11 @@ export function ReaderScreen({
   }, [typography, themeIndex, zhConvert])
 
   const saveNow = useCallback((): void => {
+    const { cfi, fraction } = progressStore.get()
     void invokeCommand('reader.state.set', {
       bookHash: book.hash,
       state: {
-        progress: progressRef.current,
+        progress: cfi !== null ? { cfi, fraction } : null,
         annotations: [...annotationsRef.current],
         bookmarks: [...bookmarksRef.current],
         updatedAt: new Date().toISOString(),
@@ -531,7 +566,7 @@ export function ReaderScreen({
       // # ponytail: save failures surface on reopen; a retry queue belongs to
       // the sync engine (Phase 6), not to the reading path.
     })
-  }, [book.hash])
+  }, [book.hash, progressStore])
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -596,17 +631,21 @@ export function ReaderScreen({
             ? location.fraction
             : 0
         const cfi = location.cfi
-        progressRef.current = cfi !== undefined ? { cfi, fraction } : progressRef.current
-        // ponytail: setProgress 触发整个 ReaderScreen 重渲染 —— 滚动模式高频
-        // relocate 时的已知上限。面板拆出后,关闭状态的面板在 JSX 里短路,
-        // 实际开销只剩底栏与顶栏的内联子树;若实测滚动卡顿,升级路径是把
-        // progress 消费者(底栏滑杆/页码/书签态)下沉为订阅组件再 memo,
-        // 而不是在这里做节流(节流会让滑杆回弹)。
-        setProgress({
-          cfi: cfi ?? null,
+        // 进度下沉到外部 store(见 progress-store.ts):这里零 setState ——
+        // 滚动模式高频 relocate 只重渲染订阅了 store 的底栏与书签键两片叶件。
+        const previous = progressStore.get()
+        const nextCfi = cfi !== undefined ? cfi : previous.cfi
+        progressStore.set({
+          cfi: nextCfi,
           fraction,
           location: location.location,
         })
+        // 章节键低频分离:值没变就不碰 state(同一章内滚动 = 零重渲染)。
+        const nextChapter = nextCfi !== null ? cfiChapter(nextCfi) : null
+        if (nextChapter !== currentChapterRef.current) {
+          currentChapterRef.current = nextChapter
+          setCurrentChapter(nextChapter)
+        }
         scheduleSave()
         // 并行阅读的联动:位置变了就报给宿主(由它决定要不要拽对面那一栏)。
         if (readyRef.current) {
@@ -1914,12 +1953,30 @@ export function ReaderScreen({
   )
 
   /** Jump to the fraction the slider was released on (once per scrub). */
-  const commitScrub = (): void => {
+  const commitScrub = useCallback((): void => {
     if (!scrubbingRef.current) return
     scrubbingRef.current = false
-    const fraction = progressRef.current?.fraction
-    if (fraction !== undefined) void adapterRef.current?.goTo({ progress: fraction })
-  }
+    const { fraction } = progressStore.get()
+    void adapterRef.current?.goTo({ progress: fraction })
+  }, [progressStore])
+
+  /** 拖动滑杆:只动滑块(底栏经 store 订阅自我更新),松手才真正跳转。 */
+  const scrubFraction = useCallback(
+    (fraction: number): void => {
+      progressStore.setFraction(fraction)
+    },
+    [progressStore],
+  )
+
+  const scrubStart = useCallback((): void => {
+    scrubbingRef.current = true
+  }, [])
+
+  /** 字数口径切换(底栏点按):落库 + state(展示口径立即生效)。 */
+  const changeWordsScope = useCallback((next: StatsSettings): void => {
+    setStatsSettings(next)
+    persistStatsSettings(next)
+  }, [])
 
   const runLookup = async (): Promise<void> => {
     if (!selection) return
@@ -1957,10 +2014,10 @@ export function ReaderScreen({
     setLookupLoading(false)
   }
 
-  const toggleBookmark = (): void => {
-    const current = progressRef.current
-    if (!current) return
-    const existing = bookmarks.find((b) => b.cfi === current.cfi)
+  const toggleBookmark = useCallback((): void => {
+    const { cfi } = progressStore.get()
+    if (cfi === null) return
+    const existing = bookmarks.find((b) => b.cfi === cfi)
     if (existing) {
       setBookmarks((list) => list.map((b) => (b.id === existing.id ? { ...b, deleted: true } : b)))
     } else {
@@ -1968,7 +2025,7 @@ export function ReaderScreen({
         ...list,
         {
           id: crypto.randomUUID(),
-          cfi: current.cfi,
+          cfi,
           // 记下当时的章节名:书签列表里比原始 CFI 有意义得多。
           ...(sectionLabel !== null && sectionLabel.trim() !== '' ? { label: sectionLabel } : {}),
           createdAt: new Date().toISOString(),
@@ -1976,7 +2033,7 @@ export function ReaderScreen({
       ])
     }
     scheduleSave()
-  }
+  }, [bookmarks, progressStore, sectionLabel, scheduleSave])
 
   const removeBookmark = (id: string): void => {
     setBookmarks((list) => list.map((b) => (b.id === id ? { ...b, deleted: true } : b)))
@@ -2016,8 +2073,7 @@ export function ReaderScreen({
     '--reader-panel': withAlpha(theme.theme.background, 0.86),
     '--reader-panel-solid': theme.theme.background,
   } as React.CSSProperties
-  const liveBookmarks = bookmarks.filter((b) => !b.deleted)
-  const bookmarkedHere = progress.cfi !== null && liveBookmarks.some((b) => b.cfi === progress.cfi)
+  const liveBookmarks = useMemo(() => bookmarks.filter((b) => !b.deleted), [bookmarks])
   const liveAnnotations = annotations.filter((a) => !a.deleted)
   /** 当前点中的那条划线(CFI 是内核回传的锚点;墓碑不算数,否则刚删完的
    *  划线会在工具条上残留一帧「还在编辑」的假象)。 */
@@ -2029,29 +2085,6 @@ export function ReaderScreen({
     !FONT_FAMILY_OPTIONS.some((option) => option.value === typography.fontFamily)
       ? typography.fontFamily
       : null
-  /** 「本章」= 当前页 CFI 所在的那一节;解析不出就按全书给,好过给个错的。 */
-  const currentChapter = progress.cfi === null ? null : cfiChapter(progress.cfi)
-  // 页码 / 字数(本章或全书)/ 预计剩余阅读时间。算法见 reading-indicators.ts。
-  const readingStats = useMemo(
-    () =>
-      buildReadingStats({
-        location: progress.location,
-        fraction: progress.fraction,
-        bookLanguage,
-        sectionChars,
-        bookCharStats,
-        wordsScope: statsSettings.wordsScope,
-      }),
-    [
-      progress.location,
-      progress.fraction,
-      bookLanguage,
-      sectionChars,
-      bookCharStats,
-      statsSettings.wordsScope,
-    ],
-  )
-
   return (
     <div className="reader-scope" style={readerVars}>
       {/* 浏览器端导入阅读字体用(桌面端走 openFileDialog,不会碰它)。 */}
@@ -2136,19 +2169,11 @@ export function ReaderScreen({
             <ArrowLeft size={18} weight="regular" aria-hidden />
           </button>
           <span className="reader-title">{title}</span>
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={toggleBookmark}
-            title={bookmarkedHere ? '移除书签' : '在此页添加书签'}
-          >
-            <BookmarkSimple
-              size={18}
-              weight={bookmarkedHere ? 'fill' : 'regular'}
-              aria-hidden
-              color={bookmarkedHere ? 'var(--color-accent)' : undefined}
-            />
-          </button>
+          <BookmarkButton
+            progressStore={progressStore}
+            bookmarks={liveBookmarks}
+            onToggle={toggleBookmark}
+          />
           <button
             type="button"
             className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
@@ -2342,65 +2367,17 @@ export function ReaderScreen({
         )}
 
         {statsSettings.progress && (
-          <footer className="reader-bottom">
-            <input
-              type="range"
-              className="reader-slider"
-              min={0}
-              max={1000}
-              value={Math.round(progress.fraction * 1000)}
-              aria-label="阅读进度"
-              onChange={(event) => {
-                // Scrubbing only moves the thumb: a goTo per input event relayouts
-                // the whole book. The jump happens once, on release.
-                const fraction = Number(event.target.value) / 1000
-                setProgress((current) => ({ ...current, fraction }))
-                progressRef.current =
-                  progressRef.current !== null ? { ...progressRef.current, fraction } : null
-              }}
-              onPointerDown={() => {
-                scrubbingRef.current = true
-              }}
-              onPointerUp={() => commitScrub()}
-              onKeyDown={() => {
-                scrubbingRef.current = true
-              }}
-              onKeyUp={() => commitScrub()}
-              onBlur={() => commitScrub()}
-            />
-            <span className="reader-arrow" aria-hidden>
-              <ArrowLeft size={14} weight="regular" />
-            </span>
-            <span className="reader-arrow" aria-hidden>
-              <ArrowRight size={14} weight="regular" />
-            </span>
-            {statsSettings.words && readingStats.chars && (
-              <button
-                type="button"
-                className="reader-count-toggle"
-                title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
-                onClick={() => {
-                  setStatsSettings((current) => {
-                    const next = {
-                      ...current,
-                      wordsScope:
-                        current.wordsScope === 'book' ? ('section' as const) : ('book' as const),
-                    }
-                    persistStatsSettings(next)
-                    return next
-                  })
-                }}
-              >
-                {readingStats.chars}
-              </button>
-            )}
-            {statsSettings.time && readingStats.time && (
-              <span className="reader-percent">{readingStats.time}</span>
-            )}
-            {statsSettings.progress && readingStats.page && (
-              <span className="reader-percent reader-percent-strong">{readingStats.page}</span>
-            )}
-          </footer>
+          <ReaderBottomBar
+            progressStore={progressStore}
+            statsSettings={statsSettings}
+            bookLanguage={bookLanguage}
+            sectionChars={sectionChars}
+            bookCharStats={bookCharStats}
+            onScrubFraction={scrubFraction}
+            onScrubStart={scrubStart}
+            onScrubCommit={commitScrub}
+            onWordsScopeChange={changeWordsScope}
+          />
         )}
 
         {repairReview !== null && (
