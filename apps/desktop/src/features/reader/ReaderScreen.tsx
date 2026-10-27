@@ -11,15 +11,12 @@ import {
   GraduationCap,
   Headphones,
   List,
-  MagnifyingGlass,
   Moon,
-  PencilSimple,
   Ruler,
   SlidersHorizontal,
   Sparkle,
   Sun,
   TextAa,
-  Trash,
   X,
 } from '@phosphor-icons/react'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -75,7 +72,6 @@ import {
   FONT_SIZE_DEFAULT,
   FONT_SIZES,
   HIGHLIGHT_COLOR,
-  HIGHLIGHT_PALETTE,
   layoutOverrides,
   loadPageTurnStyle,
   loadRulerSettings,
@@ -107,9 +103,10 @@ import { AiDrawer } from './AiDrawer'
 import { TranslationCard, type TranslationCardState } from './TranslationCard'
 import { LookupCard, type LookupResult } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
+import { TocPanel, MAX_SHOWN_SEARCH_RESULTS } from './TocPanel'
+import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { DisplayPanel } from './DisplayPanel'
 import { newTaskId } from '../../lib/ai-chat'
-import { ChapterRulesPanel } from './ChapterRulesPanel'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { ParallelPicker } from './ParallelPicker'
@@ -134,9 +131,7 @@ const CHROME_TIMEOUT_MS = 2500
  */
 const TURN_WAKE_SUPPRESS_MS = 900
 const SAVE_DEBOUNCE_MS = 800
-const MAX_SHOWN_SEARCH_RESULTS = 50
 /** 与 `reader.note.update` 的上限对齐(shared 协议里那条 zod)。 */
-const NOTE_MAX_CHARS = 4000
 const EXCERPT_MAX_CHARS = 500
 /** 翻译卡的估计高度:算避让位置用(卡片 max-height 420,流式中会变)。 */
 const TRANSLATE_CARD_HEIGHT = 300
@@ -208,14 +203,6 @@ type OpenPanel = 'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | 'p
  * 正在编辑的批注笔记。`id` 缺失 = 这条笔记还没有对应的划线,提交时新建;
  * 有 `id` = 改已有批注的 note 字段(空串 = 清回纯高亮)。
  */
-interface NoteDraft {
-  readonly id?: string
-  readonly cfi: string
-  readonly excerpt: string
-  readonly color: string
-  readonly style: AnnotationStyle
-  readonly note: string
-}
 
 /**
  * CFI 的前两段标识它所在的那个 spine 项 —— 同一次 `getCFI(index, …)` 产出的
@@ -485,9 +472,6 @@ export function ReaderScreen({
   const charCountTokenRef = useRef(0)
   const lastLightIndexRef = useRef(0)
   const [rebuildOpen, setRebuildOpen] = useState(false)
-  /** 目录侧栏在「目录 / 批注」两个页签间切换;批注页签再按 本章/全书 过滤。 */
-  const [tocTab, setTocTab] = useState<'toc' | 'annotations'>('toc')
-  const [annotationScope, setAnnotationScope] = useState<'chapter' | 'book'>('book')
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null)
   /** AI 服务列表:翻译要显示用的哪个 provider/model(成本诚实)。 */
   const [aiProviders, setAiProviders] = useState<readonly AiProviderConfig[]>([])
@@ -2033,11 +2017,6 @@ export function ReaderScreen({
       : null
   /** 「本章」= 当前页 CFI 所在的那一节;解析不出就按全书给,好过给个错的。 */
   const currentChapter = progress.cfi === null ? null : cfiChapter(progress.cfi)
-  const shownAnnotations =
-    annotationScope === 'chapter' && currentChapter !== null
-      ? liveAnnotations.filter((a) => cfiChapter(a.cfi) === currentChapter)
-      : liveAnnotations
-
   // 页码 / 字数(本章或全书)/ 预计剩余阅读时间。算法见 reading-indicators.ts。
   const readingStats = useMemo(
     () =>
@@ -2058,21 +2037,6 @@ export function ReaderScreen({
       statsSettings.wordsScope,
     ],
   )
-
-  const renderTocItems = (items: readonly TocItem[], level: number): React.ReactNode =>
-    items.map((item) => (
-      <div key={item.id}>
-        <button
-          type="button"
-          className="toc-item"
-          style={{ paddingLeft: 12 + level * 16 }}
-          onClick={() => goToTocItem(item)}
-        >
-          {item.title}
-        </button>
-        {item.children.length > 0 && <div>{renderTocItems(item.children, level + 1)}</div>}
-      </div>
-    ))
 
   return (
     <div className="reader-scope" style={readerVars}>
@@ -2332,227 +2296,35 @@ export function ReaderScreen({
         )}
 
         {openPanel === 'toc' && (
-          <nav className="reader-toc" aria-label="目录与搜索">
-            <div className="reader-toc-head">
-              <div className="reader-toc-tabs">
-                <button
-                  type="button"
-                  className={tocTab === 'toc' ? 'is-active' : ''}
-                  onClick={() => setTocTab('toc')}
-                  aria-pressed={tocTab === 'toc'}
-                >
-                  目录
-                </button>
-                <button
-                  type="button"
-                  className={tocTab === 'annotations' ? 'is-active' : ''}
-                  onClick={() => setTocTab('annotations')}
-                  aria-pressed={tocTab === 'annotations'}
-                >
-                  批注{liveAnnotations.length > 0 ? ` ${liveAnnotations.length}` : ''}
-                </button>
-              </div>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => setOpenPanel(null)}
-                title="关闭"
-              >
-                <X size={16} weight="regular" aria-hidden />
-              </button>
-            </div>
-
-            {tocTab === 'toc' ? (
-              <>
-                <div className="reader-search">
-                  <input
-                    ref={searchInputRef}
-                    type="search"
-                    className="reader-search-input"
-                    placeholder="搜索全书…"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void runSearch()
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="chrome-button"
-                    onClick={() => void runSearch()}
-                    title="搜索"
-                  >
-                    <MagnifyingGlass size={16} weight="regular" aria-hidden />
-                  </button>
-                </div>
-                {searchState === 'searching' && <p className="reader-toc-empty">搜索中…</p>}
-                {searchState === 'error' && (
-                  <p className="reader-toc-empty" role="alert">
-                    搜索失败,请重试。
-                  </p>
-                )}
-                {searchState === 'done' && searchResults.length === 0 && (
-                  <p className="reader-toc-empty">没有找到匹配的正文。</p>
-                )}
-                {searchResults.map((result) => (
-                  <button
-                    key={result.cfi}
-                    type="button"
-                    className="toc-item search-result"
-                    onClick={() => goToCfi(result.cfi)}
-                    title="跳转到此处"
-                  >
-                    {result.excerpt}
-                  </button>
-                ))}
-                {searchTruncated && (
-                  <p className="reader-toc-empty">
-                    仅显示前 {MAX_SHOWN_SEARCH_RESULTS} 条,请细化关键词。
-                  </p>
-                )}
-
-                {book.format === 'txt' && (
-                  <>
-                    <div className="settings-row repair-row">
-                      <span className="settings-label">文本修整</span>
-                      <div className="segmented">
-                        <button type="button" onClick={startRepair}>
-                          检查
-                        </button>
-                      </div>
-                    </div>
-                    <div className="settings-row repair-row">
-                      <span className="settings-label">章节规则</span>
-                      <div className="segmented">
-                        <button type="button" onClick={toggleRebuildPanel}>
-                          {rebuildOpen ? '收起' : '自定义'}
-                        </button>
-                      </div>
-                    </div>
-                    {rebuildOpen && (
-                      <ChapterRulesPanel
-                        sampleLines={chapterSampleLines}
-                        onInferCandidates={
-                          aiProviders[0] === undefined ? null : inferChapterCandidates
-                        }
-                        onApply={applyChapterRules}
-                        legacyPattern={legacyChapterPattern}
-                      />
-                    )}
-                  </>
-                )}
-
-                {liveBookmarks.length > 0 && <p className="reader-section-label">书签</p>}
-                {liveBookmarks.map((bookmark) => (
-                  <div key={bookmark.id} className="bookmark-row">
-                    <button
-                      type="button"
-                      className="toc-item"
-                      onClick={() => goToCfi(bookmark.cfi)}
-                      title="跳转到书签"
-                    >
-                      {bookmark.label ?? `书签 ${bookmark.cfi.slice(0, 18)}…`}
-                    </button>
-                    <button
-                      type="button"
-                      className="chrome-button"
-                      onClick={() => removeBookmark(bookmark.id)}
-                      title="删除书签"
-                    >
-                      <X size={12} weight="regular" aria-hidden />
-                    </button>
-                  </div>
-                ))}
-
-                {toc.length === 0 && searchResults.length === 0 && liveBookmarks.length === 0 ? (
-                  <p className="reader-toc-empty">这本书没有目录信息。</p>
-                ) : (
-                  renderTocItems(toc, 0)
-                )}
-              </>
-            ) : (
-              <>
-                <div className="segmented annotation-scope">
-                  <button
-                    type="button"
-                    className={annotationScope === 'chapter' ? 'is-active' : ''}
-                    onClick={() => setAnnotationScope('chapter')}
-                  >
-                    本章
-                  </button>
-                  <button
-                    type="button"
-                    className={annotationScope === 'book' ? 'is-active' : ''}
-                    onClick={() => setAnnotationScope('book')}
-                  >
-                    全书
-                  </button>
-                </div>
-                {shownAnnotations.length === 0 ? (
-                  <p className="reader-toc-empty">
-                    {annotationScope === 'chapter' && currentChapter !== null
-                      ? '本章还没有批注。'
-                      : '还没有批注 —— 在正文里划选即可。'}
-                  </p>
-                ) : (
-                  shownAnnotations.map((record) => (
-                    <div key={record.id} className="annotation-row">
-                      <span
-                        className="annotation-dot"
-                        style={{ background: record.color }}
-                        aria-hidden
-                      />
-                      <div className="annotation-body">
-                        <button
-                          type="button"
-                          className="annotation-item"
-                          onClick={() => goToCfi(record.cfi)}
-                          title="跳到原文"
-                        >
-                          <span className="annotation-excerpt">{record.excerpt}</span>
-                          {record.note !== undefined && record.note !== '' && (
-                            <span className="annotation-note">{record.note}</span>
-                          )}
-                        </button>
-                        {noteDraft?.id === record.id && (
-                          <NoteEditor
-                            draft={noteDraft}
-                            onChange={setNoteDraft}
-                            onSave={() => void commitNote()}
-                            onCancel={() => setNoteDraft(null)}
-                          />
-                        )}
-                      </div>
-                      <div className="annotation-actions">
-                        <button
-                          type="button"
-                          className="chrome-button"
-                          onClick={() =>
-                            startNote({
-                              id: record.id,
-                              cfi: record.cfi,
-                              excerpt: record.excerpt,
-                              color: record.color,
-                              note: record.note,
-                            })
-                          }
-                          title="写笔记"
-                        >
-                          <PencilSimple size={12} weight="regular" aria-hidden />
-                        </button>
-                        <button
-                          type="button"
-                          className="chrome-button"
-                          onClick={() => void removeAnnotation(record.id)}
-                          title="删除划线"
-                        >
-                          <Trash size={12} weight="regular" aria-hidden />
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </>
-            )}
-          </nav>
+          <TocPanel
+            toc={toc}
+            isTxt={book.format === 'txt'}
+            onClose={() => setOpenPanel(null)}
+            searchState={searchState}
+            searchResults={searchResults}
+            searchTruncated={searchTruncated}
+            onSearch={() => void runSearch()}
+            searchInputRef={searchInputRef}
+            onGoToCfi={goToCfi}
+            onGoToTocItem={goToTocItem}
+            onStartRepair={startRepair}
+            rebuildOpen={rebuildOpen}
+            onToggleRebuildPanel={toggleRebuildPanel}
+            chapterSampleLines={chapterSampleLines}
+            chapterInferCandidates={aiProviders[0] === undefined ? null : inferChapterCandidates}
+            onApplyChapterRules={applyChapterRules}
+            legacyChapterPattern={legacyChapterPattern}
+            bookmarks={liveBookmarks}
+            onRemoveBookmark={removeBookmark}
+            annotations={liveAnnotations}
+            currentChapter={currentChapter}
+            cfiChapter={cfiChapter}
+            noteDraft={noteDraft}
+            onNoteDraftChange={setNoteDraft}
+            onCommitNote={() => void commitNote()}
+            onStartNote={startNote}
+            onRemoveAnnotation={(id) => void removeAnnotation(id)}
+          />
         )}
 
         {statsSettings.progress && (
@@ -2845,55 +2617,7 @@ export function ReaderScreen({
   )
 }
 
-interface NoteEditorProps {
-  readonly draft: NoteDraft
-  readonly onChange: (draft: NoteDraft) => void
-  readonly onSave: () => void
-  readonly onCancel: () => void
-}
-
 /**
  * 划线笔记编辑器。两处复用:选区写笔记时坐在浮层里,批注列表里编辑时内联在行下。
  * 色板在这里也能改 —— 下笔那一刻决定颜色比事后补色板自然。
  */
-function NoteEditor({ draft, onChange, onSave, onCancel }: NoteEditorProps) {
-  return (
-    <div className="note-editor">
-      <p className="annotation-excerpt note-editor-quote">{draft.excerpt}</p>
-      <div className="highlight-palette">
-        {HIGHLIGHT_PALETTE.map((option) => (
-          <button
-            key={option.color}
-            type="button"
-            className={`highlight-swatch${draft.color === option.color ? ' is-active' : ''}`}
-            style={{ background: option.color }}
-            onClick={() => onChange({ ...draft, color: option.color })}
-            aria-label={`${option.label}划线`}
-            aria-pressed={draft.color === option.color}
-            title={option.label}
-          />
-        ))}
-      </div>
-      <textarea
-        className="note-input"
-        rows={3}
-        maxLength={NOTE_MAX_CHARS}
-        value={draft.note}
-        placeholder="写下你的想法…(留空保存 = 只要划线)"
-        aria-label="笔记内容"
-        onChange={(event) => onChange({ ...draft, note: event.target.value })}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) onSave()
-        }}
-      />
-      <div className="note-editor-actions">
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>
-          取消
-        </button>
-        <button type="button" className="btn btn-primary" onClick={onSave}>
-          保存
-        </button>
-      </div>
-    </div>
-  )
-}
