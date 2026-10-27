@@ -1656,6 +1656,11 @@ button:disabled {
   font-weight: var(--font-weight-semibold);
 }
 
+.continue-reading-cover-img {
+  object-fit: cover;
+  object-position: center top;
+}
+
 .continue-reading-main {
   display: flex;
   flex-direction: column;

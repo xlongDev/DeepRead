@@ -416,17 +416,33 @@ export function ShelfView({
           onClick={() => onOpenBook(continueBook)}
           title={`打开《${shelfTitle(continueBook)}》`}
         >
-          <span
-            className="continue-reading-cover"
-            aria-hidden
-            style={{
-              background: `linear-gradient(160deg, ${coverPalette(continueBook.hash)[0]}, ${
-                coverPalette(continueBook.hash)[1]
-              })`,
-            }}
-          >
-            {shelfTitle(continueBook).charAt(0)}
-          </span>
+          {(() => {
+            const cover = covers.get(continueBook.hash) ?? null
+            const showCover = cover !== null && !brokenCovers.has(continueBook.hash)
+            if (showCover) {
+              return (
+                <img
+                  src={cover}
+                  alt=""
+                  className="continue-reading-cover continue-reading-cover-img"
+                  onError={() => markCoverBroken(continueBook.hash)}
+                />
+              )
+            }
+            return (
+              <span
+                className="continue-reading-cover"
+                aria-hidden
+                style={{
+                  background: `linear-gradient(160deg, ${coverPalette(continueBook.hash)[0]}, ${
+                    coverPalette(continueBook.hash)[1]
+                  })`,
+                }}
+              >
+                {shelfTitle(continueBook).charAt(0)}
+              </span>
+            )
+          })()}
           <span className="continue-reading-main">
             <strong>继续阅读</strong>
             <span className="continue-reading-title">
