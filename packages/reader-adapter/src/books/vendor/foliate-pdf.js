@@ -323,6 +323,62 @@ const makeTOCItem = (item) => ({
   subitems: item.items.length ? item.items.map(makeTOCItem) : null,
 })
 
+// ---- 全书搜索:sections.createDocument -------------------------------------
+// 内核 view.search 逐节调 createDocument() 拿伪文档跑匹配,再把命中的 DOM
+// Range 转成 CFI(view.getCFI = fake 基址 + CFI.fromRange);显示高亮时同一条
+// CFI 会经 CFI.toRange 解析回**真实渲染的页文档**。所以这里的 DOM 结构必须
+// 与 TextLayer 渲染出的 textLayer 逐元素一致(span/br 的数量与顺序),否则
+// CFI 对不上。镜像规则照抄 pdf.js TextLayer(6.4.299,MIT):
+//   - 文本项 str !== '' → span[role=presentation],textContent = str
+//     (hasText 判据是 str !== '',空串项只可能带 hasEOL);
+//   - 项 hasEOL → 追加 br[role=presentation];
+//   - streamTextContent 默认不含 marked content(includeMarkedContent=false),
+//     所以 textLayer 是扁平的,无嵌套 span;
+//   - 真渲染在 textDivs 超过 MAX_TEXT_DIVS_TO_RENDER(100000)后整页截断,
+//     这里镜像同一上限,避免伪文档比真文档多出尾部文本。
+// 命中高亮:内核 fixed-layout 渲染器尚无 overlayer(上游 TODO),PDF 命中
+// 只有列表与跳页,不画高亮 —— addAnnotation 解析不到 overlayer 时静默跳过,
+// 不会报错。
+export const appendPdfTextItems = (layer, doc, items) => {
+  const MAX_TEXT_DIVS = 100000
+  let count = 0
+  for (const item of items) {
+    if (count > MAX_TEXT_DIVS) break
+    if (item.str === undefined) continue
+    count += 1
+    if (item.str !== '') {
+      const span = doc.createElement('span')
+      span.setAttribute('role', 'presentation')
+      span.textContent = item.str
+      layer.append(span)
+    }
+    if (item.hasEOL) {
+      const br = doc.createElement('br')
+      br.setAttribute('role', 'presentation')
+      layer.append(br)
+    }
+  }
+}
+
+const makeSearchDocument = async (pdf, index) => {
+  const page = await pdf.getPage(index + 1)
+  const { items } = await page.getTextContent()
+  const doc = new DOMParser().parseFromString(
+    `<!DOCTYPE html>
+    <html lang="en">
+    <meta charset="utf-8">
+    <body>
+    <div id="canvas"></div>
+    <div class="textLayer"></div>
+    <div class="annotationLayer"></div>
+    </body>
+    </html>`,
+    'text/html',
+  )
+  appendPdfTextItems(doc.querySelector('.textLayer'), doc, items)
+  return doc
+}
+
 export const makePDF = async (file) => {
   const transport = new pdfjsLib.PDFDataRangeTransport(file.size, [])
   transport.requestDataRange = (begin, end) => {
@@ -371,6 +427,8 @@ export const makePDF = async (file) => {
       cache.set(i, url)
       return url
     },
+    // 全书搜索用:返回镜像 textLayer 结构的伪文档(见 makeSearchDocument)。
+    createDocument: () => makeSearchDocument(pdf, i),
     size: 1000,
   }))
   book.isExternal = (uri) => /^\w+:/i.test(uri)
