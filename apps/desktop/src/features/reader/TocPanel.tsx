@@ -184,9 +184,7 @@ export function TocPanel({
           </label>
           {searchState === 'searching' && (
             <div className="reader-toc-empty reader-search-status">
-              <span role="status">
-                搜索中{searchProgress !== null ? ` ${searchProgress}%` : '…'}
-              </span>
+              <output>搜索中{searchProgress !== null ? ` ${searchProgress}%` : '…'}</output>
               <button type="button" className="chrome-button" onClick={onCancelSearch}>
                 停止
               </button>

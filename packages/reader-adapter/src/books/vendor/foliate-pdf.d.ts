@@ -26,4 +26,15 @@ export function recolorPixels(
   colors: { foreground: string; background: string },
   contrast?: number,
 ): void
+/**
+ * 全书搜索用:把 getTextContent() 的 items 按 TextLayer 的结构规则(span
+ * 判据 str !== ''、hasEOL 追加 br、100000 div 上限)灌进伪文档的 .textLayer。
+ * 结构必须与真实渲染的 textLayer 逐元素一致 —— 镜像规则详见 vendored
+ * foliate-pdf.js 内注释。
+ */
+export function appendPdfTextItems(
+  layer: Element,
+  doc: Document,
+  items: readonly { str?: string; hasEOL?: boolean }[],
+): void
 export function makePDF(file: File): Promise<FoliateBook>

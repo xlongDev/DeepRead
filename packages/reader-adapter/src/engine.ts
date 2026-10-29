@@ -175,10 +175,7 @@ const BLOCK_TAGS = new Set([
  *
  * @internal 导出仅为单测;产品代码请走 `getSectionText` / `setTTSHighlightByOffset`。
  */
-const sectionWalkCache = new WeakMap<
-  Element,
-  ReturnType<typeof walkSectionTextBase>
->()
+const sectionWalkCache = new WeakMap<Element, ReturnType<typeof walkSectionTextBase>>()
 
 export function walkSectionText(body: Element): {
   readonly text: string
