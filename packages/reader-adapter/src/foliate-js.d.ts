@@ -181,7 +181,7 @@ declare module 'foliate-js/view.js' {
     ): Promise<{ index: number; label?: string } | void>
     getCFI(index: number, range?: Range): string
     resolveCFI(cfi: string): { index: number; anchor: (doc: Document) => Range | Element }
-    search(opts: { query: string; index?: number }): AsyncGenerator<
+    search(opts: { query: string; index?: number; matchCase?: boolean }): AsyncGenerator<
       | {
           cfi?: string
           excerpt?: string

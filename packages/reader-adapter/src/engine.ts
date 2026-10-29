@@ -26,6 +26,7 @@ import {
   type ReaderTheme,
   type ReadingLocation,
   type ReadingRulerOptions,
+  type SearchRequest,
   type SearchResult,
   type TextRange,
   type TocItem,
@@ -1537,13 +1538,23 @@ export class FoliateAdapter implements ReaderEngine {
     return this.#bookCharStats
   }
 
-  async search(query: string): Promise<readonly SearchResult[]> {
+  async search(query: string, request?: SearchRequest): Promise<readonly SearchResult[]> {
     const view = this.#requireView()
     const trimmed = query.trim()
     if (!trimmed) return []
     const results: SearchResult[] = []
-    for await (const item of view.search({ query: trimmed })) {
+    for await (const item of view.search({
+      query: trimmed,
+      matchCase: request?.matchCase,
+    })) {
       if (item === 'done') break
+      // 内核逐节产出 {progress}(0..1);旧实现把它丢弃,大书只能干等。
+      // 中止 = 跳出 for-await:异步生成器被 return,内核循环即停。
+      if ('progress' in item && typeof item.progress === 'number') {
+        if (request?.signal?.aborted) break
+        request?.onProgress?.(item.progress)
+        continue
+      }
       if ('cfi' in item && item.cfi && item.excerpt) {
         results.push({ location: { cfi: item.cfi, progress: 0 }, excerpt: item.excerpt })
         if (results.length >= MAX_SEARCH_RESULTS) break

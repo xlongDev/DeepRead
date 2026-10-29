@@ -38,6 +38,12 @@ interface TocPanelProps {
   // 搜索:状态在宿主(书内搜索「在本书中搜索选中文本」也会写它),输入框
   // ref 共享 —— 宿主要往里填查询词。
   readonly searchState: 'idle' | 'searching' | 'done' | 'error'
+  /** 搜索进度 0-100(整书逐节产出;null = 还没有进度数据)。 */
+  readonly searchProgress: number | null
+  /** 中止在飞的搜索(宿主 abort 后返回部分结果,走正常 done 路径上屏)。 */
+  readonly onCancelSearch: () => void
+  readonly searchMatchCase: boolean
+  readonly onSearchMatchCaseChange: (matchCase: boolean) => void
   readonly searchResults: readonly TocSearchResult[]
   readonly searchTruncated: boolean
   readonly onSearch: () => void
@@ -73,6 +79,10 @@ export function TocPanel({
   isTxt,
   onClose,
   searchState,
+  searchProgress,
+  onCancelSearch,
+  searchMatchCase,
+  onSearchMatchCaseChange,
   searchResults,
   searchTruncated,
   onSearch,
@@ -164,7 +174,24 @@ export function TocPanel({
               <MagnifyingGlass size={16} weight="regular" aria-hidden />
             </button>
           </div>
-          {searchState === 'searching' && <p className="reader-toc-empty">搜索中…</p>}
+          <label className="reader-search-option">
+            <input
+              type="checkbox"
+              checked={searchMatchCase}
+              onChange={(event) => onSearchMatchCaseChange(event.target.checked)}
+            />
+            区分大小写
+          </label>
+          {searchState === 'searching' && (
+            <div className="reader-toc-empty reader-search-status">
+              <span role="status">
+                搜索中{searchProgress !== null ? ` ${searchProgress}%` : '…'}
+              </span>
+              <button type="button" className="chrome-button" onClick={onCancelSearch}>
+                停止
+              </button>
+            </div>
+          )}
           {searchState === 'error' && (
             <p className="reader-toc-empty" role="alert">
               搜索失败,请重试。

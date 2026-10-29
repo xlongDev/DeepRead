@@ -2866,6 +2866,26 @@ button:disabled {
   outline: none;
 }
 
+/* 区分大小写:搜索框下的一行小开关,贴 reader 面板的次级文字基调。 */
+.reader-search-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 搜索中:进度文字 + 停止按钮,同一行两端对齐。 */
+.reader-search-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
 .search-result {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);

@@ -43,6 +43,22 @@ export interface ReaderOpenInit {
   readonly fontFaces?: string
 }
 
+/**
+ * search() 的可选参数。全部可省 —— 省略时行为与旧签名完全一致(整书搜完
+ * 一次性返回,无进度无中止)。
+ */
+export interface SearchRequest {
+  /** 大小写敏感(内核 searchMatcher 直通;默认不敏感)。 */
+  readonly matchCase?: boolean
+  /** 逐节产出已搜比例 0..1(内核 #searchBook 每搜完一节 yield 一次)。 */
+  readonly onProgress?: (fraction: number) => void
+  /**
+   * 中止。收到中止后停止向内核拉取、立刻返回**已收集的部分结果** ——
+   * 调用方自行用 signal.aborted 区分「搜完」与「停在了半路」。
+   */
+  readonly signal?: AbortSignal
+}
+
 export interface ReaderEngine {
   open(source: BookSource, init?: ReaderOpenInit): Promise<void>
   close(): Promise<void>
@@ -64,7 +80,7 @@ export interface ReaderEngine {
   nextPage(options?: { animate?: boolean }): Promise<void>
   previousPage(options?: { animate?: boolean }): Promise<void>
 
-  search(query: string): Promise<readonly SearchResult[]>
+  search(query: string, request?: SearchRequest): Promise<readonly SearchResult[]>
   getText(range?: TextRange): Promise<string>
   /**
    * 全书正文统计(CJK 按字、西文按词计),`cjk` 是其中中日韩字数,
