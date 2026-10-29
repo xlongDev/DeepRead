@@ -61,6 +61,9 @@
   /* Blur */
   --blur-glass: 20px;
   --blur-glass-heavy: 40px;
+  /* 玻璃面板复合配方(backdrop-filter 用)。引用 --blur-glass 而非固定值,
+     液态玻璃等主题抬高 --blur-glass 时整套玻璃跟随变化。 */
+  --glass-blur: blur(var(--blur-glass)) saturate(1.7);
 
   /* Motion */
   --duration-fast: 150ms;

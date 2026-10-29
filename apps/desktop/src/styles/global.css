@@ -7430,8 +7430,8 @@ button.parallel-divider:active:not(:disabled) {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface-glass);
-  /* 这里不写 var(--glass-blur):那个变量全仓从未定义,var() 找不到又没有
-     fallback 会让整条声明失效(读起来像"有模糊",实际一点都没有)。 */
+  /* 比 --glass-blur 的基础档(20px)更重的一档,配 28px;
+     复合配方定义在 design-system tokens.css 的 Blur 区。 */
   backdrop-filter: blur(28px) saturate(1.7);
   -webkit-backdrop-filter: blur(28px) saturate(1.7);
   box-shadow: var(--shadow-soft);
