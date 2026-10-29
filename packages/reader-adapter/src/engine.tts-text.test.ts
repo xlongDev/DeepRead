@@ -37,6 +37,17 @@ describe('walkSectionText', () => {
     const body = bodyOf('<ul><li>甲。</li><li>乙。</li></ul>')
     expect(walkSectionText(body).text).toBe('甲。\n乙。\n\n')
   })
+
+  it('同一 body 重复调用走缓存(结果同一实例),新文档重新 walk', () => {
+    // 词级 TTS 洗色每个 boundary 事件都来一次,不缓存就是每词一次全节
+    // DOM walk。缓存 key 是 body 元素:重开书的新 body 是新对象,天然不串。
+    const first = bodyOf('<p>甲。</p>')
+    const resultA = walkSectionText(first)
+    expect(walkSectionText(first)).toBe(resultA)
+    const second = bodyOf('<p>甲。</p>')
+    expect(walkSectionText(second)).not.toBe(resultA)
+    expect(walkSectionText(second).text).toBe(resultA.text)
+  })
 })
 
 describe('findRangeByCharOffset', () => {

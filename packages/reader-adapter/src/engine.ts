@@ -166,9 +166,33 @@ const BLOCK_TAGS = new Set([
  * 把字符区间还原成 DOM Range —— 两边必须共用这个函数,否则 TTS 报的
  * 位置和正文高亮的位置会错位(多一个虚拟换行就整体偏一格)。
  *
+ * 带按节缓存:词级 TTS 洗色的每个 boundary 事件都会重走一遍全节 DOM
+ * (长章数千节点)—— 听书场景的 CPU 稳定占用主要就是它;选区起点换算
+ * 同理。缓存后每节只 walk 一次。缓存成立的前提:section 文档是**不可变
+ * 快照** —— 文内替换、简繁、章节重建全都走整书重开,新文档的 body 是新
+ * 对象,WeakMap 条目自然失效;文档卸载后条目随之回收。若未来出现就地改写
+ * 正文文本的路径,必须先删掉对应 entry,否则偏移模型会静默漂移。
+ *
  * @internal 导出仅为单测;产品代码请走 `getSectionText` / `setTTSHighlightByOffset`。
  */
+const sectionWalkCache = new WeakMap<
+  Element,
+  ReturnType<typeof walkSectionTextBase>
+>()
+
 export function walkSectionText(body: Element): {
+  readonly text: string
+  readonly nodes: readonly { readonly node: Text; readonly start: number }[]
+} {
+  const cached = sectionWalkCache.get(body)
+  if (cached) return cached
+  const result = walkSectionTextBase(body)
+  sectionWalkCache.set(body, result)
+  return result
+}
+
+/** 无缓存的本体;产品代码请走带缓存的 {@link walkSectionText}。 */
+function walkSectionTextBase(body: Element): {
   readonly text: string
   readonly nodes: readonly { readonly node: Text; readonly start: number }[]
 } {
