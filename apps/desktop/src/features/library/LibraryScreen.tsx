@@ -541,18 +541,23 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   }, [books, libraryLoaded])
 
   const importPaths = useCallback(async (paths: readonly string[]): Promise<void> => {
-    for (const path of paths) {
+    // 后端 spawn_blocking 本就并行哈希,这里 3 路并发取号,拖一摞书不再一本本
+    // 排队(pool 的契约是任务内自吞错)。失败即时上报;全部成功才清错误条 ——
+    // 并发下某本的成功不该抹掉另一本的失败提示。
+    let failures = 0
+    await mapWithConcurrency(paths, 3, async (path) => {
       try {
         const response = await invokeCommand('library.import', { path })
         setBooks((current) => [
           response.book,
           ...current.filter((b) => b.hash !== response.book.hash),
         ])
-        setProblem(null)
       } catch (error) {
+        failures += 1
         setProblem(toAppError(error).message ?? null)
       }
-    }
+    })
+    if (failures === 0) setProblem(null)
   }, [])
 
   const importFromDialog = useCallback(async (): Promise<void> => {
