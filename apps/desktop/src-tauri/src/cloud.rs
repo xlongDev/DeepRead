@@ -512,14 +512,15 @@ pub async fn cloud_backup(
     let stamp = crate::timestamps::rfc3339_now().replace([':', '.'], "-");
     let temp = base.join(format!("cloud-backup-{stamp}.db"));
     let remote_path = format!("backups/deepread-{stamp}.db");
-    let (bytes, checksum) = {
+    // 快照需要连接(VACUUM INTO),锁内完成;checksum 只读临时文件,放锁外,
+    // 几百 MB 书库做 SHA-256 期间进度保存等命令不必跟着等。
+    let bytes = {
         let conn =
             db.0.lock()
                 .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
-        let bytes = crate::storage::backup_to(&conn, &temp)?;
-        let checksum = crate::storage::file_checksum(&temp)?;
-        (bytes, checksum)
+        crate::storage::backup_to(&conn, &temp)?
     };
+    let checksum = crate::storage::file_checksum(&temp)?;
     let body = std::fs::read(&temp).map_err(|err| {
         AppError::new(ErrorCode::StorageIo, "failed to read snapshot").with_cause(err)
     })?;
