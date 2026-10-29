@@ -184,10 +184,11 @@ declare module 'foliate-js/view.js' {
     search(opts: { query: string; index?: number; matchCase?: boolean }): AsyncGenerator<
       | {
           cfi?: string
-          excerpt?: string
+          /** search.js 的 makeExcerpt 三段体,非字符串。 */
+          excerpt?: { pre: string; match: string; post: string }
           progress?: number
           label?: string
-          subitems?: { cfi: string; excerpt: string }[]
+          subitems?: { cfi: string; excerpt: { pre: string; match: string; post: string } }[]
         }
       | 'done'
     >

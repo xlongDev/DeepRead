@@ -325,20 +325,23 @@ const makeTOCItem = (item) => ({
 
 // ---- 全书搜索:sections.createDocument -------------------------------------
 // 内核 view.search 逐节调 createDocument() 拿伪文档跑匹配,再把命中的 DOM
-// Range 转成 CFI(view.getCFI = fake 基址 + CFI.fromRange);显示高亮时同一条
-// CFI 会经 CFI.toRange 解析回**真实渲染的页文档**。所以这里的 DOM 结构必须
-// 与 TextLayer 渲染出的 textLayer 逐元素一致(span/br 的数量与顺序),否则
-// CFI 对不上。镜像规则照抄 pdf.js TextLayer(6.4.299,MIT):
+// Range 转成 CFI(view.getCFI = fake 基址 + CFI.fromRange);TTS 洗色时同一条
+// 偏移模型还会解析回**真实渲染的页文档**。所以伪文档与真页文档的 DOM 结构
+// 必须逐元素一致(span/br 的数量与顺序),否则 CFI 与高亮 Range 全部错位。
+//
+// 主路径(readest 同款):伪文档直接用真 pdfjsLib.TextLayer 渲染 —— 同一个
+// 类、同一份 streamTextContent 输入,结构同构由构造保证,不随 pdf.js 版本
+// 漂移(见 makeSearchDocument)。
+//
+// 兜底(appendPdfTextItems):无 canvas 的环境(jsdom 单测等)手工镜像
+// TextLayer(6.4.299,MIT)的结构规则:
 //   - 文本项 str !== '' → span[role=presentation],textContent = str
-//     (hasText 判据是 str !== '',空串项只可能带 hasEOL);
+//       (hasText 判据是 str !== '',空串项只可能带 hasEOL);
 //   - 项 hasEOL → 追加 br[role=presentation];
 //   - streamTextContent 默认不含 marked content(includeMarkedContent=false),
 //     所以 textLayer 是扁平的,无嵌套 span;
 //   - 真渲染在 textDivs 超过 MAX_TEXT_DIVS_TO_RENDER(100000)后整页截断,
 //     这里镜像同一上限,避免伪文档比真文档多出尾部文本。
-// 命中高亮:内核 fixed-layout 渲染器尚无 overlayer(上游 TODO),PDF 命中
-// 只有列表与跳页,不画高亮 —— addAnnotation 解析不到 overlayer 时静默跳过,
-// 不会报错。
 export const appendPdfTextItems = (layer, doc, items) => {
   const MAX_TEXT_DIVS = 100000
   let count = 0
@@ -362,20 +365,36 @@ export const appendPdfTextItems = (layer, doc, items) => {
 
 const makeSearchDocument = async (pdf, index) => {
   const page = await pdf.getPage(index + 1)
+  const doc = document.implementation.createHTMLDocument('')
+  // 骨架与真实页文档一致:body > #canvas + .textLayer + .annotationLayer,
+  // CFI 的元素路径(/4/2/span[i]…)两边才对得上。
+  const canvas = doc.createElement('div')
+  canvas.id = 'canvas'
+  const textLayer = doc.createElement('div')
+  textLayer.className = 'textLayer'
+  const annotationLayer = doc.createElement('div')
+  annotationLayer.className = 'annotationLayer'
+  doc.body.append(canvas, textLayer, annotationLayer)
+
+  // readest 同款做法:伪文档直接用真 TextLayer 渲染 —— 与真实页面是同一个
+  // 类、同一份输入,结构同构由构造保证,不随 pdf.js 版本漂移。无 canvas 的
+  // 环境(单测/jsdom)退回手工镜像 span(appendPdfTextItems,规则同 TextLayer)。
+  const probe = doc.createElement('canvas')
+  if (probe.getContext?.('2d')) {
+    try {
+      const instance = new pdfjsLib.TextLayer({
+        textContentSource: await page.streamTextContent(),
+        container: textLayer,
+        viewport: page.getViewport({ scale: 1 }),
+      })
+      await instance.render()
+      return doc
+    } catch {
+      textLayer.replaceChildren()
+    }
+  }
   const { items } = await page.getTextContent()
-  const doc = new DOMParser().parseFromString(
-    `<!DOCTYPE html>
-    <html lang="en">
-    <meta charset="utf-8">
-    <body>
-    <div id="canvas"></div>
-    <div class="textLayer"></div>
-    <div class="annotationLayer"></div>
-    </body>
-    </html>`,
-    'text/html',
-  )
-  appendPdfTextItems(doc.querySelector('.textLayer'), doc, items)
+  appendPdfTextItems(textLayer, doc, items)
   return doc
 }
 

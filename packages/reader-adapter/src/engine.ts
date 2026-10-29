@@ -36,6 +36,7 @@ import type {
   FoliateAnnotation,
   FoliateBook,
   FoliateRenderer,
+  FoliateSection,
   FoliateTocItem,
   View,
   ViewLocation,
@@ -59,6 +60,68 @@ const MAX_SELECTION_TEXT = 2000
 const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
 /** overlayer 的 key:TTS 洗色与用户批注共用 overlayer,但不能共用 key 空间。 */
 const TTS_HIGHLIGHT_KEY = 'deepread-tts'
+/** fixed-layout(PDF/CBZ)页文档里 Custom Highlight API 的注册名。 */
+const TTS_CUSTOM_HIGHLIGHT = 'deepread-tts'
+
+/**
+ * 内核 search 的 excerpt 不是字符串,是 `{pre, match, post}` 高亮三段体
+ * (search.js 的 makeExcerpt)。React 拿到对象会整树崩掉 —— 渲染层只认
+ * 字符串,这里拼成一行纯文本。
+ */
+function normalizeExcerpt(excerpt: unknown): string {
+  if (typeof excerpt === 'string') return excerpt
+  if (excerpt && typeof excerpt === 'object') {
+    const {
+      pre = '',
+      match = '',
+      post = '',
+    } = excerpt as {
+      pre?: string
+      match?: string
+      post?: string
+    }
+    return `${pre}${match}${post}`
+  }
+  return ''
+}
+
+/**
+ * 把内核 search 的一条产出折进结果列表。
+ *
+ * 全书搜索(#searchBook)把每章命中打包成 `{index, subitems}` 产出,只有
+ * 单章搜索(#searchSection)才给扁平 `{cfi, excerpt}`。旧实现只认扁平形态
+ * —— 全书搜索在任何格式上都返回空,PDF 只是第一个被用户撞见的格式。
+ * 返回 true 表示已达上限,调用方应停止拉取(生成器随之收尾)。
+ *
+ * @internal 导出仅为单测。
+ */
+export function collectSearchYield(
+  item: {
+    index?: number
+    cfi?: string
+    excerpt?: unknown
+    subitems?: readonly { cfi?: string; excerpt?: unknown }[]
+  },
+  results: SearchResult[],
+  max: number,
+): boolean {
+  if ('subitems' in item && item.subitems) {
+    for (const { cfi, excerpt } of item.subitems) {
+      const text = normalizeExcerpt(excerpt)
+      if (!cfi || !text) continue
+      results.push({ location: { cfi, progress: 0 }, excerpt: text })
+      if (results.length >= max) return true
+    }
+    return results.length >= max
+  }
+  if ('cfi' in item && item.cfi && item.excerpt) {
+    results.push({
+      location: { cfi: item.cfi, progress: 0 },
+      excerpt: normalizeExcerpt(item.excerpt),
+    })
+  }
+  return results.length >= max
+}
 
 /**
  * 联动对位的滑行时长:一栏(≈556px)≈ 下限,跨小半本书 ≈ 上限。与阅读尺移尺
@@ -611,6 +674,64 @@ export function buildReaderCSS(
   ].join('\n')
 }
 
+/**
+ * 全书搜索的节级兜底:内核 searchMatcher 读 `doc.body.lang`,而 EPUB 个别
+ * spine 项(纯 SVG 封面页等)解析出的 Document 没有 `<body>` —— 搜到那一节
+ * 整轮直接 TypeError,全书搜索全军覆没。这里包一层 createDocument,没有
+ * body 的文档换成空 HTML 文档(那一节本来也没有正文可搜)。只动适配层,
+ * 不碰内核(ADR-0006)。
+ *
+ * @internal 导出仅为单测。
+ */
+const bodyGuardedSections = new WeakSet<object>()
+
+/**
+ * fixed-layout 页文档的 TTS 洗色(CSS Custom Highlight API):把 Range 注册
+ * 进页文档自己的 CSS.highlights 并注入 ::highlight 规则。透明度对齐内核
+ * overlayer 的观感(--overlayer-highlight-opacity 默认 .3);能力缺失
+ * (jsdom、旧 WebKit)返回 false,调用方静默跳过,行为退回无高亮。
+ *
+ * @internal 导出仅为单测。
+ */
+export function registerTtsCustomHighlight(doc: Document, range: Range, color: string): boolean {
+  const win = doc.defaultView
+  const registry = (win?.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights
+  const HighlightCtor = (win as { Highlight?: new (range: Range) => unknown } | undefined)
+    ?.Highlight
+  if (!registry || !HighlightCtor) return false
+  if (doc.getElementById('tts-custom-highlight-style') === null) {
+    const style = doc.createElement('style')
+    style.id = 'tts-custom-highlight-style'
+    style.textContent =
+      `::highlight(${TTS_CUSTOM_HIGHLIGHT}) { ` +
+      `background-color: color-mix(in srgb, ${color} 30%, transparent); }`
+    doc.head?.appendChild(style)
+  }
+  registry.set(TTS_CUSTOM_HIGHLIGHT, new HighlightCtor(range))
+  return true
+}
+
+/** 摘掉页文档上的 TTS 洗色注册(能力缺失时 registry 不存在,静默)。 */
+export function unregisterTtsCustomHighlight(doc: Document): void {
+  const registry = (doc.defaultView?.CSS as { highlights?: Map<string, unknown> } | undefined)
+    ?.highlights
+  registry?.delete(TTS_CUSTOM_HIGHLIGHT)
+}
+
+export function ensureSearchableSections(sections: readonly FoliateSection[]): void {
+  for (const section of sections) {
+    const createDocument = section.createDocument
+    if (typeof createDocument !== 'function') continue
+    if (bodyGuardedSections.has(section)) continue
+    bodyGuardedSections.add(section)
+    section.createDocument = async () => {
+      const doc = await createDocument.call(section)
+      if (doc?.body) return doc
+      return new DOMParser().parseFromString('<html><body></body></html>', 'text/html')
+    }
+  }
+}
+
 export class FoliateAdapter implements ReaderEngine {
   #view: View | null = null
   readonly #host: HTMLElement
@@ -649,6 +770,9 @@ export class FoliateAdapter implements ReaderEngine {
   /** 当前 TTS 洗色挂在哪个 overlayer 上;null = 没有洗色。overlayer 随
    *  section 的 content 一起创建/销毁,切章时旧的那个连文档一起没。 */
   #ttsOverlayer: Overlayer | null = null
+  /** fixed-layout(PDF/CBZ)走 Custom Highlight API,洗色注册在页文档自己的
+   *  CSS.highlights 里;记着文档以便切页/清除时摘掉。 */
+  #ttsCustomDoc: Document | null = null
   /** 最近一次 `getSectionText` 命中的 section index。TTS 高亮的 offset
    *  就来自那次文本,必须落在同一个 content 上,否则 Range 越界。 */
   #lastTextIndex: number | undefined
@@ -997,6 +1121,8 @@ export class FoliateAdapter implements ReaderEngine {
     // 重新落一次(否则「值没变」会让新 paginator 永远收不到栏宽)。
     this.#lastMaxInlineSize = null
     await view.open(book)
+    // 搜索兜底要在开书后挂:EPUB 无 body 的节不兜住,全书搜索会炸整轮。
+    ensureSearchableSections(view.book.sections)
     if (!view.isFixedLayout) this.#applyPaginatorAttributes(view)
   }
 
@@ -1217,6 +1343,7 @@ export class FoliateAdapter implements ReaderEngine {
     // overlayer 随 view 一起销毁,引用不摘的话下次 #clearTtsWash 会
     // 在已卸载的 SVG group 上 remove。
     this.#ttsOverlayer = null
+    this.#ttsCustomDoc = null
   }
 
   async destroy(): Promise<void> {
@@ -1576,10 +1703,7 @@ export class FoliateAdapter implements ReaderEngine {
         request?.onProgress?.(item.progress)
         continue
       }
-      if ('cfi' in item && item.cfi && item.excerpt) {
-        results.push({ location: { cfi: item.cfi, progress: 0 }, excerpt: item.excerpt })
-        if (results.length >= MAX_SEARCH_RESULTS) break
-      }
+      if (collectSearchYield(item, results, MAX_SEARCH_RESULTS)) break
     }
     return results
   }
@@ -1749,7 +1873,15 @@ export class FoliateAdapter implements ReaderEngine {
     const range = findRangeByCharOffset(content.doc.body, charStart, charEnd)
     if (range === null) return
     const overlayer = content.overlayer
-    if (!overlayer) return
+    if (!overlayer) {
+      // fixed-layout(PDF/CBZ):内核渲染器没有 overlayer(上游 TODO),而
+      // 内核不可 patch(ADR-0006)。readest 是在 fork 的 fixed-layout 里补了
+      // overlayer;本项目等价物是 CSS Custom Highlight API —— Range 直接
+      // 注册进页文档的 CSS.highlights,不碰 DOM 结构(CFI 镜像不变式安然)。
+      // 能力探测不支持时静默跳过,行为退回无高亮。
+      this.#drawTtsCustomHighlight(content.doc, range, color)
+      return
+    }
     // 换 section overlayer 也换:先把上一个上的洗色摘掉,否则旧章文档在被
     // 卸载前会一直留着一块高亮。
     if (this.#ttsOverlayer !== null && this.#ttsOverlayer !== overlayer) {
@@ -1775,6 +1907,25 @@ export class FoliateAdapter implements ReaderEngine {
   #clearTtsWash(): void {
     this.#ttsOverlayer?.remove(TTS_HIGHLIGHT_KEY)
     this.#ttsOverlayer = null
+    this.#clearTtsCustomHighlight()
+  }
+
+  /**
+   * fixed-layout 页文档的 TTS 洗色:CSS Custom Highlight API(Safari 17.2+ /
+   * Chromium 105+)。每个词级更新整体替换注册表条目 —— Highlight 是 Range
+   * 的只读集合,重建比改写便宜也省心。
+   */
+  #drawTtsCustomHighlight(doc: Document, range: Range, color: string): void {
+    if (this.#ttsCustomDoc !== null && this.#ttsCustomDoc !== doc) {
+      this.#clearTtsCustomHighlight()
+    }
+    if (registerTtsCustomHighlight(doc, range, color)) this.#ttsCustomDoc = doc
+  }
+
+  #clearTtsCustomHighlight(): void {
+    const doc = this.#ttsCustomDoc
+    this.#ttsCustomDoc = null
+    if (doc) unregisterTtsCustomHighlight(doc)
   }
 
   /** 注入书籍文档的 @font-face 规则(内置 + 用户导入)。 */
