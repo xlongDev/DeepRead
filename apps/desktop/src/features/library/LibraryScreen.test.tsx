@@ -937,11 +937,11 @@ describe('LibraryScreen 阅读目标(统计页)', () => {
     expect(within(yearlyRow).getByText('还剩 11 本')).toBeInTheDocument()
   })
 
-  it('设置弹窗只有三个分区:目标不住设置里', async () => {
+  it('设置弹窗只有四个分区:目标不住设置里', async () => {
     await renderLibrary()
     fireEvent.click(sidebarButton('设置'))
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent?.trim())
-    expect(tabs).toEqual(['外观', 'AI 服务', '备份与更新'])
+    expect(tabs).toEqual(['外观', '快捷键', 'AI 服务', '备份与更新'])
   })
 })
 describe('LibraryScreen 侧栏导航', () => {

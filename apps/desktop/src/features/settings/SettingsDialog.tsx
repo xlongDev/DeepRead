@@ -19,11 +19,12 @@ import { exportSnapshot, importSnapshot, readStorageEstimate } from '../../lib/w
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { AiProviderForm, useAiProviders } from './AiProviderSettings'
+import { KeybindingsSettings } from './KeybindingsSettings'
 import { APP_THEMES, formatBytes, type AppTheme } from '../library/shelf-view'
 
 /** 设置弹窗的分区。顺序即左右位置,切换动画的方向由它推出来。
  *  阅读目标不住这里 —— 它住统计页(目标与进度是同一件事)。 */
-const SETTINGS_TABS = ['appearance', 'ai', 'data'] as const
+const SETTINGS_TABS = ['appearance', 'keys', 'ai', 'data'] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 
 /** 已忽略的更新版本:同一版本不再提示。 */
@@ -264,6 +265,15 @@ export function SettingsDialog({
           </button>
           <button
             type="button"
+            className={settingsTab === 'keys' ? 'is-active' : ''}
+            onClick={() => changeSettingsTab('keys')}
+            role="tab"
+            aria-selected={settingsTab === 'keys'}
+          >
+            快捷键
+          </button>
+          <button
+            type="button"
             className={settingsTab === 'ai' ? 'is-active' : ''}
             onClick={() => changeSettingsTab('ai')}
             role="tab"
@@ -329,6 +339,8 @@ export function SettingsDialog({
               </section>
             </>
           )}
+
+          {settingsTab === 'keys' && <KeybindingsSettings />}
 
           {settingsTab === 'ai' && (
             <section className="modal-section">

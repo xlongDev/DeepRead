@@ -36,6 +36,7 @@ import { loadNotes } from '../../lib/notes'
 import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { useKeybindings } from '../../lib/keybindings'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
@@ -285,13 +286,15 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   const shelfSearchInputRef = useRef<HTMLInputElement>(null)
   // ⌘B / Ctrl+B 开关侧栏,⌘K / Ctrl+K 聚焦书架搜索 —— 与阅读器同一套
   // 「修饰键 + 单键」心智;修饰键组合不与打字冲突,无需可编辑守卫。
+  // 键位来自设置(改键即时生效)。
+  const keybindings = useKeybindings()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey)) return
-      if (event.key === 'b') {
+      if (keybindings.sidebar !== '' && event.key === keybindings.sidebar) {
         event.preventDefault()
         setSidebarOpen((isOpen) => !isOpen)
-      } else if (event.key === 'k') {
+      } else if (keybindings.search !== '' && event.key === keybindings.search) {
         event.preventDefault()
         const input = shelfSearchInputRef.current
         if (input !== null) {
@@ -302,7 +305,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [keybindings])
   /** 侧栏「我的分组」;与标签筛选叠加生效。 */
   const [smartFilter, setSmartFilter] = useState<SmartFilter>('all')
   const [tagDraft, setTagDraft] = useState('')

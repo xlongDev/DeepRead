@@ -60,6 +60,23 @@ describe('面板快捷键(修饰键 + 单键)', () => {
     expect(readerKeyAction(press('b'))).toBeNull()
     expect(readerKeyAction(press('K', { metaKey: true }))).toBeNull()
   })
+
+  it('键位表可自定义:⌘J 走搜索,默认 k 同时失效', () => {
+    const bindings = { search: 'j' }
+    expect(readerKeyAction(press('j', { metaKey: true }), bindings)).toBe('search')
+    expect(readerKeyAction(press('k', { metaKey: true }), bindings)).toBeNull()
+  })
+
+  it('默认键位(e/t/l)触发 AI / 听书 / 学习', () => {
+    expect(readerKeyAction(press('e', { metaKey: true }))).toBe('ai')
+    expect(readerKeyAction(press('t', { ctrlKey: true }))).toBe('tts')
+    expect(readerKeyAction(press('l', { metaKey: true }))).toBe('learning')
+  })
+
+  it('键位表里缺的动作不绑定(空表不回退默认)', () => {
+    expect(readerKeyAction(press('e', { metaKey: true }), {})).toBeNull()
+    expect(readerKeyAction(press('e', { metaKey: true }), { ai: undefined })).toBeNull()
+  })
 })
 
 describe('Escape 与未绑定键', () => {

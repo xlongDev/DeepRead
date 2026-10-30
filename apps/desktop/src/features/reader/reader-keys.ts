@@ -6,6 +6,8 @@
  * 2000 行组件里的 handler 淹没。
  */
 
+import { KEYBINDING_DEFAULTS } from '../../lib/keybindings'
+
 export type ReaderKeyAction =
   | 'fullscreen'
   | 'next'
@@ -15,6 +17,9 @@ export type ReaderKeyAction =
   | 'ruler-down'
   | 'search'
   | 'toggle-sidebar'
+  | 'ai'
+  | 'tts'
+  | 'learning'
 
 /** 只取用得到的字段,方便测试直接传字面量。 */
 export interface ReaderKeyEvent {
@@ -40,14 +45,29 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
 }
 
-export function readerKeyAction(event: ReaderKeyEvent): ReaderKeyAction | null {
+export function readerKeyAction(
+  event: ReaderKeyEvent,
+  /** 面板动作的单键位(⌘/Ctrl 固定修饰);缺省 = 默认键位表,设置里可改。 */
+  bindings: Readonly<Record<string, string | undefined>> = KEYBINDING_DEFAULTS,
+): ReaderKeyAction | null {
   if (event.key === 'F11' || (event.key === 'f' && event.ctrlKey && event.metaKey)) {
     return 'fullscreen'
   }
-  // ⌘K / Ctrl+K 唤起搜索,⌘B / Ctrl+B 开关目录侧栏 —— 修饰键组合,与翻页
-  // 单键无冲突(Cmd+F 在 Tauri 里被系统占用,搜索选了 K)。
-  if (event.key === 'k' && (event.metaKey || event.ctrlKey)) return 'search'
-  if (event.key === 'b' && (event.metaKey || event.ctrlKey)) return 'toggle-sidebar'
+  // 面板动作都是「修饰键 + 单键」:⌘/Ctrl + 键位表里该动作的字母。设置里
+  // 改键即时生效(键位表经 keybindings lib 传入);Cmd+F 在 Tauri 里被系统
+  // 占用,搜索的默认键选了 K。
+  const panelCombos: readonly { action: ReaderKeyAction; letter: string | undefined }[] = [
+    { action: 'search', letter: bindings.search },
+    { action: 'toggle-sidebar', letter: bindings.sidebar },
+    { action: 'ai', letter: bindings.ai },
+    { action: 'tts', letter: bindings.tts },
+    { action: 'learning', letter: bindings.learning },
+  ]
+  for (const { action, letter } of panelCombos) {
+    if (letter !== undefined && letter !== '' && event.key === letter) {
+      if (event.metaKey || event.ctrlKey) return action
+    }
+  }
   if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') return 'next'
   if (event.key === 'ArrowLeft' || event.key === 'PageUp') return 'prev'
   // 上下方向键归阅读尺:开尺时移尺(走到页尾自然翻页),关尺时调用方直接

@@ -66,6 +66,7 @@ import {
   type ChapterRuleCandidate,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
+import { keyHint, useKeybindings } from '../../lib/keybindings'
 import {
   buildFontFacesCss,
   FONT_FAMILY_OPTIONS,
@@ -317,6 +318,8 @@ export function ReaderScreen({
   /** 并排阅读的「激活我」:adapter 挂载时一次建成,回调要走 ref 才能拿到当次渲染的 pane。 */
   const paneActivateRef = useRef<(() => void) | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  /** 面板快捷键位(设置里可改,经订阅即时生效)。 */
+  const keybindings = useKeybindings()
   /** 浏览器端导入阅读字体的文件选择器(桌面端走 openFileDialog)。 */
   const fontInputRef = useRef<HTMLInputElement>(null)
   /**
@@ -1197,7 +1200,7 @@ export function ReaderScreen({
       // 并行阅读:两栏都挂 window 监听,只让活动栏响应 —— 否则按一次 → 两本
       // 一起翻,想单翻一本就没办法了。
       if (paneActive === false) return
-      const action = readerKeyAction(event)
+      const action = readerKeyAction(event, keybindings)
       if (action === null) return
       // 焦点在输入框/文本域/滑杆等可编辑元素上时,翻页与阅读尺键让位给原生
       // 行为:搜索框里敲空格是打字,进度滑杆的 ←→ 是调滑杆。Escape 仍放行
@@ -1208,6 +1211,9 @@ export function ReaderScreen({
         action !== 'fullscreen' &&
         action !== 'search' &&
         action !== 'toggle-sidebar' &&
+        action !== 'ai' &&
+        action !== 'tts' &&
+        action !== 'learning' &&
         isEditableTarget(event.target)
       )
         return
@@ -1242,6 +1248,10 @@ export function ReaderScreen({
         // ⌘B:目录侧栏开关。
         setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
         setChromeVisible(true)
+      } else if (action === 'ai' || action === 'tts' || action === 'learning') {
+        // ⌘E / ⌘T / ⌘L:功能抽屉开关,与顶栏按钮同一条路径。
+        setOpenPanel((panel) => (panel === action ? null : action))
+        setChromeVisible(true)
       } else if (ttsMounted) {
         // Esc 归 TtsDrawer:它把自己收起成迷你条(播放不中断)。这里若跟着
         // 清 openPanel,抽屉在「最小化动画第一帧」就被卸载,用户看到的是
@@ -1255,7 +1265,16 @@ export function ReaderScreen({
         setNoteDraft(null)
       }
     },
-    [turnPage, toggleFullscreen, hidden, ttsMounted, footnote, paneActive, rulerActive],
+    [
+      turnPage,
+      toggleFullscreen,
+      hidden,
+      ttsMounted,
+      footnote,
+      paneActive,
+      rulerActive,
+      keybindings,
+    ],
   )
 
   useEffect(() => {
@@ -2370,7 +2389,7 @@ export function ReaderScreen({
               setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
               setChromeVisible(true)
             }}
-            title="搜索全书(⌘K)"
+            title={`搜索全书(${keyHint('search', keybindings)})`}
             aria-haspopup="dialog"
             aria-expanded={openPanel === 'search'}
           >
@@ -2383,7 +2402,7 @@ export function ReaderScreen({
               setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
               setChromeVisible(true)
             }}
-            title="目录(⌘B)"
+            title={`目录(${keyHint('sidebar', keybindings)})`}
           >
             <List size={18} weight="regular" aria-hidden />
           </button>
