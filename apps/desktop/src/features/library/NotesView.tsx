@@ -117,7 +117,7 @@ export function NotesView({
     <section className="notes-page" aria-label="笔记">
       <div className="notes-toolbar">
         <h1 className="shelf-title">
-          笔记 <span className="shelf-count">{shown.length}</span>
+          笔记<span className="shelf-subline">{shown.length} 条</span>
         </h1>
         <button
           type="button"
