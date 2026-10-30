@@ -1183,12 +1183,9 @@ export function ReaderScreen({
     }
   }, [showChrome])
 
-  // 目录面板不在屏时,搜索命中高亮一并摘除 —— 查完就走,高亮不该赖在书上。
-  // (含 Esc、点关闭、切到别的面板三条路;引擎不支持时是空操作。)
-  useEffect(() => {
-    if (openPanel === 'toc') return
-    void adapterRef.current?.clearSearchHits?.().catch(() => {})
-  }, [openPanel])
+  // 搜索命中高亮在关面板后保留:点命中跳页就是要看到「落点在正文哪里」,
+  // 查完即摘会让跳转失去意义。清除走三条自然路:新搜索替换(showSearchHits
+  // 内部先摘)、换书/关书(adapter 销毁)、PDF 页文档随翻页重建。
 
   // 方向键切页:window 与书内 iframe 两个入口共用同一处理。
   const handleReaderKey = useCallback(
@@ -1807,7 +1804,8 @@ export function ReaderScreen({
             .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
         )
         setSearchState('done')
-        // 命中处上屏:淡蓝高亮标出每一条,翻页重放;新搜索或关面板时摘除。
+        // 命中处上屏:淡蓝高亮标出每一条,翻页跟随、关面板保留(fixed-layout
+        // 走 Custom Highlight,见适配器);新搜索时由 showSearchHits 先摘旧的。
         // PDF 是 fixed-layout,内核渲染器没有 overlayer(上游 TODO),命中只出
         // 列表与跳页、不画高亮 —— addAnnotation 解析不到 overlayer 静默跳过。
         void adapterRef.current

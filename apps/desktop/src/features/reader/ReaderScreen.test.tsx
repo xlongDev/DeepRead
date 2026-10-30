@@ -335,7 +335,7 @@ describe('面板开合', () => {
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
   })
 
-  it('搜索成功后把命中处交给内核画高亮,面板关闭时摘除', async () => {
+  it('搜索成功后把命中处交给内核画高亮,关面板后高亮保留(点命中跳页要看落点)', async () => {
     const { adapter } = await renderReader({
       searchResults: [
         { location: { cfi: 'epubcfi(/6/4!2/2)', progress: 0 }, excerpt: '把灯点亮' },
@@ -350,9 +350,9 @@ describe('面板开合', () => {
     fireEvent.click(within(panel).getByTitle('搜索'))
     await waitFor(() => expect(adapter.showSearchHits).toHaveBeenCalledWith(['epubcfi(/6/4!2/2)']))
 
-    // 关面板:高亮一并摘除。
+    // 关面板:高亮保留 —— 跳页后要能看到落点;清除走新搜索/换书两条路。
     fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))
-    await waitFor(() => expect(adapter.clearSearchHits).toHaveBeenCalled())
+    expect(adapter.clearSearchHits).not.toHaveBeenCalled()
   })
 
   it('内核搜索失败时给出明确错误态,不永远停在「搜索中」', async () => {

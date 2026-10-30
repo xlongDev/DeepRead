@@ -60,8 +60,43 @@ const MAX_SELECTION_TEXT = 2000
 const DEFAULT_HIGHLIGHT_COLOR = '#f5d76e'
 /** overlayer 的 key:TTS 洗色与用户批注共用 overlayer,但不能共用 key 空间。 */
 const TTS_HIGHLIGHT_KEY = 'deepread-tts'
-/** fixed-layout(PDF/CBZ)页文档里 Custom Highlight API 的注册名。 */
+/** fixed-layout(PDF/CBZ)页文档里 Custom Highlight API 的注册名(听书洗色)。 */
 const TTS_CUSTOM_HIGHLIGHT = 'deepread-tts'
+/** fixed-layout 页文档里 Custom Highlight API 的注册名(搜索命中)。 */
+const SEARCH_CUSTOM_HIGHLIGHT = 'deepread-search'
+
+/**
+ * 页文档的 Custom Highlight 能力探测 + `::highlight` 规则注入(听书洗色与
+ * 搜索命中两套共用)。规则按文档幂等注入一份;能力缺失(jsdom、旧 WebKit)
+ * 返回 null,调用方静默退化。
+ *
+ * @internal 导出仅为单测。
+ */
+export function ensureCustomHighlightEnv(
+  doc: Document,
+  name: string,
+  declaration: string,
+): { registry: Map<string, unknown>; Highlight: new (...ranges: Range[]) => unknown } | null {
+  const win = doc.defaultView
+  const registry = (win?.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights
+  const Highlight = (win as { Highlight?: new (...ranges: Range[]) => unknown } | undefined)
+    ?.Highlight
+  if (!registry || !Highlight) return null
+  if (doc.getElementById(`custom-highlight-style-${name}`) === null) {
+    const style = doc.createElement('style')
+    style.id = `custom-highlight-style-${name}`
+    style.textContent = `::highlight(${name}) { ${declaration} }`
+    doc.head?.appendChild(style)
+  }
+  return { registry, Highlight }
+}
+
+/** 摘掉页文档上某个名字的 Custom Highlight 注册(能力缺失时静默)。 */
+export function unregisterCustomHighlight(doc: Document, name: string): void {
+  const registry = (doc.defaultView?.CSS as { highlights?: Map<string, unknown> } | undefined)
+    ?.highlights
+  registry?.delete(name)
+}
 
 /**
  * 内核 search 的 excerpt 不是字符串,是 `{pre, match, post}` 高亮三段体
@@ -104,12 +139,22 @@ export function collectSearchYield(
   },
   results: SearchResult[],
   max: number,
+  /** 命中 CFI → match 段原文(fixed-layout 高亮的页归属自验证用)。 */
+  matches?: Map<string, string>,
 ): boolean {
+  const recordMatch = (cfi: string, excerpt: unknown): void => {
+    if (!matches) return
+    if (excerpt && typeof excerpt === 'object' && 'match' in excerpt) {
+      const match = (excerpt as { match?: unknown }).match
+      if (typeof match === 'string' && match !== '') matches.set(cfi, match)
+    }
+  }
   if ('subitems' in item && item.subitems) {
     for (const { cfi, excerpt } of item.subitems) {
       const text = normalizeExcerpt(excerpt)
       if (!cfi || !text) continue
       results.push({ location: { cfi, progress: 0 }, excerpt: text })
+      recordMatch(cfi, excerpt)
       if (results.length >= max) return true
     }
     return results.length >= max
@@ -119,6 +164,7 @@ export function collectSearchYield(
       location: { cfi: item.cfi, progress: 0 },
       excerpt: normalizeExcerpt(item.excerpt),
     })
+    recordMatch(item.cfi, item.excerpt)
   }
   return results.length >= max
 }
@@ -694,28 +740,69 @@ const bodyGuardedSections = new WeakSet<object>()
  * @internal 导出仅为单测。
  */
 export function registerTtsCustomHighlight(doc: Document, range: Range, color: string): boolean {
-  const win = doc.defaultView
-  const registry = (win?.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights
-  const HighlightCtor = (win as { Highlight?: new (range: Range) => unknown } | undefined)
-    ?.Highlight
-  if (!registry || !HighlightCtor) return false
-  if (doc.getElementById('tts-custom-highlight-style') === null) {
-    const style = doc.createElement('style')
-    style.id = 'tts-custom-highlight-style'
-    style.textContent =
-      `::highlight(${TTS_CUSTOM_HIGHLIGHT}) { ` +
-      `background-color: color-mix(in srgb, ${color} 30%, transparent); }`
-    doc.head?.appendChild(style)
-  }
-  registry.set(TTS_CUSTOM_HIGHLIGHT, new HighlightCtor(range))
+  const env = ensureCustomHighlightEnv(
+    doc,
+    TTS_CUSTOM_HIGHLIGHT,
+    `background-color: color-mix(in srgb, ${color} 30%, transparent);`,
+  )
+  if (!env) return false
+  env.registry.set(TTS_CUSTOM_HIGHLIGHT, new env.Highlight(range))
   return true
 }
 
 /** 摘掉页文档上的 TTS 洗色注册(能力缺失时 registry 不存在,静默)。 */
 export function unregisterTtsCustomHighlight(doc: Document): void {
-  const registry = (doc.defaultView?.CSS as { highlights?: Map<string, unknown> } | undefined)
-    ?.highlights
-  registry?.delete(TTS_CUSTOM_HIGHLIGHT)
+  unregisterCustomHighlight(doc, TTS_CUSTOM_HIGHLIGHT)
+}
+
+/**
+ * fixed-layout 页文档的**搜索命中**高亮:把该文档上验证通过的命中锚点聚合成
+ * 一个 Highlight 注册进页文档。
+ *
+ * fxl 渲染器的 getContents() 只回 {doc} 没有 index(上游 TODO),而所有页
+ * 文档的 DOM 结构完全相同 —— 结构性的 CFI 路径无法区分页归属。所以这里靠
+ * **内容自验证**:anchor 对文档求 Range,Range 文本与命中的 match 段一致才
+ * 画(伪文档与真实 textLayer 结构镜像,CFI.toRange 能解回真实 Range;错页
+ * 上即使路径侥幸解出,文本也对不上)。无命中/验证不过/能力缺失静默不画。
+ *
+ * @internal 导出仅为单测。
+ */
+export function drawSearchCustomHighlights(
+  doc: Document,
+  hits: Iterable<{ anchor: (doc: Document) => Range | Element; match?: string }>,
+): boolean {
+  const ranges: Range[] = []
+  for (const hit of hits) {
+    if (!hit.match) continue
+    try {
+      const anchored = hit.anchor(doc)
+      // Range 判定用鸭子类型:anchor 在页文档自己的 realm 里建 Range,
+      // 跨 realm 的 instanceof 会误判。
+      if (
+        anchored &&
+        typeof (anchored as Range).collapsed === 'boolean' &&
+        !(anchored as Range).collapsed
+      ) {
+        const expected = hit.match.replace(/\s+/g, ' ')
+        const actual = (anchored as Range).toString().replace(/\s+/g, ' ')
+        if (actual === expected) ranges.push(anchored as Range)
+      }
+    } catch {
+      // 锚点在本文档解不出(路径越界等):高亮是辅助视觉,跳过这条。
+    }
+  }
+  if (ranges.length === 0) {
+    unregisterCustomHighlight(doc, SEARCH_CUSTOM_HIGHLIGHT)
+    return false
+  }
+  const env = ensureCustomHighlightEnv(
+    doc,
+    SEARCH_CUSTOM_HIGHLIGHT,
+    `background-color: ${SEARCH_HIT_COLOR};`,
+  )
+  if (!env) return false
+  env.registry.set(SEARCH_CUSTOM_HIGHLIGHT, new env.Highlight(...ranges))
+  return true
 }
 
 export function ensureSearchableSections(sections: readonly FoliateSection[]): void {
@@ -745,6 +832,18 @@ export class FoliateAdapter implements ReaderEngine {
   readonly #watchedRenderers = new WeakSet<object>()
   /** 当前在屏的搜索命中高亮 id(`search:` 命名空间)。 */
   readonly #searchHitIds = new Set<string>()
+  /** fixed-layout(PDF/CBZ)的搜索命中:CFI → anchor + match 段。内核
+   *  addAnnotation 没有 overlayer 画不了,页文档挂载时经 Custom Highlight
+   *  把命中画上;页归属靠 match 文本自验证(所有页文档结构相同)。 */
+  #lastSearchMatches = new Map<string, string>()
+  #searchCustomHits = new Map<
+    string,
+    { anchor: (doc: Document) => Range | Element; match: string }
+  >()
+  /** 每个页文档上次尝试绘制时 textLayer 的首子节点:pdf.js 的文本层在画布
+   *  之后**异步**补齐,首轮往往是空的 —— 以首子节点身份为失效信号,span
+   *  补齐/重渲染后自动重画;静止的文档不重复求解。 */
+  #searchDrawnLayerFirsts = new WeakMap<Document, Element | null>()
   #theme: ReaderTheme | null = null
   #layout: {
     fontSize?: number
@@ -954,6 +1053,9 @@ export class FoliateAdapter implements ReaderEngine {
       // 阅读尺:翻页/滚动都由 relocate 告知。换章时锚点所在的文档被卸载,
       // 尺按新页重新播种(见 ReadingRuler#onRelocate)。
       this.#ruler.onRelocate()
+      // 搜索命中的 fixed-layout 高亮随翻页跟进:relocate 是 fxl 唯一可靠
+      // 的翻页信号(load 不发、getContents 无 index,见绘制函数注释)。
+      this.#redrawSearchCustomHighlights()
     })
     view.addEventListener('load', (event) => {
       const { doc, index } = (event as CustomEvent).detail as { doc: Document; index: number }
@@ -1691,6 +1793,7 @@ export class FoliateAdapter implements ReaderEngine {
     const trimmed = query.trim()
     if (!trimmed) return []
     const results: SearchResult[] = []
+    const searchMatches = new Map<string, string>()
     for await (const item of view.search({
       query: trimmed,
       matchCase: request?.matchCase,
@@ -1703,8 +1806,9 @@ export class FoliateAdapter implements ReaderEngine {
         request?.onProgress?.(item.progress)
         continue
       }
-      if (collectSearchYield(item, results, MAX_SEARCH_RESULTS)) break
+      if (collectSearchYield(item, results, MAX_SEARCH_RESULTS, searchMatches)) break
     }
+    this.#lastSearchMatches = searchMatches
     return results
   }
 
@@ -1757,10 +1861,20 @@ export class FoliateAdapter implements ReaderEngine {
   async showSearchHits(cfis: readonly string[]): Promise<void> {
     await this.clearSearchHits()
     const view = this.#requireView()
+    // fixed-layout(PDF/CBZ)没有 overlayer:命中高亮走 Custom Highlight,
+    // 这里先把每条 CFI 解回 anchor 并配上 match 段(页归属自验证用)。
+    const fixedLayout = view.isFixedLayout
     let n = 0
     for (const cfi of cfis) {
       if (!cfi) continue
       try {
+        if (fixedLayout) {
+          const resolved = view.resolveCFI(cfi)
+          const match = this.#lastSearchMatches.get(cfi)
+          if (match !== undefined) {
+            this.#searchCustomHits.set(cfi, { anchor: resolved.anchor, match })
+          }
+        }
         const placed = await view.addAnnotation({
           value: cfi,
           color: SEARCH_HIT_COLOR,
@@ -1778,10 +1892,26 @@ export class FoliateAdapter implements ReaderEngine {
         // 单条锚点失效跳过:搜索高亮是辅助视觉,不该因为一条坏 CFI 整体失败。
       }
     }
+    if (fixedLayout) {
+      // 新一轮搜索:失效重画信号,已挂载页文档立即画,后续随 relocate 跟进。
+      this.#searchDrawnLayerFirsts = new WeakMap()
+      this.#redrawSearchCustomHighlights()
+    }
   }
 
   async clearSearchHits(): Promise<void> {
     const view = this.#view
+    this.#searchCustomHits.clear()
+    if (view) {
+      // 已挂载页文档上的命中注册一并摘掉(摘内核标注之后;未挂载的文档随
+      // 卸载自然消亡,不用追)。
+      const mounted = this.#pdfScroll
+        ? this.#pdfScroll.mountedDocs().map((c) => c.doc)
+        : view.renderer.getContents().map((c) => c.doc)
+      for (const doc of mounted) {
+        drawSearchCustomHighlights(doc, [])
+      }
+    }
     if (!view) return
     for (const id of this.#searchHitIds) {
       const cfi = this.#annotations.cfiOf(id)
@@ -1794,6 +1924,27 @@ export class FoliateAdapter implements ReaderEngine {
       this.#annotations.delete(id)
     }
     this.#searchHitIds.clear()
+  }
+
+  /**
+   * 把当前已挂载页文档上需要(重新)绘制搜索命中的画上(relocate 驱动:fxl
+   * 每次翻页都发 relocate)。以 textLayer 首子节点身份为去重信号 —— 文本层
+   * 异步补齐、缩放重渲染都会换节点,恰好构成「需要重画」的信号;静止文档
+   * 不重复求解,滚动模式逐帧的 relocate 才不至于反复全量锚点解析。
+   */
+  #redrawSearchCustomHighlights(): void {
+    if (this.#searchCustomHits.size === 0) return
+    const view = this.#view
+    if (!view) return
+    const mounted = this.#pdfScroll
+      ? this.#pdfScroll.mountedDocs().map((c) => c.doc)
+      : view.renderer.getContents().map((c) => c.doc)
+    for (const doc of mounted) {
+      const first = doc.querySelector('.textLayer')?.children[0] ?? null
+      if (this.#searchDrawnLayerFirsts.get(doc) === first) continue
+      this.#searchDrawnLayerFirsts.set(doc, first)
+      drawSearchCustomHighlights(doc, this.#searchCustomHits.values())
+    }
   }
 
   async removeAnnotation(annotationId: string): Promise<void> {
