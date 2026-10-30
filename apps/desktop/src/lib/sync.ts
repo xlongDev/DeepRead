@@ -22,6 +22,7 @@ import {
   type SyncConflict,
 } from '@deepread/shared'
 import { invokeCommand } from './ipc'
+import { mapWithConcurrency } from './pool'
 
 const DEVICES_PATH = 'devices.json'
 const LIBRARY_PATH = 'library.json'
@@ -130,12 +131,14 @@ export async function runSync(): Promise<SyncReport> {
 
   // 3. Per-book reading state merge (§51 annotations/bookmarks/progress).
   // 一次 getAll 取全部本地状态(B3):N 本书从 N 次 state IPC 往返降到 1 次;
-  // WebDAV 侧保持逐书 —— 单请求过大会撞传输上限。
+  // WebDAV 侧仍逐书一请求(单请求过大会撞传输上限),但 4 路并发 —— 几十本书
+  // 的往返从串行长队压成并行流,自动同步的墙钟时间跟着网络 RTT 而不是书数走。
+  // 计数与 conflicts.push 都是单条同步语句,JS 单线程下不会被并发任务撕开。
   const allStates = (await invokeCommand('reader.state.getAll', undefined)).states
-  for (const book of localLibrary.books as readonly LibraryBook[]) {
+  await mapWithConcurrency(localLibrary.books as readonly LibraryBook[], 4, async (book) => {
     const localState = allStates[book.hash] ?? null
     const remoteState = await getJson(statePath(book.hash), readerStatePayloadSchema)
-    if (localState === null && remoteState === null) continue
+    if (localState === null && remoteState === null) return
     const { state: merged, conflicts: bookConflicts } = mergeBookState(
       book.hash,
       localState,
@@ -150,7 +153,7 @@ export async function runSync(): Promise<SyncReport> {
       await putJson(statePath(book.hash), merged)
       pushed.count += 1
     }
-  }
+  })
 
   return {
     pushed: pushed.count,

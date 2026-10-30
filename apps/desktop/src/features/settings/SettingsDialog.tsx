@@ -17,6 +17,7 @@ import { convertFileSrc } from '../../lib/book-import'
 import { downloadText } from '../../lib/download'
 import { exportSnapshot, importSnapshot, readStorageEstimate } from '../../lib/web-store'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { useModalFocus } from '../../lib/modal-dialog'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { AiProviderForm, useAiProviders } from './AiProviderSettings'
@@ -248,11 +249,14 @@ export function SettingsDialog({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  const panelRef = useRef<HTMLDialogElement>(null)
+  useModalFocus(panelRef)
+
   return (
     <div className="modal-overlay">
       {/* 遮罩本身不可点:关闭走这个铺满背景的按钮(键盘可达),面板在上层。 */}
       <button type="button" className="modal-dismiss" aria-label="关闭设置" onClick={onClose} />
-      <dialog className="modal-panel" open aria-label="设置">
+      <dialog ref={panelRef} className="modal-panel" open aria-modal="true" aria-label="设置">
         <header className="modal-head">
           <strong className="modal-title">设置</strong>
           <button type="button" className="chrome-button" onClick={onClose} title="关闭">

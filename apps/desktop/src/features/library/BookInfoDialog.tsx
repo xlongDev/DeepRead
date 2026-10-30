@@ -19,6 +19,7 @@ import {
   SUGGESTED_TAGS,
   type ShelfBook,
 } from './shelf-view'
+import { useModalFocus } from '../../lib/modal-dialog'
 
 export interface BookInfoDraft {
   readonly title: string
@@ -47,10 +48,13 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
   const titleRef = useRef<HTMLInputElement>(null)
 
   // 打开就把光标放在书名上并全选 —— 这是最常改的一项。
+  // 焦点圈与归还由 useModalFocus 接管;这里的 focus/select 只负责光标落点。
   useEffect(() => {
     titleRef.current?.focus()
     titleRef.current?.select()
   }, [])
+  const panelRef = useRef<HTMLDialogElement>(null)
+  useModalFocus(panelRef, { initialFocusRef: titleRef })
 
   /** 一键加常用标签:已有的不再加,满了就不再塞。 */
   const addSuggestedTag = (tag: string): void => {
@@ -88,7 +92,7 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
   return (
     <div className="modal-overlay">
       <button type="button" className="modal-dismiss" aria-label="关闭书籍信息" onClick={onClose} />
-      <dialog className="modal-panel" open aria-label="书籍信息">
+      <dialog ref={panelRef} className="modal-panel" open aria-modal="true" aria-label="书籍信息">
         <header className="modal-head">
           <strong className="modal-title">书籍信息</strong>
           <button type="button" className="chrome-button" onClick={onClose} title="关闭">
