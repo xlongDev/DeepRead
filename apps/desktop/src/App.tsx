@@ -1,32 +1,15 @@
 import { useEffect, useState } from 'react'
-import type { AppInfo } from '@deepread/shared'
-import { invokeCommand } from './lib/ipc'
 import { classifyFile, sha256Hex, type OpenedBook } from './lib/book-import'
 import { LibraryScreen } from './features/library/LibraryScreen'
 import { ReaderScreen } from './features/reader/ReaderScreen'
 import { ParallelReader } from './features/reader/ParallelReader'
 
 export function App() {
-  const [backend, setBackend] = useState<AppInfo | null>(null)
   const [book, setBook] = useState<OpenedBook | null>(null)
   /** 并排阅读的第二本。null = 单本阅读;非 null 时 `book` 是左栏。 */
   const [parallel, setParallel] = useState<OpenedBook | null>(null)
   /** 阅读器隐藏而非卸载:TTS 还在播时退到书架,听书跨屏继续。 */
   const [readerHidden, setReaderHidden] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    invokeCommand('app.info', undefined)
-      .then((info) => {
-        if (!cancelled) setBackend(info)
-      })
-      .catch(() => {
-        // The library works without the backend; the footer shows 本地模式.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   // Dev-only test affordance: ?open=/fixtures/<file> opens a bundled fixture so
   // browser E2E can drive the reader without a file chooser; adding
@@ -90,7 +73,7 @@ export function App() {
   return (
     <>
       {(book === null || readerHidden) && (
-        <LibraryScreen onOpenBook={openBook} onOpenParallel={openParallel} backend={backend} />
+        <LibraryScreen onOpenBook={openBook} onOpenParallel={openParallel} />
       )}
       {book !== null && (
         <div hidden={readerHidden}>

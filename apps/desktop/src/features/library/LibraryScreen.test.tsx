@@ -266,9 +266,7 @@ async function renderLibrary(books: readonly LibraryBook[] = BOOKS) {
   mockBackend(books)
   const onOpenBook = vi.fn()
   const onOpenParallel = vi.fn()
-  const view = render(
-    <LibraryScreen onOpenBook={onOpenBook} onOpenParallel={onOpenParallel} backend={APP_INFO} />,
-  )
+  const view = render(<LibraryScreen onOpenBook={onOpenBook} onOpenParallel={onOpenParallel} />)
   if (books.length > 0) {
     await waitFor(() => expect(document.querySelector('.shelf-toolbar')).not.toBeNull())
   } else {
@@ -356,7 +354,6 @@ describe('LibraryScreen 外壳契约', () => {
     expect(toolbarButtons()).toEqual([
       '网格视图',
       '列表视图',
-      '每行显示的书本数',
       '排序方式',
       '切换排序方向(当前降序)',
       '批量管理',
@@ -402,7 +399,7 @@ describe('LibraryScreen 外壳契约', () => {
         ? Promise.reject(new Error('数据库打不开'))
         : standard(command, request),
     )
-    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} backend={APP_INFO} />)
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} />)
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('书架暂时打不开')
     expect(alert).toHaveTextContent('数据库打不开')
@@ -414,24 +411,30 @@ describe('LibraryScreen 外壳契约', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('底部状态栏如实报告本数与后端信息', async () => {
+  it('标题旁的摘要行如实报告本数与在读数,没有底部状态栏', async () => {
     await renderLibrary()
-    const footer = document.querySelector('.library-footer')
-    expect(footer?.textContent).toContain('3 本')
+    const subline = document.querySelector('.shelf-subline')
+    expect(subline?.textContent).toContain('3 本')
     // 一本 42% 在读、一本读完(归「已读完」)、一本没开过。
-    expect(footer?.textContent).toContain('在读 1')
-    expect(footer?.textContent).toContain('DeepRead 0.2.0 · macos/aarch64')
+    expect(subline?.textContent).toContain('在读 1')
+    // 版本号与平台架构是 dev 信息,不进产品 UI。
+    expect(document.querySelector('.library-footer')).toBeNull()
   })
 })
 
 describe('LibraryScreen 书架渲染', () => {
-  it('网格里的每本书都带标题、进度文案与移除按钮', async () => {
+  it('网格里的每本书只说「这是什么书」:标题加作者,进度压在封面底边', async () => {
     await renderLibrary()
     expect(document.querySelector('.shelf-grid')).not.toBeNull()
-    expect(screen.getByLabelText('移出《夜航书》')).toBeInTheDocument()
-    expect(screen.getByLabelText('移出《化雪的季节》')).toBeInTheDocument()
-    expect(screen.getByLabelText('移出《山中手记》')).toBeInTheDocument()
-    expect(screen.getByText('读到 42% · 2 KB')).toBeInTheDocument()
+    // 格式徽章退场:封面是书的门面,不贴 EPUB/MOBI 胶囊。
+    expect(document.querySelector('.book-format')).toBeNull()
+    // 卡片文字只剩书名与作者;大小与进度文案不再挂在卡片下面。
+    expect(screen.queryByText(/KB/)).toBeNull()
+    // 进度是封面底边的细线(夜航书 42%)。
+    const fill = document.querySelector(
+      '.book-cover-progress .book-progress-fill',
+    ) as HTMLElement | null
+    expect(fill?.style.width).toBe('42%')
     // 封面解析失败时的回退:首字 + 书名,不是空白卡片。
     expect(document.querySelectorAll('.book-cover-char').length).toBe(3)
   })
@@ -451,17 +454,18 @@ describe('LibraryScreen 书架渲染', () => {
     expect(screen.getAllByText('夜航书').length).toBeGreaterThan(0)
   })
 
-  it('列表行的悬浮动作与网格同一套:收藏/打标签/导出/更多', async () => {
+  it('列表行的悬浮动作与网格同一套:收藏 + 更多,全量动作在菜单里', async () => {
     await renderLibrary()
     fireEvent.click(screen.getByTitle('列表视图'))
     const actions = document.querySelector('.book-row .book-row-actions')!
     expect(
       [...actions.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')),
-    ).toEqual(['收藏 夜航书', '给《夜航书》打标签', '导出《夜航书》的批注', '更多操作 夜航书'])
+    ).toEqual(['收藏 夜航书', '更多操作 夜航书'])
 
-    // 打标签开的是标签浮层,不是元数据表单。
-    fireEvent.click(within(actions as HTMLElement).getByLabelText('给《夜航书》打标签'))
-    expect(screen.getByRole('dialog', { name: '《夜航书》的标签' })).toBeInTheDocument()
+    // ⋯ 菜单就是右键菜单:打标签/导出/编辑/移除都在,一项不少。
+    fireEvent.click(within(actions as HTMLElement).getByLabelText('更多操作 夜航书'))
+    expect(screen.getByRole('menu', { name: '夜航书 的操作' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '导出批注(.md)' })).toBeInTheDocument()
   })
 
   it('搜索过滤到零本时说清是没匹配,而不是空白', async () => {
@@ -470,38 +474,41 @@ describe('LibraryScreen 书架渲染', () => {
     expect(await screen.findByText(/没有匹配/, { exact: false })).toBeInTheDocument()
   })
 
-  it('移除是两次点击:第一次只是待确认,第二次才落 IPC', async () => {
+  it('移除是两次点击:第一次只是待确认,第二次才落 IPC(入口在 ⋯ 菜单)', async () => {
     await renderLibrary()
-    const first = screen.getByLabelText('移出《夜航书》')
-    fireEvent.click(first)
-    expect(screen.getByLabelText('确认移出《夜航书》')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('更多操作 夜航书'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '从书架移除' }))
+    // 菜单留着让用户看清后果,IPC 一个都没发。
+    expect(
+      screen.getByRole('menuitem', { name: '确认移除(进度与批注一并删除)' }),
+    ).toBeInTheDocument()
     expect(invokeCommandMock).not.toHaveBeenCalledWith('library.remove', expect.anything())
 
-    fireEvent.click(screen.getByLabelText('确认移出《夜航书》'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '确认移除(进度与批注一并删除)' }))
     await waitFor(() =>
       expect(invokeCommandMock).toHaveBeenCalledWith('library.remove', { bookHash: HASH_A }),
     )
   })
 })
 
-describe('LibraryScreen 每行书本数', () => {
-  it('网格视图下选固定列数,网格带 is-fixed 并持久化', async () => {
+describe('LibraryScreen 每行书本数(设置弹窗)', () => {
+  /** 行数控件住设置弹窗的书架偏好分区:低频偏好不占工具条。 */
+  async function openShelfPrefs(): Promise<HTMLElement> {
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    return await screen.findByRole('dialog', { name: '设置' })
+  }
+
+  it('设置里选固定列数,持久化并即时反映到书架网格', async () => {
     await renderLibrary()
+    await openShelfPrefs()
     const trigger = screen.getByLabelText('每行显示的书本数')
     expect(trigger).toHaveTextContent('自适应')
 
     fireEvent.click(trigger)
     fireEvent.click(screen.getByRole('menuitemradio', { name: '每行 4 本' }))
-    expect(document.querySelector('.shelf-grid')!.classList.contains('is-fixed')).toBe(true)
     expect(localStorage.getItem('deepread.shelf.columns')).toBe('4')
     // 触发器同步显示当前档位。
     expect(screen.getByLabelText('每行显示的书本数')).toHaveTextContent('每行 4 本')
-  })
-
-  it('列表视图没有行数下拉 —— 行数是网格自己的事', async () => {
-    await renderLibrary()
-    fireEvent.click(screen.getByTitle('列表视图'))
-    expect(screen.queryByLabelText('每行显示的书本数')).toBeNull()
   })
 
   it('固定列数被记住,下次进入书架仍生效', async () => {
@@ -793,7 +800,7 @@ describe('LibraryScreen 阅读目标(统计页)', () => {
     await renderLibrary()
     const sidebar = screen.getByRole('complementary', { name: '主导航' })
     // STATS:今天 600 秒。没有目标就不拿"目标"吓人。
-    await waitFor(() => expect(within(sidebar).getByText('今日已读 10 分')).toBeInTheDocument())
+    await waitFor(() => expect(within(sidebar).getByText('今日已读 10 分钟')).toBeInTheDocument())
 
     await openStats()
     const page = screen.getByLabelText('阅读统计')
@@ -816,14 +823,12 @@ describe('LibraryScreen 阅读目标(统计页)', () => {
       }),
     )
 
-    // 侧栏摘要换成带目标的形式(今日 10 分 / 目标 30 分,未达成)。
-    await waitFor(() =>
-      expect(
-        within(screen.getByRole('complementary', { name: '主导航' })).getByText(
-          '今日 10 分 / 目标 30 分',
-        ),
-      ).toBeInTheDocument(),
-    )
+    // 侧栏换成目标卡:主数字与目标行分开(今日 10 分钟,目标 30 分钟,未达成)。
+    const sidebar = screen.getByRole('complementary', { name: '主导航' })
+    await waitFor(() => {
+      expect(within(sidebar).getByText('今日 10 分钟')).toBeInTheDocument()
+      expect(within(sidebar).getByText('目标 30 分钟')).toBeInTheDocument()
+    })
 
     // 统计页:今日 600s / 目标 1800s ≈ 33%,环与达标天数都在。
     expect(within(page).getByText('33%')).toBeInTheDocument()
@@ -851,14 +856,12 @@ describe('LibraryScreen 阅读目标(统计页)', () => {
       }),
     )
 
-    // 侧栏写明已达成;统计页比值 2 → 环画满(100%),百分比照实显示 200%。
-    await waitFor(() =>
-      expect(
-        within(screen.getByRole('complementary', { name: '主导航' })).getByText(
-          '今日 10 分 / 目标 5 分 · 已达成',
-        ),
-      ).toBeInTheDocument(),
-    )
+    // 侧栏目标行写明已达成;统计页比值 2 → 环画满(100%),百分比照实显示 200%。
+    const sidebar = screen.getByRole('complementary', { name: '主导航' })
+    await waitFor(() => {
+      expect(within(sidebar).getByText('今日 10 分钟')).toBeInTheDocument()
+      expect(within(sidebar).getByText('已达成')).toBeInTheDocument()
+    })
     expect(within(page).getByText('200%')).toBeInTheDocument()
   })
 
@@ -884,7 +887,7 @@ describe('LibraryScreen 阅读目标(统计页)', () => {
     )
     await waitFor(() =>
       expect(
-        within(screen.getByRole('complementary', { name: '主导航' })).getByText('今日已读 10 分'),
+        within(screen.getByRole('complementary', { name: '主导航' })).getByText('今日已读 10 分钟'),
       ).toBeInTheDocument(),
     )
     expect(page.querySelector('.stats-goal-ring')).toBeNull()
@@ -1085,22 +1088,33 @@ describe('LibraryScreen 弹窗', () => {
 })
 
 describe('LibraryScreen 卡片操作', () => {
-  it('每张卡片给收藏、标签、编辑、移出四个图标,不再有「继续阅读」', async () => {
+  it('每张卡片给星标与更多两颗玻璃按钮,全量动作在菜单里', async () => {
     await renderLibrary()
     expect(screen.getAllByLabelText(/^收藏 /).length).toBe(3)
-    expect(screen.getByLabelText('给《夜航书》打标签')).toBeInTheDocument()
-    expect(screen.getByLabelText('编辑《夜航书》的信息')).toBeInTheDocument()
-    expect(screen.getByLabelText('移出《夜航书》')).toBeInTheDocument()
-    // 点封面就是继续读,再放一个文案按钮只是白占位置。
-    expect(screen.queryByText(/继续阅读|开始阅读/)).toBeNull()
+    expect(screen.getAllByLabelText(/^更多操作 /).length).toBe(3)
+    // 打标签/编辑/移出不再各占一颗图标 —— 都在 ⋯ 菜单(与右键同一份)。
+    expect(screen.queryByLabelText('给《夜航书》打标签')).toBeNull()
+    expect(screen.queryByLabelText('编辑《夜航书》的信息')).toBeNull()
+    expect(screen.queryByLabelText('移出《夜航书》')).toBeNull()
   })
 
-  it('悬浮图标栏的导出:落成 .md 只含这一本', async () => {
+  it('继续阅读 hero 卡浮现最近在读的那本,大封面加大标题加进度线', async () => {
+    await renderLibrary([{ ...BOOKS[0]!, lastReadAt: '2026-09-30T10:00:00Z' }])
+    const hero = document.querySelector('.continue-reading')
+    expect(hero).not.toBeNull()
+    expect(hero?.textContent).toContain('夜航书')
+    expect(hero?.textContent).toContain('继续阅读')
+    const fill = hero!.querySelector<HTMLElement>('.continue-reading-fill')!
+    expect(fill.style.width).toBe('42%')
+  })
+
+  it('菜单里的导出:落成 .md 只含这一本', async () => {
     const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock')
     Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() })
 
     await renderLibrary()
-    fireEvent.click(screen.getByLabelText('导出《夜航书》的批注'))
+    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '导出批注(.md)' }))
     expect(createObjectURL).toHaveBeenCalledTimes(1)
     const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text()
     expect(markdown).toContain('## 夜航书')
@@ -1176,8 +1190,9 @@ describe('LibraryScreen 卡片操作', () => {
 describe('LibraryScreen 编辑书籍信息', () => {
   async function openInfo(): Promise<HTMLElement> {
     await renderLibrary()
-    // 卡片上那个铅笔图标直接进信息编辑(标签也在同一张表里)。
-    fireEvent.click(screen.getByLabelText('编辑《夜航书》的信息'))
+    // 编辑入口在 ⋯ 菜单(与右键同一份);标签也在同一张表里。
+    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '编辑书籍信息' }))
     return screen.findByLabelText('书籍信息')
   }
 
@@ -1337,8 +1352,9 @@ describe('LibraryScreen 移除与重新导入', () => {
     const first = await renderLibrary([one()])
     await waitFor(() => expect(readMock).toHaveBeenCalledWith(HASH_R))
 
-    fireEvent.click(screen.getByLabelText('移出《长日将尽》'))
-    fireEvent.click(screen.getByLabelText('确认移出《长日将尽》'))
+    fireEvent.contextMenu(screen.getByTitle('打开《长日将尽》'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '从书架移除' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '确认移除(进度与批注一并删除)' }))
     await waitFor(() =>
       expect(invokeCommandMock).toHaveBeenCalledWith('library.remove', { bookHash: HASH_R }),
     )
@@ -1353,9 +1369,16 @@ describe('LibraryScreen 移除与重新导入', () => {
 })
 
 describe('LibraryScreen 卡片标签浮层', () => {
-  it('第 2 个悬浮图标打开的是打标签浮层,不是元数据表单', async () => {
+  /** 打标签入口在 ⋯ 菜单里:从菜单进浮层,浮层本身的行为不变。 */
+  async function openTagPopover(title: string): Promise<HTMLElement> {
     await renderLibrary()
-    fireEvent.click(screen.getByLabelText('给《夜航书》打标签'))
+    fireEvent.contextMenu(screen.getByTitle(`打开《${title}》`))
+    fireEvent.click(screen.getByRole('menuitem', { name: '打标签' }))
+    return screen.getByRole('dialog', { name: `《${title}》的标签` })
+  }
+
+  it('菜单里的打标签打开的是标签浮层,不是元数据表单', async () => {
+    await openTagPopover('夜航书')
 
     expect(screen.getByRole('dialog', { name: '《夜航书》的标签' })).toBeInTheDocument()
     // 这个入口曾经错接到「编辑书籍信息」—— 点打标签却看到书名/出版社的表格。
@@ -1363,9 +1386,7 @@ describe('LibraryScreen 卡片标签浮层', () => {
   })
 
   it('点建议标签立即落库,不需要再点保存', async () => {
-    await renderLibrary()
-    fireEvent.click(screen.getByLabelText('给《夜航书》打标签'))
-    const pop = screen.getByRole('dialog', { name: '《夜航书》的标签' })
+    const pop = await openTagPopover('夜航书')
     fireEvent.click(within(pop).getByText('历史'))
 
     await waitFor(() =>
@@ -1377,9 +1398,7 @@ describe('LibraryScreen 卡片标签浮层', () => {
   })
 
   it('输入的标签回车就加上,重复的不会加第二个', async () => {
-    await renderLibrary()
-    fireEvent.click(screen.getByLabelText('给《夜航书》打标签'))
-    const pop = screen.getByRole('dialog', { name: '《夜航书》的标签' })
+    const pop = await openTagPopover('夜航书')
     const input = within(pop).getByLabelText('新标签')
 
     fireEvent.change(input, { target: { value: '睡前' } })
@@ -1398,9 +1417,7 @@ describe('LibraryScreen 卡片标签浮层', () => {
   })
 
   it('点已加上的标签是去掉它', async () => {
-    await renderLibrary()
-    fireEvent.click(screen.getByLabelText('给《化雪的季节》打标签'))
-    const pop = screen.getByRole('dialog', { name: '《化雪的季节》的标签' })
+    const pop = await openTagPopover('化雪的季节')
     // 这本 fixture 自带「文学」。
     fireEvent.click(within(pop).getByLabelText('去掉标签 文学'))
 

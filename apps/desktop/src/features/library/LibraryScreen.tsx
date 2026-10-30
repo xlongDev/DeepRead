@@ -6,10 +6,8 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   dailySeries,
   booksFinishedInYear,
-  goalReached,
   localDayKey,
   toAppError,
-  type AppInfo,
   type BookReadingStat,
   type LibrarySearchHit,
   type NoteEntry,
@@ -47,8 +45,6 @@ import {
   APP_THEMES,
   BULK_CONFIRM,
   FAVORITE_TAG,
-  formatBytes,
-  formatStatDuration,
   isFinished,
   isReading,
   matchesSmartFilter,
@@ -116,10 +112,9 @@ interface LibraryScreenProps {
   readonly onOpenBook: (book: OpenedBook) => void
   /** 并排打开两本(批量条里的「对照阅读」)。 */
   readonly onOpenParallel: (primary: OpenedBook, secondary: OpenedBook) => void
-  readonly backend: AppInfo | null
 }
 
-export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibraryScreenProps) {
+export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   /** `?demoShelf` 种下的示例书架;挡住 loadBooks,免得它被真实书架覆盖。 */
   const demoSeeded = useRef(false)
@@ -152,6 +147,11 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     if (!import.meta.env.DEV) return
     if (!new URLSearchParams(window.location.search).has('demoShelf')) return
     if (isTauriRuntime()) return
+    // ?theme=dark|graphite|… :浏览器里直接看某个主题下的书架,免得手改 localStorage。
+    const themeParam = new URLSearchParams(window.location.search).get('theme')
+    if (themeParam !== null && APP_THEMES.some((theme) => theme.id === themeParam)) {
+      setAppTheme(themeParam as AppTheme)
+    }
     setLibraryLoaded(true)
     const demo: readonly ShelfBook[] = [
       {
@@ -166,7 +166,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         path: '/fixtures/化雪的季节.txt',
         size: 382,
         addedAt: '2026-09-13T03:00:00Z',
-        lastReadAt: null,
+        // 示例书架给一本「正在读」的书:hero 卡(继续阅读)才有东西可演。
+        lastReadAt: '2026-10-31T02:00:00Z',
         finishedAt: null,
         progress: 0.42,
         tags: ['文学'],
@@ -913,15 +914,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   const todaySeconds = stats?.days.find((entry) => entry.day === localDayKey())?.seconds ?? 0
   /** 今年(本地年):与今日摘要同一个「今天」的口径,不新开一个时钟。 */
   const currentYear = Number(localDayKey().slice(0, 4))
-  /** 侧栏摘要行:没取到统计就不显示(宁可不显示,不显示一个猜的 0)。 */
-  const goalLine =
-    stats === null
-      ? null
-      : goals.dailyMinutes > 0
-        ? `今日 ${formatStatDuration(todaySeconds)} / 目标 ${formatStatDuration(
-            goals.dailyMinutes * 60,
-          )}${goalReached(todaySeconds, goals.dailyMinutes) ? ' · 已达成' : ''}`
-        : `今日已读 ${formatStatDuration(todaySeconds)}`
 
   const allTags = useMemo(
     () => [...new Set(books.flatMap((book) => book.tags))].sort((a, b) => a.localeCompare(b, 'zh')),
@@ -1208,7 +1200,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
     }
   }
 
-  const totalBytes = books.reduce((sum, book) => sum + book.size, 0)
   // 「在读」与侧栏分组同一个定义:翻开过但没读完;读完的归「已读完」。
   const reading = books.filter(isReading).length
 
@@ -1303,7 +1294,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         onView={changeView}
         shelfCount={books.length}
         notesCount={notesLoaded ? notes.length : null}
-        goalLine={goalLine}
+        todaySeconds={stats === null ? null : todaySeconds}
+        dailyMinutes={goals.dailyMinutes}
         smartFilter={smartFilter}
         onSmartFilter={setSmartFilter}
         smartCounts={smartCounts}
@@ -1367,9 +1359,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
                    * 书的时侯都没有操作对象,摆一排点不动的控件比没有更糟。
                    */}
                   <div className="shelf-toolbar is-empty">
-                    <h1 className="shelf-title">
-                      书架 <span className="shelf-count">0</span>
-                    </h1>
+                    <h1 className="shelf-title">书架</h1>
                     <button
                       type="button"
                       className="shelf-import"
@@ -1448,14 +1438,15 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
                 <ShelfView
                   books={visible}
                   total={books.length}
+                  readingCount={reading}
                   covers={covers}
                   query={query}
                   onQuery={setQuery}
                   searchInputRef={shelfSearchInputRef}
+                  searchShortcut={keybindings.search}
                   view={shelfMode}
                   onView={changeShelfMode}
                   columns={shelfColumns}
-                  onColumns={changeShelfColumns}
                   sort={sort}
                   onSort={changeSort}
                   sortDir={sortDir}
@@ -1522,23 +1513,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         )}
       </main>
 
-      <footer className="library-footer">
-        {books.length > 0 && (
-          <span>
-            {books.length} 本{reading > 0 ? ` · 在读 ${reading}` : ''} · 共{' '}
-            {formatBytes(totalBytes)}
-            {' · '}
-          </span>
-        )}
-        {backend !== null ? (
-          <span>
-            {backend.appName} {backend.appVersion} · {backend.os}/{backend.arch}
-          </span>
-        ) : (
-          <span>本地模式</span>
-        )}
-      </footer>
-
       {dragging && (
         <div className="drop-overlay" aria-hidden>
           <div className="drop-overlay-card">松开导入到书架</div>
@@ -1563,6 +1537,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
         <SettingsDialog
           appTheme={appTheme}
           onThemeChange={setAppTheme}
+          shelfColumns={shelfColumns}
+          onShelfColumns={changeShelfColumns}
           onRestored={loadBooks}
           onClose={() => setSettingsOpen(false)}
         />

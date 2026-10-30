@@ -73,11 +73,12 @@ beforeEach(() => {
 })
 
 describe('App library screen', () => {
-  it('shows the import action, shelf books and backend info', async () => {
+  it('shows the import action and shelf books', async () => {
     render(<App />)
     expect(await screen.findByRole('button', { name: '导入书籍' })).toBeInTheDocument()
     expect((await screen.findAllByText('夜航书')).length).toBeGreaterThan(0)
-    expect(await screen.findByText(/DeepRead 0\.2\.0/)).toBeInTheDocument()
+    // 版本号是 dev 信息,不再渲染进产品界面(底部状态栏已删)。
+    expect(screen.queryByText(/DeepRead 0\.2\.0/)).toBeNull()
     expect(invokeCommandMock).toHaveBeenCalledWith('library.list', undefined)
   })
 

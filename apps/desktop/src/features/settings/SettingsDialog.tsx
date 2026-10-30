@@ -17,10 +17,17 @@ import { convertFileSrc } from '../../lib/book-import'
 import { downloadText } from '../../lib/download'
 import { exportSnapshot, importSnapshot, readStorageEstimate } from '../../lib/web-store'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { DropdownMenu } from '../../components/DropdownMenu'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { AiProviderForm, useAiProviders } from './AiProviderSettings'
 import { KeybindingsSettings } from './KeybindingsSettings'
-import { APP_THEMES, formatBytes, type AppTheme } from '../library/shelf-view'
+import {
+  APP_THEMES,
+  formatBytes,
+  SHELF_COLUMN_OPTIONS,
+  type AppTheme,
+  type ShelfColumns,
+} from '../library/shelf-view'
 
 /** 设置弹窗的分区。顺序即左右位置,切换动画的方向由它推出来。
  *  阅读目标不住这里 —— 它住统计页(目标与进度是同一件事)。 */
@@ -33,6 +40,9 @@ const IGNORED_VERSION_KEY = 'deepread.update.ignored'
 interface SettingsDialogProps {
   readonly appTheme: AppTheme
   readonly onThemeChange: (theme: AppTheme) => void
+  /** 网格一行几本;状态归宿主(书架),这里只是它的设置入口。 */
+  readonly shelfColumns: ShelfColumns
+  readonly onShelfColumns: (value: ShelfColumns) => void
   /** 恢复备份动了本地库之后,宿主要重读书架。 */
   readonly onRestored: () => void
   readonly onClose: () => void
@@ -41,6 +51,8 @@ interface SettingsDialogProps {
 export function SettingsDialog({
   appTheme,
   onThemeChange,
+  shelfColumns,
+  onShelfColumns,
   onRestored,
   onClose,
 }: SettingsDialogProps) {
@@ -333,8 +345,20 @@ export function SettingsDialog({
               </section>
               <section className="modal-section">
                 <p className="modal-section-label">书架偏好(自动保存)</p>
+                <div className="settings-shelf-columns">
+                  <span className="settings-shelf-columns-label">网格每行书本数</span>
+                  <DropdownMenu
+                    ariaLabel="每行显示的书本数"
+                    value={shelfColumns === 'auto' ? 'auto' : String(shelfColumns)}
+                    options={SHELF_COLUMN_OPTIONS}
+                    onChange={(value) =>
+                      onShelfColumns(value === 'auto' ? 'auto' : (Number(value) as ShelfColumns))
+                    }
+                    title="自适应按窗口宽度自动安排;固定列数在窄窗口会回落自适应"
+                  />
+                </div>
                 <p className="ai-privacy">
-                  排序与视图选择自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa 面板设置。
+                  排序、视图与列数自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa 面板设置。
                 </p>
               </section>
             </>

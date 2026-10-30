@@ -251,6 +251,54 @@ export function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/**
+ * 「每行几本」的选项表。控件住在设置弹窗的书架偏好分区(工具条只留高频操作),
+ * 网格本身的渲染仍由 ShelfView 读 `columns` prop 完成。
+ */
+export const SHELF_COLUMN_OPTIONS = [
+  { value: 'auto', label: '自适应' },
+  { value: '3', label: '每行 3 本' },
+  { value: '4', label: '每行 4 本' },
+  { value: '5', label: '每行 5 本' },
+  { value: '6', label: '每行 6 本' },
+  { value: '7', label: '每行 7 本' },
+  { value: '8', label: '每行 8 本' },
+] as const satisfies readonly { readonly value: string; readonly label: string }[]
+
+/** 侧栏目标卡要的三个值。target/pct 为 null = 没设目标,只报今日时长。 */
+export interface GoalCardData {
+  /** 主数字:有目标是「今日 X 分钟」,没有是「今日已读 X 分钟」。 */
+  readonly today: string
+  /** 副文案:「目标 1 小时」;达成时收成「已达成」。 */
+  readonly target: string | null
+  /** 今日进度 0..1(封顶),没目标时为 null。 */
+  readonly pct: number | null
+}
+
+/** 目标分钟数 → 「目标 45 分钟 / 1 小时 / 1.5 小时」。 */
+function formatGoalTarget(minutes: number): string {
+  if (minutes < 60) return `目标 ${minutes} 分钟`
+  if (minutes % 60 === 0) return `目标 ${minutes / 60} 小时`
+  return `目标 ${(minutes / 60).toFixed(1)} 小时`
+}
+
+/**
+ * 侧栏的目标卡是纯呈现,数据怎么变成「今日 7 分钟 + 目标 1 小时 + 12%」
+ * 收在这里,组件只管画。0 秒如实显示 0,不猜。
+ */
+export function goalCard(todaySeconds: number, dailyMinutes: number): GoalCardData {
+  const minutes = Math.round(todaySeconds / 60)
+  if (dailyMinutes <= 0) {
+    return { today: `今日已读 ${minutes} 分钟`, target: null, pct: null }
+  }
+  const reached = todaySeconds >= dailyMinutes * 60
+  return {
+    today: `今日 ${minutes} 分钟`,
+    target: reached ? '已达成' : formatGoalTarget(dailyMinutes),
+    pct: Math.min(1, todaySeconds / (dailyMinutes * 60)),
+  }
+}
+
 /** 统计数字的紧凑格式:秒 → 分 → 小时。 */
 export function formatStatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)} 秒`

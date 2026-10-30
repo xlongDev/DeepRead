@@ -11,7 +11,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
-import { MAX_TAGS, parseTagInput, shelfTitle, SUGGESTED_TAGS, type ShelfBook } from './shelf-view'
+import {
+  MAX_TAGS,
+  parseTagInput,
+  formatBytes,
+  shelfTitle,
+  SUGGESTED_TAGS,
+  type ShelfBook,
+} from './shelf-view'
 
 export interface BookInfoDraft {
   readonly title: string
@@ -88,6 +95,13 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
             <X size={14} weight="regular" aria-hidden />
           </button>
         </header>
+
+        {/* 书架卡片不再显示格式与大小,这里是它们唯一的展示位。 */}
+        {book.format !== 'unknown' && (
+          <p className="book-info-file">
+            {book.format.toUpperCase()} · {formatBytes(book.size)}
+          </p>
+        )}
 
         <section className="modal-section">
           <label className="book-info-field">

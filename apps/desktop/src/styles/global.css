@@ -217,13 +217,13 @@ button:disabled {
   position: fixed;
   inset: 0;
   display: grid;
-  /* 侧栏 + 内容两列;内容列承载 main(滚动)与 footer。
+  /* 侧栏 + 内容两列。
      minmax(0, 1fr) 是必需的:少了它,长书名会把网格撑破。 */
   --sidebar-w: 232px;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   /* 侧栏从窗口最顶部开始(deepseek 那种一整块,而不是被一条窗口条切开),
      交通灯是原生控件、浮在它的上面。 */
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   /* 侧栏收起 = 第一列归零。grid-template-columns 本身可过渡,所以不用改结构、
      也不用给内容加包装层。不支持的引擎会瞬间切换,功能不受影响。 */
   transition: grid-template-columns var(--duration-base) var(--ease-emphasized);
@@ -382,37 +382,39 @@ button:disabled {
 .shelf-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+/* 工具条右侧的控件组:与标题分居两端,内部保持一条紧凑的队列。 */
+.shelf-tools {
+  display: flex;
+  align-items: center;
   gap: var(--space-sm);
   flex-wrap: wrap;
 }
 
 .shelf-title {
   margin: 0;
-  margin-right: var(--space-sm);
-  font-size: 26px;
+  font-size: 30px;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: var(--line-height-tight);
   animation: fade-up var(--duration-slow) var(--ease-emphasized) backwards;
 }
 
-.shelf-count {
-  display: inline-block;
-  vertical-align: 3px;
-  margin-left: 6px;
-  min-width: 22px;
-  padding: 1px 8px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+/* 计数退成标题旁的一句弱化摘要:数量是元信息,不该是一枚抢眼的蓝徽章。 */
+.shelf-subline {
+  margin-left: 10px;
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0;
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
-  text-align: center;
 }
 
 .shelf-search {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -422,9 +424,14 @@ button:disabled {
   padding: 7px 14px;
   color: var(--color-text-tertiary);
   box-shadow: var(--shadow-soft);
+  cursor: text;
   transition:
     border-color var(--duration-base) var(--ease-out),
     box-shadow var(--duration-base) var(--ease-out);
+}
+
+.shelf-search:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 22%, var(--color-border));
 }
 
 .shelf-search:focus-within {
@@ -438,7 +445,12 @@ button:disabled {
   font: inherit;
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
-  width: 180px;
+  width: 110px;
+  transition: width var(--duration-base) var(--ease-out);
+}
+
+.shelf-search:focus-within input {
+  width: 190px;
 }
 
 .shelf-search input:focus {
@@ -447,6 +459,23 @@ button:disabled {
 
 .shelf-search input::placeholder {
   color: var(--color-text-tertiary);
+}
+
+/* 快捷键提示:装饰品,聚焦即撤(输入宽度优先给用户正在打的字)。 */
+.shelf-search-kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg);
+}
+
+.shelf-search:focus-within .shelf-search-kbd,
+.shelf-search input:not(:placeholder-shown) ~ .shelf-search-kbd {
+  display: none;
 }
 
 .shelf-import {
@@ -515,7 +544,7 @@ button:disabled {
   aspect-ratio: 3 / 4;
   width: 100%;
   border: 1px solid var(--color-border);
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   overflow: hidden;
   display: flex;
@@ -528,13 +557,13 @@ button:disabled {
   transform: translateY(0);
   transition:
     transform var(--duration-base) var(--ease-spring),
-    box-shadow var(--duration-base) var(--ease-out),
-    border-color var(--duration-base) var(--ease-out);
+    box-shadow var(--duration-base) var(--ease-out);
 }
 
+/* 一张卡只讲一个 hover 故事:上浮 + 阴影加深。扫光、封面放大、描边变色
+   都删了 —— 每个都单看有理,叠在一起就是"热闹"。 */
 .book-cover:hover {
-  transform: translateY(-5px);
-  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+  transform: translateY(-4px);
   box-shadow: var(--shadow-cover-hover);
 }
 
@@ -563,58 +592,14 @@ button:disabled {
   overflow: hidden;
 }
 
-/* Real covers breathe on hover; the sheen sweep reads as light on paper. */
 .book-cover-img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform var(--duration-slow) var(--ease-emphasized);
 }
 
-.book-cover:hover .book-cover-img {
-  transform: scale(1.045);
-}
-
-.book-cover::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    115deg,
-    transparent 32%,
-    rgba(255, 255, 255, 0.16) 46%,
-    rgba(255, 255, 255, 0.03) 54%,
-    transparent 66%
-  );
-  transform: translateX(-120%);
-  pointer-events: none;
-}
-
-.book-cover:hover::after {
-  transform: translateX(120%);
-  transition: transform 900ms var(--ease-out);
-}
-
-.book-format {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  font-size: 10px;
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.08em;
-  color: var(--color-text-primary);
-  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  padding: 2px 8px;
-}
-
-/* 进度条在标题下方,不压在封面上:封面是书的门面,进度是读者自己的状态,
-   两者抢同一块像素只会互相削弱。 */
 /* 进度条压在封面底边上:轨道是压在封面上的一层半透明暗色,进度本身用 accent。
    它是这本书的一部分,不该在封面下面另起一行。 */
 .book-cover-progress {
@@ -622,7 +607,7 @@ button:disabled {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 4px;
+  height: 3px;
   background: color-mix(in srgb, #000000 30%, transparent);
 }
 
@@ -698,59 +683,60 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 
-.book-meta-read {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.book-remove {
+/* 封面上的两颗玻璃按钮(星标 + ⋯):悬浮才出现,竖排贴右上角。
+   底色是压在封面**图像**上的暗色纱,两个主题通用(封面内容不随主题变)。 */
+.book-quick {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-soft);
-  color: var(--color-text-secondary);
+  top: 8px;
+  right: 8px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  flex-direction: column;
+  gap: 6px;
   opacity: 0;
-  transform: scale(0.8);
+  transform: translateX(4px);
+  pointer-events: none;
   transition:
     opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-spring),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.book-card:hover .book-quick,
+.book-card:focus-within .book-quick,
+.book-quick:focus-within {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.book-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: rgba(20, 18, 14, 0.44);
+  backdrop-filter: blur(8px) saturate(1.3);
+  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+  color: #ffffff;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
 }
 
-.book-card:hover .book-remove,
-.book-remove:focus-visible,
-.book-row:hover .book-remove {
-  opacity: 1;
-  transform: scale(1);
+.book-quick-btn:hover {
+  background: rgba(20, 18, 14, 0.68);
 }
 
-.book-remove:hover {
-  color: var(--color-danger);
-  border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+.book-quick-btn svg {
+  display: block;
 }
 
-/* Armed: stays visible after the pointer leaves and reads as destructive. */
-.book-remove.is-confirm {
-  opacity: 1;
-  transform: scale(1.06);
-  color: var(--color-on-accent);
-  background: var(--color-danger);
-  border-color: var(--color-danger);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--color-danger) 35%, transparent);
-  animation: scale-pop var(--duration-fast) var(--ease-spring);
+.book-quick-btn:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
 }
 
 /* ---------- Card actions: hover / context menu / keyboard ---------- */
@@ -761,46 +747,17 @@ button:disabled {
   container-type: inline-size;
 }
 
-/* 悬浮时弹出的一排图标,浮在封面顶部、靠右(参考图:圆形玻璃底 + 图标)。
-   每个图标自己带底,所以容器只是一条透明的定位层。 */
-.card-actions {
-  position: absolute;
-  /* 底部、进度条上方:进度是读者自己的状态,压住它等于把书签藏起来。 */
-  right: 4px;
-  bottom: 10px;
-  display: flex;
-  justify-content: flex-end;
-  /* 缝也随封面收:8 本一行时 4px 的缝要一起让出来。 */
-  gap: clamp(0px, 0.6cqw, 4px);
-  pointer-events: none;
-}
-
-/* 缩的是**圆圈**,不是图标本体:圆底从 28px 收成 ~18px(留白收紧),字形
-   始终 15px —— 缩字形的话 ★/🏷/⬆ 在 8 本一行(封面 ~102px)会糊成一团。
-   `20cqw - 3px` 正好是「5 个圆 + 4 条缝塞进封面宽」的解(容器查询按封面
-   实宽取值,3/6/7/8 本实测封面 312/144/120/102px → 28/25.8/21/17.4px),
-   上下限 clamp:再小就包不住 15px 的字形,再大是白占封面。 */
-.card-actions .card-action-icon {
-  width: clamp(18px, calc(20cqw - 3px), 28px);
-  height: clamp(18px, calc(20cqw - 3px), 28px);
-}
-
 /* 字形是固定像素(phosphor size={15})。但 svg 作为 flex item 默认 flex-shrink:1,
-   而圆底在窄封面会被 .card-actions 的 flex 收缩(7-8 本一行会压到 clamp 下限),
-   嵌套 flex 顺手把 svg 一起压扁 —— 且只压宽不压高,变成 6×15 的畸形字(Request E
-   截图里糊成一团的正是这个)。钉死尺寸 + 禁收缩,「缩圆圈不缩字形」才真正成立。 */
+   嵌套 flex 会把它压扁 —— 且只压宽不压高,变成 6×15 的畸形字。
+   钉死尺寸 + 禁收缩才真正成立。 */
 .card-action-icon svg {
   width: 15px;
   height: 15px;
   flex-shrink: 0;
 }
 
-.card-actions > * {
-  pointer-events: auto;
-}
-
-/* hover 只是最快的入口:焦点进入这一组时同样要出现,否则键盘用户看不见
-   自己正在操作什么。 */
+/* 列表行尾的悬浮图标(星标 + ⋯):底座默认隐形,行 hover / 焦点进入才亮。
+   网格卡片的悬浮动作已迁到封面上的 .book-quick,这套底座只剩列表在用。 */
 .card-action-icon {
   display: inline-flex;
   align-items: center;
@@ -815,29 +772,8 @@ button:disabled {
   box-shadow: var(--shadow-soft);
   color: var(--color-text-secondary);
   cursor: pointer;
-  /* 逐个从下方升起来:整排同时出现会像贴纸,错开一点才像"弹出来"。
-     退场一起走、方向朝下(往封面里缩),比出场慢一拍 —— 消失也需要被看见,
-     否则鼠标一离开就像图标被掐掉了。 */
   opacity: 0;
-  transform: translateY(10px) scale(0.92);
-  transition:
-    opacity 220ms var(--ease-out),
-    transform 260ms var(--ease-out),
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
-}
-
-/* 列表行的悬浮图标与卡片共用同一套图标底座 —— 底座默认隐形,卡片侧的
-   显隐选择器以前漏了 .book-row,列表行悬浮时容器亮了、图标却全是透明的,
-   只剩有独立显隐规则的移除 ×(用户报的"列表悬浮没有图标"就是这个)。 */
-.book-card:hover .card-action-icon,
-.book-card:focus-within .card-action-icon,
-.card-actions:focus-within .card-action-icon,
-.book-row:hover .card-action-icon,
-.book-row:focus-within .card-action-icon,
-.book-row-actions:focus-within .card-action-icon {
-  opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: translateY(6px);
   transition:
     opacity var(--duration-fast) var(--ease-out),
     transform var(--duration-base) var(--ease-spring),
@@ -845,17 +781,11 @@ button:disabled {
     color var(--duration-fast) var(--ease-out);
 }
 
-/* 出现时错开,消失时一起 —— 只在 hover 态给延迟,收起就不会拖着尾巴。 */
-.book-card:hover .card-action-icon:nth-child(2) {
-  transition-delay: 35ms;
-}
-
-.book-card:hover .card-action-icon:nth-child(3) {
-  transition-delay: 70ms;
-}
-
-.book-card:hover .card-action-icon:nth-child(4) {
-  transition-delay: 105ms;
+.book-row:hover .card-action-icon,
+.book-row:focus-within .card-action-icon,
+.book-row-actions:focus-within .card-action-icon {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .card-action-icon:hover {
@@ -865,19 +795,6 @@ button:disabled {
 
 .card-action-icon.is-on {
   color: var(--color-accent);
-}
-
-/* 移出书架是破坏性动作:平时只是灰图标,按到它才露出红。 */
-.card-action-icon.is-danger:hover {
-  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
-  color: var(--color-danger);
-}
-
-/* 已进入待确认态:整个按钮变成红色实心,再点一次才真的移出。 */
-.card-action-icon.is-confirming,
-.card-action-icon.is-confirming:hover {
-  background: var(--color-danger);
-  color: var(--color-on-accent);
 }
 
 /* 按下的反馈:图标按钮没有 hover 之外的手感,按下缩一点是最省也最通用的
@@ -967,6 +884,14 @@ button:disabled {
 }
 
 /* ---------- Book info dialog ---------- */
+
+/* 文件信息一行:格式与大小从书架卡片退到这里 —— 详情弹窗是它们唯一的展示位。 */
+.book-info-file {
+  margin: calc(var(--space-sm) * -1) 0 var(--space-md);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
 
 .book-info-field {
   display: grid;
@@ -1620,40 +1545,44 @@ button:disabled {
   font-size: 12px;
 }
 
-/* 继续阅读横条:书架在排序之外永远浮现「上次在读的那本」。
-   玻璃条 + 确定性渐变小封面,整条可点,安静但不隐形。 */
+/* 继续阅读 hero 卡:书架在排序之外永远浮现「上次在读的那本」。
+   打开 app 的理由就是这一张卡 —— 大封面 + 大标题 + 一条进度线,
+   它是第一眼,不是一行白条。整卡可点;右上角的圆钮是"进去读"的落点。 */
 .continue-reading {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-lg);
   width: 100%;
-  padding: var(--space-sm) var(--space-md);
-  margin: 0 0 var(--space-md);
+  padding: 20px 22px;
+  margin: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  background: var(--color-surface);
   color: var(--color-text-primary);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--duration-fast) var(--ease-out);
+  box-shadow: var(--shadow-soft);
+  transition:
+    box-shadow var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
 }
 
 .continue-reading:hover {
-  border-color: var(--color-accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-elevated);
 }
 
 .continue-reading-cover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 46px;
+  width: 92px;
+  height: 123px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-cover);
   color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
-  font-weight: var(--font-weight-semibold);
 }
 
 .continue-reading-cover-img {
@@ -1661,26 +1590,113 @@ button:disabled {
   object-position: center top;
 }
 
+.continue-reading-char {
+  font-family: var(--font-serif);
+  font-size: 40px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
 .continue-reading-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
   flex: 1;
 }
 
-.continue-reading-main strong {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
+.continue-reading-eyebrow {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }
 
 .continue-reading-title {
-  font-size: var(--font-size-md);
-  color: var(--color-text-primary);
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.015em;
+  line-height: var(--line-height-tight);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.continue-reading-author {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.continue-reading-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 9px;
+}
+
+.continue-reading-track {
+  flex: 1;
+  max-width: 340px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.continue-reading-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+}
+
+.continue-reading-pct {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.continue-reading-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.continue-reading:hover .continue-reading-go {
+  background: var(--color-text-primary);
+  border-color: var(--color-text-primary);
+  color: var(--color-bg);
+}
+
+@media (max-width: 720px) {
+  /* 窄窗口里 hero 收成一排小卡:封面 64px,字号回落,右侧圆钮让位。 */
+  .continue-reading {
+    gap: var(--space-md);
+    padding: var(--space-md);
+  }
+
+  .continue-reading-cover {
+    width: 64px;
+    height: 86px;
+  }
+
+  .continue-reading-title {
+    font-size: var(--font-size-md);
+  }
+
+  .continue-reading-go {
+    display: none;
+  }
 }
 
 /* 读架失败态的按钮行:重试 + 导入并排,居中跟空态文案对齐。 */
@@ -1707,6 +1723,20 @@ button:disabled {
   margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
+}
+
+/* 设置弹窗书架偏好:一行标签 + 下拉,与弹窗里其他行控件同一种排法。 */
+.settings-shelf-columns {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: 10px;
+}
+
+.settings-shelf-columns-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
 }
 
 .library-error {
@@ -1747,25 +1777,13 @@ button:disabled {
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
 }
 
-.library-footer {
-  grid-column: 2;
-  grid-row: 2;
-  display: flex;
-  justify-content: center;
-  gap: var(--space-xs);
-  padding: var(--space-md);
-  color: var(--color-text-tertiary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- Library sidebar ---------- */
 
 /* 侧栏 = 安静的玻璃书脊:半透明磨砂把主区的暖色渐变透上来,形成层次,
    而不是和内容抢同一片白。 */
 .lib-sidebar {
   grid-column: 1;
-  grid-row: 1 / 3;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1795,9 +1813,12 @@ button:disabled {
   gap: 2px;
 }
 
-/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。 */
+/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。
+   选中态是 ink 反色填充,不是浅蓝 pill:accent 只留给主操作与进度,
+   「我在哪个页面」用墨色说,层级感更清楚(Things/Arc 同款做法)。 */
 .lib-sidebar-nav .sliding-indicator {
   border-radius: var(--radius-md);
+  background: var(--color-text-primary);
 }
 
 .lib-sidebar-item {
@@ -1835,37 +1856,40 @@ button:disabled {
   background: transparent;
 }
 
-/* nav 内(视图 + 我的分组)的高亮:背景交给 indicator,这里只换字色与字重。
-   aria-current 跟着指示条走,屏幕阅读器不会丢「当前页」。 */
+/* nav 内(视图 + 我的分组)的高亮:背景交给 indicator(ink 填充),这里只换
+   字色与字重。aria-current 跟着指示条走,屏幕阅读器不会丢「当前页」。 */
 .lib-sidebar-nav .lib-sidebar-item.is-active,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'],
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] {
-  color: var(--color-accent);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
 }
 
-/* nav 内的高亮项里,图标与计数也跟着走 accent 色 —— 整个胶囊看起来统一。 */
+/* nav 内的高亮项里,图标与计数也跟着翻成纸色 —— 整个墨块看起来统一。 */
 .lib-sidebar-nav .lib-sidebar-item.is-active svg,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'] svg,
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] svg,
 .lib-sidebar-nav .lib-sidebar-item.is-active .lib-sidebar-count,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'] .lib-sidebar-count,
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] .lib-sidebar-count {
-  color: var(--color-accent);
+  color: var(--color-bg);
 }
 
 /* 标签组的 chip 不在 nav 里,且项数随用户而变 —— 不画 indicator,
-   高亮继续走按钮自己的背景。这样动效与「分组」一致:分组里滑过去,标签
-   里就是直接亮。 */
+   高亮走按钮自己的 ink 背景,与分组同一套语言。 */
 .lib-sidebar-item.is-tag[aria-pressed='true'] {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
 }
 
 .lib-sidebar-item.is-tag[aria-pressed='true'] svg,
 .lib-sidebar-item.is-tag[aria-pressed='true'] .lib-sidebar-count {
-  color: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.lib-sidebar-item.is-tag[aria-pressed='true'] .lib-sidebar-dot {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-text-primary) 70%, transparent);
 }
 
 .lib-sidebar-count {
@@ -1892,40 +1916,91 @@ button:disabled {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--color-accent);
+  color: var(--color-text-tertiary);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 
+.lib-sidebar-clear:hover {
+  color: var(--color-text-primary);
+}
+
 /* 设置与云同步沉到底部:它们是全局入口,不属于「我的分组」或某个标签。
    发丝线通栏:抵消侧栏左右内边距,再把内边距补回来对齐文字 —— 否则线的
    两端悬在半空,和侧栏边框接不上。 */
-/* 侧栏今日阅读摘要:一行小字,贴着底部操作区,像状态栏一样"在那儿"。
-   不设目标时只报今日时长;统计没取到就整行不渲染(JS 侧控制)。
+/* 侧栏今日阅读目标卡:主数字 + 细进度条,贴着底部操作区,像一张书签。
+   不设目标时退回一行小字(is-plain);统计没取到就整块不渲染(JS 侧控制)。
    它同时是统计页的常驻入口 —— 点一下进「目标与统计」主页。 */
 .lib-sidebar-goal {
   display: block;
   width: 100%;
   margin: 0 0 var(--space-sm);
-  padding: 4px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
+  padding: 12px 12px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: none;
   font: inherit;
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
   text-align: left;
   cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+  transition: border-color var(--duration-fast) var(--ease-out);
 }
 
 .lib-sidebar-goal:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 24%, var(--color-border));
+}
+
+.lib-sidebar-goal.is-plain {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.lib-sidebar-goal.is-plain:hover {
+  border: 0;
   background: color-mix(in srgb, var(--color-text-tertiary) 12%, transparent);
   color: var(--color-text-secondary);
+}
+
+.lib-goal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: 8px;
+}
+
+.lib-goal-today {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lib-goal-target {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lib-goal-track {
+  display: block;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.lib-goal-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width var(--duration-slow) var(--ease-emphasized);
 }
 
 .lib-sidebar-foot {
@@ -6705,50 +6780,28 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   .book-cover:hover {
     transform: none;
     box-shadow: var(--shadow-cover);
-    border-color: var(--color-border);
-  }
-
-  .book-cover:hover .book-cover-img {
-    transform: none;
   }
 
   .book-cover:active {
     transform: scale(0.982);
   }
 
-  .book-cover:hover::after {
-    transform: translateX(-120%);
-    transition: none;
-  }
-
-  /* 移除按钮:不再藏在 hover 里,并放大命中区。 */
-  .book-remove {
+  /* 封面玻璃按钮:触屏没有 hover,常显并放大命中区。 */
+  .book-quick {
     opacity: 1;
     transform: none;
-    width: 32px;
-    height: 32px;
-    top: -10px;
-    right: -10px;
   }
 
-  .book-remove.is-confirm {
-    transform: none;
-  }
-
-  /* 卡片操作条:触屏没有 hover,常显;图标按钮放大到可点的尺寸。 */
-  .card-actions {
-    opacity: 1;
-    transform: none;
-    gap: 6px;
-  }
-
-  .card-action-go,
-  .card-action-icon {
+  .book-quick-btn {
+    width: 36px;
     height: 36px;
   }
 
   .card-action-icon {
+    opacity: 1;
+    transform: none;
     width: 36px;
+    height: 36px;
   }
 
   .book-row-actions {

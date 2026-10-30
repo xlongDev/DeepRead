@@ -23,7 +23,6 @@ import {
   Star,
   Tag,
   Trash,
-  X,
 } from '@phosphor-icons/react'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { ScrollingText } from '../../components/ScrollingText'
@@ -34,7 +33,6 @@ import {
   coverPalette,
   FAVORITE_TAG,
   pickContinueReading,
-  formatBytes,
   isFavorite,
   SUGGESTED_TAGS,
   shelfTitle,
@@ -46,32 +44,22 @@ import {
   type ViewMode,
 } from './shelf-view'
 
-/** 「每行几本」的下拉选项。DropdownMenu 只收字符串,数字档在边界上转译。 */
-type ColumnsValue = 'auto' | '3' | '4' | '5' | '6' | '7' | '8'
-
-const COLUMN_OPTIONS: readonly { readonly value: ColumnsValue; readonly label: string }[] = [
-  { value: 'auto', label: '自适应' },
-  { value: '3', label: '每行 3 本' },
-  { value: '4', label: '每行 4 本' },
-  { value: '5', label: '每行 5 本' },
-  { value: '6', label: '每行 6 本' },
-  { value: '7', label: '每行 7 本' },
-  { value: '8', label: '每行 8 本' },
-]
-
 export interface ShelfViewProps {
   readonly books: readonly ShelfBook[]
   readonly total: number
+  /** 「在读」本数:标题旁的弱化摘要行用(与侧栏「我的分组」同一判定)。 */
+  readonly readingCount: number
   readonly covers: ReadonlyMap<string, string>
   readonly query: string
   readonly onQuery: (value: string) => void
   /** 搜索框 ref:⌘K 聚焦(书架级快捷键,宿主持有)。 */
   readonly searchInputRef: React.RefObject<HTMLInputElement | null>
+  /** 搜索快捷键的字母部分(kbd 提示用;'' = 未配置就不显示)。 */
+  readonly searchShortcut?: string
   readonly view: ViewMode
   readonly onView: (value: ViewMode) => void
-  /** 网格一行几本书;'auto' = 按窗口宽度自适应。 */
+  /** 网格一行几本书;'auto' = 按窗口宽度自适应。改列数的控件在设置弹窗。 */
   readonly columns: ShelfColumns
-  readonly onColumns: (value: ShelfColumns) => void
   readonly sort: SortKey
   readonly onSort: (value: SortKey) => void
   readonly sortDir: SortDir
@@ -111,14 +99,15 @@ export interface ShelfViewProps {
 export function ShelfView({
   books,
   total,
+  readingCount,
   covers,
   query,
   onQuery,
   searchInputRef,
+  searchShortcut,
   view,
   onView,
   columns,
-  onColumns,
   sort,
   onSort,
   sortDir,
@@ -298,122 +287,107 @@ export function ShelfView({
     )
   }
 
-  const pending = (hash: string): boolean => confirmRemove === hash
-
-  const removeButton = (book: ShelfBook, extraClass?: string): React.JSX.Element => {
-    const isPending = pending(book.hash)
-    const label = shelfTitle(book)
-    return (
-      <button
-        type="button"
-        className={`book-remove${isPending ? ' is-confirm' : ''}${extraClass ? ` ${extraClass}` : ''}`}
-        onClick={() => onRemoveClick(book.hash)}
-        title={isPending ? '再次点击确认:进度与批注将一并移除' : '从书架移除(不删除原文件)'}
-        aria-label={isPending ? `确认移除 ${label}` : `从书架移除 ${label}`}
-      >
-        {isPending ? (
-          <Trash size={13} weight="fill" aria-hidden />
-        ) : (
-          <X size={13} weight="regular" aria-hidden />
-        )}
-      </button>
-    )
-  }
+  /** 点搜索框的任意位置(图标、留白)都该聚焦输入框:label 原生行为,零 JS。 */
+  const searchKbd =
+    searchShortcut === undefined || searchShortcut === ''
+      ? null
+      : `${navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl '}${searchShortcut.toUpperCase()}`
 
   return (
     <>
       <div className="shelf-toolbar">
         <h1 className="shelf-title">
-          书架 <span className="shelf-count">{total}</span>
+          书架
+          <span className="shelf-subline">
+            {total} 本{readingCount > 0 ? ` · 在读 ${readingCount}` : ''}
+          </span>
         </h1>
-        <div className="shelf-search">
-          <MagnifyingGlass size={15} weight="regular" aria-hidden />
-          <input
-            ref={searchInputRef}
-            type="search"
-            placeholder="搜索书名…"
-            value={query}
-            onChange={(event) => onQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') onQuery('')
-            }}
-            aria-label="搜索书名"
-          />
-        </div>
-        <SlidingIndicator
-          activeKey={view}
-          className="shelf-view-toggle"
-          role="toolbar"
-          ariaLabel="视图切换"
-          activeSelector="button.is-active"
-        >
-          <button
-            type="button"
-            className={view === 'grid' ? 'is-active' : ''}
-            onClick={() => onView('grid')}
-            title="网格视图"
-            aria-pressed={view === 'grid'}
+        <div className="shelf-tools">
+          {/* label 包住输入框:点 pill 的任意位置都原生聚焦输入框,不借 JS。 */}
+          <label className="shelf-search">
+            <MagnifyingGlass size={15} weight="regular" aria-hidden />
+            <input
+              ref={searchInputRef}
+              type="search"
+              placeholder="搜索书名…"
+              value={query}
+              onChange={(event) => onQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') onQuery('')
+              }}
+              aria-label="搜索书名"
+            />
+            {searchKbd !== null && (
+              /* 装饰性的快捷键提示:输入一开始就撤掉,别占着输入宽度。 */
+              <kbd className="shelf-search-kbd" aria-hidden>
+                {searchKbd}
+              </kbd>
+            )}
+          </label>
+          <SlidingIndicator
+            activeKey={view}
+            className="shelf-view-toggle"
+            role="toolbar"
+            ariaLabel="视图切换"
+            activeSelector="button.is-active"
           >
-            <SquaresFour size={15} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={view === 'list' ? 'is-active' : ''}
-            onClick={() => onView('list')}
-            title="列表视图"
-            aria-pressed={view === 'list'}
-          >
-            <ListBullets size={15} weight="regular" aria-hidden />
-          </button>
-        </SlidingIndicator>
-        {view === 'grid' && (
-          /* 行数是网格自己的事,列表视图下不占工具条的位置。 */
+            <button
+              type="button"
+              className={view === 'grid' ? 'is-active' : ''}
+              onClick={() => onView('grid')}
+              title="网格视图"
+              aria-pressed={view === 'grid'}
+            >
+              <SquaresFour size={15} weight="regular" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={view === 'list' ? 'is-active' : ''}
+              onClick={() => onView('list')}
+              title="列表视图"
+              aria-pressed={view === 'list'}
+            >
+              <ListBullets size={15} weight="regular" aria-hidden />
+            </button>
+          </SlidingIndicator>
           <DropdownMenu
-            ariaLabel="每行显示的书本数"
-            value={columns === 'auto' ? 'auto' : (String(columns) as ColumnsValue)}
-            options={COLUMN_OPTIONS}
-            onChange={(value) =>
-              onColumns(value === 'auto' ? 'auto' : (Number(value) as ShelfColumns))
-            }
-            className="dropdown-shelf-columns"
-            title="一行显示几本书;自适应按窗口宽度自动安排"
+            ariaLabel="排序方式"
+            value={sort}
+            options={Object.entries(SORT_LABELS).map(([key, label]) => ({
+              value: key as SortKey,
+              label,
+            }))}
+            onChange={onSort}
+            className="dropdown-shelf-sort"
           />
-        )}
-        <DropdownMenu
-          ariaLabel="排序方式"
-          value={sort}
-          options={Object.entries(SORT_LABELS).map(([key, label]) => ({
-            value: key as SortKey,
-            label,
-          }))}
-          onChange={onSort}
-          className="dropdown-shelf-sort"
-        />
-        <button
-          type="button"
-          className={`shelf-sort-dir${sortDir === 'desc' ? ' is-desc' : ''}`}
-          onClick={onToggleSortDir}
-          title={sortDir === 'asc' ? '升序,点击改为降序' : '降序,点击改为升序'}
-          aria-label={`切换排序方向(当前${sortDir === 'asc' ? '升序' : '降序'})`}
-        >
-          <ArrowUp size={15} weight="bold" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={`shelf-manage${selecting ? ' is-active' : ''}`}
-          onClick={() => onToggleSelecting()}
-          title={selecting ? '退出批量管理' : '批量管理'}
-          aria-pressed={selecting}
-        >
-          <CheckSquare size={15} weight={selecting ? 'fill' : 'regular'} aria-hidden />
-          {selecting ? '完成' : '管理'}
-        </button>
-        <button type="button" className="shelf-import" onClick={onImport} aria-label="导入书籍">
-          <Plus size={15} weight="bold" aria-hidden /> 导入
-        </button>
+          <button
+            type="button"
+            className={`shelf-sort-dir${sortDir === 'desc' ? ' is-desc' : ''}`}
+            onClick={onToggleSortDir}
+            title={sortDir === 'asc' ? '升序,点击改为降序' : '降序,点击改为升序'}
+            aria-label={`切换排序方向(当前${sortDir === 'asc' ? '升序' : '降序'})`}
+          >
+            <ArrowUp size={15} weight="bold" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={`shelf-manage${selecting ? ' is-active' : ''}`}
+            onClick={() => onToggleSelecting()}
+            title={selecting ? '退出批量管理' : '批量管理'}
+            aria-pressed={selecting}
+          >
+            <CheckSquare size={15} weight={selecting ? 'fill' : 'regular'} aria-hidden />
+            {selecting ? '完成' : '管理'}
+          </button>
+          <button type="button" className="shelf-import" onClick={onImport} aria-label="导入书籍">
+            <Plus size={15} weight="bold" aria-hidden /> 导入
+          </button>
+        </div>
       </div>
 
       {books.length > 0 && continueBook !== null && (
+        /* 打开 app 的理由就是这一张卡:大封面 + 大标题 + 进度线,它该是书架的
+           第一眼,而不是一行可有可无的白条。 */
         <button
           type="button"
           className="continue-reading"
@@ -443,20 +417,33 @@ export function ShelfView({
                   })`,
                 }}
               >
-                {shelfTitle(continueBook).charAt(0)}
+                <span className="continue-reading-char">{shelfTitle(continueBook).charAt(0)}</span>
               </span>
             )
           })()}
           <span className="continue-reading-main">
-            <strong>继续阅读</strong>
-            <span className="continue-reading-title">
-              {shelfTitle(continueBook)}
-              {continueBook.progress !== null
-                ? ` · 读到 ${Math.round(continueBook.progress * 100)}%`
-                : ''}
-            </span>
+            <span className="continue-reading-eyebrow">继续阅读</span>
+            <span className="continue-reading-title">{shelfTitle(continueBook)}</span>
+            {continueBook.author !== null && (
+              <span className="continue-reading-author">{continueBook.author}</span>
+            )}
+            {continueBook.progress !== null && (
+              <span className="continue-reading-progress">
+                <span className="continue-reading-track" aria-hidden>
+                  <span
+                    className="continue-reading-fill"
+                    style={{ width: `${continueBook.progress * 100}%` }}
+                  />
+                </span>
+                <span className="continue-reading-pct">
+                  读到 {Math.round(continueBook.progress * 100)}%
+                </span>
+              </span>
+            )}
           </span>
-          <BookOpen size={15} weight="regular" aria-hidden />
+          <span className="continue-reading-go" aria-hidden>
+            <BookOpen size={17} weight="regular" />
+          </span>
         </button>
       )}
 
@@ -539,9 +526,6 @@ export function ShelfView({
                         <span className="book-cover-title">{title}</span>
                       </>
                     )}
-                    {book.format !== 'unknown' && (
-                      <span className="book-format">{book.format.toUpperCase()}</span>
-                    )}
                     {/* 进度压在封面底边上、轨道半透明:它是这本书的一部分,
                         不该在封面下面另起一行。 */}
                     {progress !== null && progress > 0 && (
@@ -559,64 +543,34 @@ export function ShelfView({
                     )}
                   </button>
                   {!selecting && (
-                    /* 悬浮才出现的一排图标。刻意不做「继续阅读」那种文案按钮 ——
-                       点封面本身就是继续读,按钮位置留给真正要选的动作。 */
-                    <div className="card-actions">
+                    /* 封面上的两颗玻璃按钮:星标是最高频动作,其余全在 ⋯ 菜单
+                       (右键/Shift+F10 同一个菜单)。封面上不贴格式徽章 —— 格式
+                       对「选哪本读」没有决策价值,却让每张封面都顶着一块 UI。 */
+                    <div className="book-quick">
                       <button
                         type="button"
-                        className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
+                        className={`book-quick-btn${isFavorite(book) ? ' is-on' : ''}`}
                         aria-pressed={isFavorite(book)}
                         aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
                         onClick={() => onToggleFavorite(book)}
                       >
                         <Star
-                          size={15}
+                          size={14}
                           weight={isFavorite(book) ? 'fill' : 'regular'}
                           aria-hidden
                         />
                       </button>
                       <button
                         type="button"
-                        className="card-action-icon"
-                        aria-label={`给《${title}》打标签`}
-                        aria-haspopup="dialog"
-                        aria-expanded={tagHash === book.hash}
-                        onClick={() => setTagHash(tagHash === book.hash ? null : book.hash)}
-                      >
-                        <Tag size={15} weight="regular" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        className="card-action-icon"
-                        aria-label={`编辑《${title}》的信息`}
-                        onClick={() => onEditInfo(book)}
-                      >
-                        <PencilSimple size={15} weight="regular" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        className="card-action-icon"
-                        aria-label={`导出《${title}》的批注`}
-                        title="导出这本书的批注(.md)"
-                        onClick={() => onExportNotes(book)}
-                      >
-                        <Export size={15} weight="regular" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        className={`card-action-icon is-danger${
-                          confirmRemove === book.hash ? ' is-confirming' : ''
-                        }`}
-                        aria-label={
-                          confirmRemove === book.hash ? `确认移出《${title}》` : `移出《${title}》`
+                        className="book-quick-btn"
+                        aria-haspopup="menu"
+                        aria-expanded={menuHash === book.hash}
+                        aria-label={`更多操作 ${title}`}
+                        onClick={() =>
+                          menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
                         }
-                        onClick={() => onRemoveClick(book.hash)}
                       >
-                        {confirmRemove === book.hash ? (
-                          <Check size={15} weight="bold" aria-hidden />
-                        ) : (
-                          <Trash size={15} weight="regular" aria-hidden />
-                        )}
+                        <DotsThree size={15} weight="bold" aria-hidden />
                       </button>
                     </div>
                   )}
@@ -632,19 +586,14 @@ export function ShelfView({
                 </div>
                 <div className="book-meta">
                   <ScrollingText text={title} className="book-meta-title" />
-                  {/* 作者单独一行:和进度挤在一行时,进度那段定宽文案会把
-                      作者压成「迟…」—— 作者是书的第二身份,不该只值两个字。 */}
+                  {/* 作者单独一行。卡片只说「这是什么书」:进度在封面底边,
+                      格式与大小属于详情弹窗,标签在侧栏筛选 —— 卡片不放日志。 */}
                   {book.author !== null && (
                     <ScrollingText text={book.author} className="book-meta-author" />
                   )}
-                  <span className="book-meta-read">
-                    {book.tags.length > 0 ? `${book.tags.join(' / ')} · ` : ''}
-                    {book.format === 'unknown'
-                      ? '重新导入同一文件即可恢复'
-                      : progress !== null && progress > 0
-                        ? `读到 ${Math.round(progress * 100)}% · ${formatBytes(book.size)}`
-                        : formatBytes(book.size)}
-                  </span>
+                  {book.format === 'unknown' && (
+                    <span className="book-meta-author">重新导入同一文件即可恢复</span>
+                  )}
                 </div>
               </li>
             )
@@ -700,12 +649,7 @@ export function ShelfView({
                   <span className="book-row-main">
                     <span className="book-row-title">{title}</span>
                     <span className="book-row-sub">
-                      {book.author !== null ? `${book.author} · ` : ''}
-                      {book.format.toUpperCase()} · {formatBytes(book.size)}
-                      {progress !== null && progress > 0
-                        ? ` · 读到 ${Math.round(progress * 100)}%`
-                        : ''}
-                      {book.tags.length > 0 ? ` · ${book.tags.join(' / ')}` : ''}
+                      {book.format === 'unknown' ? '重新导入同一文件即可恢复' : (book.author ?? '')}
                     </span>
                   </span>
                   {progress !== null && progress > 0 && (
@@ -718,8 +662,8 @@ export function ShelfView({
                   )}
                 </button>
                 {!selecting && (
-                  /* 与网格卡片同一套动作(收藏/打标签/导出),「编辑」收进 ⋯ 菜单
-                     —— 列表行的高度放不下五个图标,但功能一项不少。 */
+                  /* 行尾只留星标与 ⋯:打标签/导出/编辑/移除全在菜单里,
+                     与网格卡片同一套动作,行高放不下也不该塞。 */
                   <div className="book-row-actions">
                     <button
                       type="button"
@@ -729,25 +673,6 @@ export function ShelfView({
                       onClick={() => onToggleFavorite(book)}
                     >
                       <Star size={15} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      className="card-action-icon"
-                      aria-label={`给《${title}》打标签`}
-                      aria-haspopup="dialog"
-                      aria-expanded={tagHash === book.hash}
-                      onClick={() => setTagHash(tagHash === book.hash ? null : book.hash)}
-                    >
-                      <Tag size={15} weight="regular" aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      className="card-action-icon"
-                      aria-label={`导出《${title}》的批注`}
-                      title="导出这本书的批注(.md)"
-                      onClick={() => onExportNotes(book)}
-                    >
-                      <Export size={15} weight="regular" aria-hidden />
                     </button>
                     <button
                       type="button"
@@ -763,7 +688,6 @@ export function ShelfView({
                     </button>
                   </div>
                 )}
-                {!selecting && removeButton(book, 'book-row-remove')}
                 {renderMenu(book, 'is-row')}
                 {tagHash === book.hash && (
                   <TagPopover

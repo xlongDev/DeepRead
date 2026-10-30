@@ -12,7 +12,13 @@
 import { BookOpenText, ChartLineUp, Cloud, Gear, NoteBlank } from '@phosphor-icons/react'
 import { isTauriRuntime } from '../../lib/ipc'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
-import { coverPalette, SMART_FILTERS, type LibraryView, type SmartFilter } from './shelf-view'
+import {
+  coverPalette,
+  goalCard,
+  SMART_FILTERS,
+  type LibraryView,
+  type SmartFilter,
+} from './shelf-view'
 
 /**
  * 侧栏开关的图标:圆角面板 + 一条分隔线。
@@ -58,10 +64,11 @@ export interface LibrarySidebarProps {
   /** 没加载过就是 null:与其显示一个猜的数字,不如不显示。 */
   readonly notesCount: number | null
   /**
-   * 今日阅读时长 vs 每日目标的一行摘要(统计与目标都取到才有值)。
-   * null = 还没取到,不显示 —— 侧栏不摆猜出来的数字。
+   * 今日阅读秒数。null = 统计还没取到,整块不渲染 —— 侧栏不摆猜出来的数字。
+   * 与 `dailyMinutes`(0 = 没设目标)一起,由 goalCard() 折算成卡片的三个值。
    */
-  readonly goalLine: string | null
+  readonly todaySeconds: number | null
+  readonly dailyMinutes: number
   readonly smartFilter: SmartFilter
   readonly onSmartFilter: (filter: SmartFilter) => void
   readonly smartCounts: Readonly<Record<SmartFilter, number>>
@@ -81,7 +88,8 @@ export function LibrarySidebar({
   onView,
   shelfCount,
   notesCount,
-  goalLine,
+  todaySeconds,
+  dailyMinutes,
   smartFilter,
   onSmartFilter,
   smartCounts,
@@ -209,19 +217,44 @@ export function LibrarySidebar({
         </>
       )}
 
-      {/* 今日阅读摘要:贴着底部操作区上方,像状态栏一样"在那儿"而不抢注意力。
-          没有目标时只报今日时长;统计没取到就整行不显示。点它进统计页 ——
-          目标的主居所在那儿,这行是它的常驻入口。 */}
-      {goalLine !== null && (
-        <button
-          type="button"
-          className="lib-sidebar-goal"
-          onClick={() => onView('stats')}
-          title="查看阅读统计"
-        >
-          {goalLine}
-        </button>
-      )}
+      {/* 今日阅读目标卡:细进度条 + 两个数,贴着底部操作区,像书签一样"在那儿"。
+          统计没取到就整块不渲染;没设目标时退回一行字。点它进统计页 ——
+          目标的主居所在那儿,这张卡是它的常驻入口。 */}
+      {todaySeconds !== null &&
+        (dailyMinutes > 0 ? (
+          <button
+            type="button"
+            className="lib-sidebar-goal"
+            onClick={() => onView('stats')}
+            title="查看阅读统计"
+          >
+            {(() => {
+              const card = goalCard(todaySeconds, dailyMinutes)
+              return (
+                <>
+                  <span className="lib-goal-head">
+                    <span className="lib-goal-today">{card.today}</span>
+                    {card.target !== null && <span className="lib-goal-target">{card.target}</span>}
+                  </span>
+                  {card.pct !== null && (
+                    <span className="lib-goal-track" aria-hidden>
+                      <span className="lib-goal-fill" style={{ width: `${card.pct * 100}%` }} />
+                    </span>
+                  )}
+                </>
+              )
+            })()}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="lib-sidebar-goal is-plain"
+            onClick={() => onView('stats')}
+            title="查看阅读统计"
+          >
+            {goalCard(todaySeconds, dailyMinutes).today}
+          </button>
+        ))}
 
       <div className="lib-sidebar-foot">
         <button type="button" className="lib-sidebar-item" onClick={onOpenSync}>
