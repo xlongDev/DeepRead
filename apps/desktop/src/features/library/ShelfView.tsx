@@ -65,6 +65,8 @@ export interface ShelfViewProps {
   readonly covers: ReadonlyMap<string, string>
   readonly query: string
   readonly onQuery: (value: string) => void
+  /** 搜索框 ref:⌘K 聚焦(书架级快捷键,宿主持有)。 */
+  readonly searchInputRef: React.RefObject<HTMLInputElement | null>
   readonly view: ViewMode
   readonly onView: (value: ViewMode) => void
   /** 网格一行几本书;'auto' = 按窗口宽度自适应。 */
@@ -112,6 +114,7 @@ export function ShelfView({
   covers,
   query,
   onQuery,
+  searchInputRef,
   view,
   onView,
   columns,
@@ -326,6 +329,7 @@ export function ShelfView({
         <div className="shelf-search">
           <MagnifyingGlass size={15} weight="regular" aria-hidden />
           <input
+            ref={searchInputRef}
             type="search"
             placeholder="搜索书名…"
             value={query}

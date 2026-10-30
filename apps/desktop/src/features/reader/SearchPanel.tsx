@@ -4,6 +4,7 @@
  * (adapter)、进度与中止、命中高亮都在宿主;面板只消费状态。
  */
 
+import { useEffect } from 'react'
 import { MagnifyingGlass, X } from '@phosphor-icons/react'
 
 /** 命中数超过展示上限:必须说清楚,否则用户以为搜索不全。 */
@@ -45,6 +46,14 @@ export function SearchPanel({
   onGoToCfi,
   onClose,
 }: SearchPanelProps) {
+  // 开面板即输入:挂载聚焦;带上次查询则全选,直接打字就能换词。
+  useEffect(() => {
+    const input = searchInputRef.current
+    if (input === null) return
+    input.focus()
+    input.select()
+  }, [searchInputRef])
+
   return (
     <nav className="reader-toc" aria-label="搜索">
       <div className="reader-toc-head">

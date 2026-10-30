@@ -281,6 +281,28 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
   useEffect(() => {
     localStorage.setItem('deepread.shelf.sidebar', sidebarOpen ? 'shown' : 'hidden')
   }, [sidebarOpen])
+  /** 书架搜索框:⌘K 聚焦用。 */
+  const shelfSearchInputRef = useRef<HTMLInputElement>(null)
+  // ⌘B / Ctrl+B 开关侧栏,⌘K / Ctrl+K 聚焦书架搜索 —— 与阅读器同一套
+  // 「修饰键 + 单键」心智;修饰键组合不与打字冲突,无需可编辑守卫。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.key === 'b') {
+        event.preventDefault()
+        setSidebarOpen((isOpen) => !isOpen)
+      } else if (event.key === 'k') {
+        event.preventDefault()
+        const input = shelfSearchInputRef.current
+        if (input !== null) {
+          input.focus()
+          input.select()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
   /** 侧栏「我的分组」;与标签筛选叠加生效。 */
   const [smartFilter, setSmartFilter] = useState<SmartFilter>('all')
   const [tagDraft, setTagDraft] = useState('')
@@ -1426,6 +1448,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel, backend }: LibrarySc
                   covers={covers}
                   query={query}
                   onQuery={setQuery}
+                  searchInputRef={shelfSearchInputRef}
                   view={shelfMode}
                   onView={changeShelfMode}
                   columns={shelfColumns}

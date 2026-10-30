@@ -44,6 +44,24 @@ describe('翻页', () => {
   })
 })
 
+describe('面板快捷键(修饰键 + 单键)', () => {
+  it('⌘K 与 Ctrl+K 都唤起搜索', () => {
+    expect(readerKeyAction(press('k', { metaKey: true }))).toBe('search')
+    expect(readerKeyAction(press('k', { ctrlKey: true }))).toBe('search')
+  })
+
+  it('⌘B 与 Ctrl+B 都开关目录侧栏', () => {
+    expect(readerKeyAction(press('b', { metaKey: true }))).toBe('toggle-sidebar')
+    expect(readerKeyAction(press('b', { ctrlKey: true }))).toBe('toggle-sidebar')
+  })
+
+  it('无修饰键的 k / b 是普通字符,不绑定', () => {
+    expect(readerKeyAction(press('k'))).toBeNull()
+    expect(readerKeyAction(press('b'))).toBeNull()
+    expect(readerKeyAction(press('K', { metaKey: true }))).toBeNull()
+  })
+})
+
 describe('Escape 与未绑定键', () => {
   it('Escape 归 escape 动作', () => {
     expect(readerKeyAction(press('Escape'))).toBe('escape')

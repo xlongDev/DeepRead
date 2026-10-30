@@ -1202,7 +1202,15 @@ export function ReaderScreen({
       // 焦点在输入框/文本域/滑杆等可编辑元素上时,翻页与阅读尺键让位给原生
       // 行为:搜索框里敲空格是打字,进度滑杆的 ←→ 是调滑杆。Escape 仍放行
       // —— 面板内按 Esc 关面板是既有行为,不因焦点在搜索框里而失效。
-      if (action !== 'escape' && action !== 'fullscreen' && isEditableTarget(event.target)) return
+      // ⌘K/⌘B 是修饰键组合,不存在「打字误触」,同样放行。
+      if (
+        action !== 'escape' &&
+        action !== 'fullscreen' &&
+        action !== 'search' &&
+        action !== 'toggle-sidebar' &&
+        isEditableTarget(event.target)
+      )
+        return
       // 除全屏外,内核未就绪时不处理按键。
       // 实测结论(别照直觉推):adapterRef 在挂载 effect 起始处就同步赋值,
       // 开书失败只走 catch、并不清 ref,只有卸载 cleanup 才置 null。所以这条
@@ -1226,6 +1234,14 @@ export function ReaderScreen({
         void turnPage('next')
       } else if (action === 'prev') {
         void turnPage('prev')
+      } else if (action === 'search') {
+        // ⌘K:开搜索面板(SearchPanel 挂载即聚焦输入框),再按一次收起。
+        setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
+        setChromeVisible(true)
+      } else if (action === 'toggle-sidebar') {
+        // ⌘B:目录侧栏开关。
+        setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
+        setChromeVisible(true)
       } else if (ttsMounted) {
         // Esc 归 TtsDrawer:它把自己收起成迷你条(播放不中断)。这里若跟着
         // 清 openPanel,抽屉在「最小化动画第一帧」就被卸载,用户看到的是
@@ -2354,7 +2370,7 @@ export function ReaderScreen({
               setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
               setChromeVisible(true)
             }}
-            title="搜索全书"
+            title="搜索全书(⌘K)"
             aria-haspopup="dialog"
             aria-expanded={openPanel === 'search'}
           >
@@ -2367,7 +2383,7 @@ export function ReaderScreen({
               setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
               setChromeVisible(true)
             }}
-            title="目录"
+            title="目录(⌘B)"
           >
             <List size={18} weight="regular" aria-hidden />
           </button>

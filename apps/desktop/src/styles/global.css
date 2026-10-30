@@ -2806,7 +2806,9 @@ button:disabled {
 
 /* Floating TOC card. */
 .reader-toc {
-  top: 12px;
+  /* 桌面 overlay 标题栏:交通灯钉在 y≈21(占 y 15-27),48px 起面板既清灯
+     又与顶栏基线齐平;刘海屏 env() 更大时取更大者。 */
+  top: max(48px, env(safe-area-inset-top));
   left: 12px;
   bottom: 12px;
   width: min(312px, 84vw);

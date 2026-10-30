@@ -134,8 +134,8 @@ const TOP_KEYS = [
   'AI 助手',
   '朗读 / 听书',
   '学习(卡片 / 测验 / 错题本)',
-  '搜索全书',
-  '目录',
+  '搜索全书(⌘K)',
+  '目录(⌘B)',
 ] as const
 
 function topKeyTitles(): readonly (string | null)[] {
@@ -290,8 +290,8 @@ describe('顶栏 11 键', () => {
     expect(topKeyTitles()).toEqual([
       ...TOP_KEYS.slice(0, -2),
       '对照阅读(两本书并排)',
-      '搜索全书',
-      '目录',
+      '搜索全书(⌘K)',
+      '目录(⌘B)',
     ])
 
     fireEvent.click(screen.getByTitle('对照阅读(两本书并排)'))
@@ -335,7 +335,7 @@ describe('面板开合', () => {
         { id: 'c2', title: '第二章 灯塔', href: 'ch2.xhtml', children: [] },
       ],
     })
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     const panel = await screen.findByRole('navigation', { name: '目录' })
     expect(within(panel).getByText('第一章 夜航')).toBeInTheDocument()
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
@@ -348,7 +348,7 @@ describe('面板开合', () => {
         { location: { cfi: '', progress: 0 }, excerpt: '无 CFI 的命中跳过' },
       ],
     })
-    fireEvent.click(screen.getByTitle('搜索全书'))
+    fireEvent.click(screen.getByTitle('搜索全书(⌘K)'))
     const panel = await screen.findByRole('navigation', { name: '搜索' })
     fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
       target: { value: '灯' },
@@ -364,7 +364,7 @@ describe('面板开合', () => {
   it('内核搜索失败时给出明确错误态,不永远停在「搜索中」', async () => {
     const { adapter } = await renderReader()
     adapter.search.mockRejectedValue(new Error('内核搜索崩溃'))
-    fireEvent.click(screen.getByTitle('搜索全书'))
+    fireEvent.click(screen.getByTitle('搜索全书(⌘K)'))
     const panel = await screen.findByRole('navigation', { name: '搜索' })
     fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
       target: { value: '灯塔' },
@@ -593,7 +593,7 @@ describe('键盘事件契约', () => {
 
   it('焦点在输入框里 Escape 仍关闭面板(既有行为不因守卫失效)', async () => {
     await renderReader()
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     const input = document.createElement('input')
     document.body.appendChild(input)
@@ -693,7 +693,7 @@ describe('阅读尺与版式互不干涉', () => {
 describe('Escape 关面板', () => {
   it('阅读态下 Escape 关闭已开的面板', async () => {
     await renderReader()
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录' })).toBeNull())
@@ -702,7 +702,7 @@ describe('Escape 关面板', () => {
   it('错误态下 Escape 也能关闭面板(错误态顶栏仍在,面板可开)', async () => {
     await renderReader({ openError: new Error('书籍文件损坏') })
     await screen.findByRole('alert')
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录' })).toBeNull())
@@ -778,7 +778,7 @@ describe('批注:多色划线 / 笔记 / 列表面板', () => {
 
   /** 侧栏切到批注页签。 */
   function openAnnotationsTab(): HTMLElement {
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     fireEvent.click(screen.getByText(/^批注/))
     return document.querySelector<HTMLElement>('.reader-toc') as HTMLElement
   }
@@ -1117,7 +1117,7 @@ describe('TXT 章节规则', () => {
     await waitFor(() => {
       expect(document.querySelector('.reader-opening')).toBeNull()
     })
-    fireEvent.click(screen.getByTitle('目录'))
+    fireEvent.click(screen.getByTitle('目录(⌘B)'))
     const toc = await screen.findByRole('navigation', { name: '目录' })
     fireEvent.click(within(toc).getByText('自定义'))
     return await within(toc).findByLabelText('规则预览')

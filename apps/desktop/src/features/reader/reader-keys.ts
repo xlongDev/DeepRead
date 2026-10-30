@@ -6,7 +6,15 @@
  * 2000 行组件里的 handler 淹没。
  */
 
-export type ReaderKeyAction = 'fullscreen' | 'next' | 'prev' | 'escape' | 'ruler-up' | 'ruler-down'
+export type ReaderKeyAction =
+  | 'fullscreen'
+  | 'next'
+  | 'prev'
+  | 'escape'
+  | 'ruler-up'
+  | 'ruler-down'
+  | 'search'
+  | 'toggle-sidebar'
 
 /** 只取用得到的字段,方便测试直接传字面量。 */
 export interface ReaderKeyEvent {
@@ -36,6 +44,10 @@ export function readerKeyAction(event: ReaderKeyEvent): ReaderKeyAction | null {
   if (event.key === 'F11' || (event.key === 'f' && event.ctrlKey && event.metaKey)) {
     return 'fullscreen'
   }
+  // ⌘K / Ctrl+K 唤起搜索,⌘B / Ctrl+B 开关目录侧栏 —— 修饰键组合,与翻页
+  // 单键无冲突(Cmd+F 在 Tauri 里被系统占用,搜索选了 K)。
+  if (event.key === 'k' && (event.metaKey || event.ctrlKey)) return 'search'
+  if (event.key === 'b' && (event.metaKey || event.ctrlKey)) return 'toggle-sidebar'
   if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') return 'next'
   if (event.key === 'ArrowLeft' || event.key === 'PageUp') return 'prev'
   // 上下方向键归阅读尺:开尺时移尺(走到页尾自然翻页),关尺时调用方直接
