@@ -468,7 +468,23 @@ export function ReaderScreen({
     accepted: ReadonlySet<string>
   } | null>(null)
   // 阅读器的面板互斥:同一时刻最多一个浮层(目录/排版/AI/朗读/学习/对照)。
-  const [openPanel, setOpenPanel] = useState<OpenPanel | null>(null)
+  const [openPanel, setOpenPanel] = useState<OpenPanel | null>(() => {
+    // dev 辅助:?open=…&panel=toc|display|… 直接开着面板进阅读器,
+    // 无头截图/视觉回归不用模拟点击。生产树摇掉,永远不会走这条路径。
+    if (!import.meta.env.DEV) return null
+    const panel = new URLSearchParams(window.location.search).get('panel')
+    const valid: readonly OpenPanel[] = [
+      'toc',
+      'search',
+      'settings',
+      'display',
+      'ai',
+      'tts',
+      'learning',
+      'parallel',
+    ]
+    return valid.includes(panel as OpenPanel) ? (panel as OpenPanel) : null
+  })
   const [bookLanguage, setBookLanguage] = useState<string | undefined>(undefined)
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
   /** 当前章的 CFI 章节键:relocate 里值变化才 setState —— TocPanel 的
