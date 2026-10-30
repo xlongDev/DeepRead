@@ -14,11 +14,13 @@ import { z } from 'zod'
 import { ISO8601_PATTERN } from '../types'
 
 import type { AppReadyPayload } from './generated/AppReadyPayload'
+import type { OpenFilePayload } from './generated/OpenFilePayload'
 
-export type { AppReadyPayload }
+export type { AppReadyPayload, OpenFilePayload }
 
 export const EVENT = {
   appReady: 'app.ready',
+  appOpenFile: 'app.open_file',
 } as const
 
 /**
@@ -32,6 +34,7 @@ export const PROTOCOL_VERSION = 1
 /** The single source of truth for event payload shapes. */
 export interface EventMap {
   [EVENT.appReady]: AppReadyPayload
+  [EVENT.appOpenFile]: OpenFilePayload
 }
 
 export type EventName = keyof EventMap
@@ -50,6 +53,9 @@ export const eventPayloadSchemas = {
   [EVENT.appReady]: z.object({
     startedAt: z.string().regex(ISO8601_PATTERN, 'must be an ISO 8601 timestamp'),
     appVersion: z.string().min(1),
+  }),
+  [EVENT.appOpenFile]: z.object({
+    path: z.string().min(1),
   }),
 }
 

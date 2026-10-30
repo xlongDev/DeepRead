@@ -33,7 +33,7 @@ import { AUTO_SYNC_INTERVAL_MS, isAutoSyncEnabled, runSync } from '../../lib/syn
 import { loadNotes } from '../../lib/notes'
 import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
-import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
+import { invokeCommand, isTauriRuntime, listenEvent } from '../../lib/ipc'
 import { useKeybindings } from '../../lib/keybindings'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
@@ -622,6 +622,45 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
       unlisten?.()
     }
   }, [importPaths])
+
+  /**
+   * ADR-0013 外部打开:文件关联(双击书文件)、第二实例转交、macOS
+   * OpenFile 三路在 Rust 侧汇聚成 `app.open_file`。语义 = 导入(按 hash
+   * 幂等)→ 直接进阅读器;失败如实走问题条。
+   * onOpenBook 走 ref:监听只挂一次,不随 App 的每次渲染重订。
+   */
+  const onOpenBookRef = useRef(onOpenBook)
+  useEffect(() => {
+    onOpenBookRef.current = onOpenBook
+  })
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    void listenEvent('app.open_file', (payload) => {
+      void (async () => {
+        try {
+          const response = await invokeCommand('library.import', { path: payload.path })
+          setBooks((current) => [
+            response.book,
+            ...current.filter((book) => book.hash !== response.book.hash),
+          ])
+          setProblem(null)
+          onOpenBookRef.current(openedBookFromLibrary(response.book))
+        } catch (error) {
+          setProblem(toAppError(error).message ?? null)
+        }
+      })()
+    }).then((fn) => {
+      if (cancelled) fn()
+      else unlisten = fn
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
 
   /**
    * 浏览器端的导入。

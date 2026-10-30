@@ -44,6 +44,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["epub", "mobi", "azw3", "fb2", "cbz", "pdf", "txt", "md"],
+        "name": "DeepRead Book",
+        "role": "Viewer"
+      }
+    ],
     "createUpdaterArtifacts": true
   },
   "plugins": {

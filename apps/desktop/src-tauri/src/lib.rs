@@ -40,12 +40,49 @@ pub fn http() -> &'static reqwest::Client {
     })
 }
 
+/// 把主窗口带回前台:托盘左键、第二实例转交、文件关联共用(ADR-0013)。
+#[cfg(desktop)]
+fn show_main(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// argv 里指向受支持书文件的那一项;不是书文件(目录/未知扩展)如实忽略。
+#[cfg(desktop)]
+fn book_arg(argv: &[String]) -> Option<String> {
+    argv.iter()
+        .skip(1)
+        .find(|arg| library::detect_format(arg).is_some())
+        .cloned()
+}
+
+fn emit_open_file(app: &tauri::AppHandle, path: String) {
+    let transport = events::transport_name(events::EVENT_APP_OPEN_FILE);
+    if let Err(err) = app.emit(&transport, events::OpenFilePayload { path }) {
+        warn!("failed to emit {transport}: {err}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    // single-instance 按官方要求最先注册:第二个进程的 argv 在这里转交给
+    // 首实例,进程自身随即退出(ADR-0013)。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        show_main(app);
+        if let Some(path) = book_arg(&argv) {
+            emit_open_file(app, path);
+        }
+    }));
+    builder
         .setup(|app| {
             use tauri::Manager;
             // NOTE: Builder::setup REPLACES any previous closure — keep every
@@ -96,6 +133,42 @@ pub fn run() {
                 warn!("failed to emit {} event: {err}", events::EVENT_APP_READY);
             }
             info!("Deepread backend started");
+            // ADR-0013 托盘:左键 = 显示窗口;菜单提供「显示 / 退出」。
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                let show = MenuItem::with_id(app, "show", "显示 DeepRead", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出 DeepRead", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show, &quit])?;
+                TrayIconBuilder::with_id("deepread-tray")
+                    .icon(app.default_window_icon().expect("window icon").clone())
+                    .tooltip("DeepRead")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => show_main(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+
+                // 冷启动 argv:首实例自己被双击书文件拉起(Windows/Linux;
+                // macOS 走下面的 RunEvent::OpenFile,不经过 argv)。
+                if let Some(path) = book_arg(&std::env::args().collect::<Vec<_>>()) {
+                    emit_open_file(app.handle(), path);
+                }
+            }
             Ok(())
         })
         .manage(ai::AiState::default())
@@ -109,6 +182,16 @@ pub fn run() {
                 })
                 .build(),
         )
+        .on_window_event(|window, event| {
+            // 关窗 = 收进托盘(ADR-0013):听书与后台同步跨窗口存活;
+            // 真退出走托盘菜单「退出」或 macOS ⌘Q。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::system::system_ping,
             commands::system::app_info,
@@ -169,8 +252,35 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Deepread");
+        .build(tauri::generate_context!())
+        .expect("error while building Deepread")
+        .run(|app, event| match event {
+            // macOS:Finder 双击 / Dock 拖放把文件交给运行中的实例
+            // (启动时携带文件也走这一路),给出的是 file:// URL 列表。
+            // 其余平台没有这个事件。
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                show_main(app);
+                for url in urls {
+                    if url.scheme() != "file" {
+                        continue;
+                    }
+                    if let Ok(path) = url.to_file_path() {
+                        let path = path.to_string_lossy().to_string();
+                        if library::detect_format(&path).is_some() {
+                            emit_open_file(app, path);
+                        }
+                    }
+                }
+            }
+            _ => {
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = app;
+                    let _ = event;
+                }
+            }
+        });
 }
 
 #[cfg(test)]

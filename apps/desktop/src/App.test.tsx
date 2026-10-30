@@ -7,6 +7,7 @@ import { invokeCommand } from './lib/ipc'
 vi.mock('./lib/ipc', () => ({
   invokeCommand: vi.fn(),
   isTauriRuntime: vi.fn((): boolean => true),
+  listenEvent: vi.fn(async (): Promise<() => void> => () => {}),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({

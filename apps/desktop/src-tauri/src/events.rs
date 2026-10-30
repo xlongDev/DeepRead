@@ -9,6 +9,8 @@ use serde::Serialize;
 use ts_rs::TS;
 
 pub const EVENT_APP_READY: &str = "app.ready";
+/// ADR-0013: 文件关联/第二实例/冷启动 argv 把书文件路径交给首实例的前端。
+pub const EVENT_APP_OPEN_FILE: &str = "app.open_file";
 
 pub fn transport_name(logical: &str) -> String {
     logical.replace('.', ":")
@@ -24,6 +26,15 @@ pub struct AppReadyPayload {
     pub app_version: String,
 }
 
+/// 路径在后端只过了一次扩展名筛(`library::detect_format`)—— 前端导入命令
+/// 按内容二次校验,失败如实走书架问题条。
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilePayload {
+    pub path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,6 +43,7 @@ mod tests {
 
     #[test]
     fn maps_dots_to_colons_for_transport() {
+        assert_eq!(transport_name(EVENT_APP_OPEN_FILE), "app:open_file");
         assert_eq!(transport_name("app.ready"), "app:ready");
         assert_eq!(
             transport_name("reader.progress.changed"),
@@ -55,5 +67,15 @@ mod tests {
     fn app_ready_timestamp_is_iso8601() {
         let stamp = crate::timestamps::rfc3339_now();
         assert!(OffsetDateTime::parse(&stamp, &Rfc3339).is_ok());
+    }
+
+    #[test]
+    fn open_file_payload_serializes_camel_case() {
+        let payload = OpenFilePayload {
+            path: "/books/夜航书.epub".into(),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["path"], "/books/夜航书.epub");
+        assert!(json.get("Path").is_none());
     }
 }

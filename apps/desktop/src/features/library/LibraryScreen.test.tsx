@@ -21,7 +21,7 @@ import {
 } from '@deepread/shared'
 import { LibraryScreen } from './LibraryScreen'
 import { APP_THEMES } from './shelf-view'
-import { invokeCommand } from '../../lib/ipc'
+import { invokeCommand, listenEvent } from '../../lib/ipc'
 import { readCachedCover } from '../../lib/cover-store'
 import { extractCover } from '@deepread/reader-adapter'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -29,6 +29,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 vi.mock('../../lib/ipc', () => ({
   invokeCommand: vi.fn(),
   isTauriRuntime: vi.fn((): boolean => true),
+  listenEvent: vi.fn(async (): Promise<() => void> => () => {}),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -515,6 +516,58 @@ describe('LibraryScreen 每行书本数(设置弹窗)', () => {
     localStorage.setItem('deepread.shelf.columns', '6')
     await renderLibrary()
     expect(document.querySelector('.shelf-grid')!.classList.contains('is-fixed')).toBe(true)
+  })
+})
+
+describe('LibraryScreen 外部打开(ADR-0013)', () => {
+  it('app.open_file 事件:导入并直接进阅读器', async () => {
+    let fire: ((payload: { path: string }) => void) | null = null
+    vi.mocked(listenEvent).mockImplementation(async (_event, handler) => {
+      fire = handler
+      return () => {}
+    })
+    const { onOpenBook } = await renderLibrary()
+    expect(vi.mocked(listenEvent)).toHaveBeenCalledWith(
+      'app.open_file',
+      expect.any(Function),
+    )
+
+    // 前端只收到路径:导入命令按内容二次校验,这里 mock 返回书架里已有的书。
+    const standard = invokeCommandMock.getMockImplementation()!
+    invokeCommandMock.mockImplementation((command, request) =>
+      command === 'library.import'
+        ? Promise.resolve({ book: BOOKS[0]! })
+        : standard(command, request),
+    )
+    fire!({ path: '/books/夜航书.epub' })
+
+    await waitFor(() =>
+      expect(invokeCommandMock).toHaveBeenCalledWith('library.import', {
+        path: '/books/夜航书.epub',
+      }),
+    )
+    await waitFor(() => expect(onOpenBook).toHaveBeenCalledTimes(1))
+    expect(onOpenBook.mock.calls[0]?.[0]).toMatchObject({ bookId: HASH_A, format: 'epub' })
+  })
+
+  it('导入失败(文件消失/不支持)如实走问题条,不打开阅读器', async () => {
+    let fire: ((payload: { path: string }) => void) | null = null
+    vi.mocked(listenEvent).mockImplementation(async (_event, handler) => {
+      fire = handler
+      return () => {}
+    })
+    const { onOpenBook } = await renderLibrary()
+    const standard = invokeCommandMock.getMockImplementation()!
+    invokeCommandMock.mockImplementation((command, request) =>
+      command === 'library.import'
+        ? Promise.reject(new Error('文件读不到'))
+        : standard(command, request),
+    )
+    fire!({ path: '/books/没有这本书.epub' })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('文件读不到')
+    expect(onOpenBook).not.toHaveBeenCalled()
   })
 })
 
