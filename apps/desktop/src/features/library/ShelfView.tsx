@@ -654,10 +654,13 @@ export function ShelfView({
                   </span>
                   {progress !== null && progress > 0 && (
                     <span className="book-row-progress">
-                      <span
-                        className="book-progress-fill"
-                        style={{ width: `${progress * 100}%` }}
-                      />
+                      <span className="book-row-track" aria-hidden>
+                        <span
+                          className="book-progress-fill"
+                          style={{ width: `${progress * 100}%` }}
+                        />
+                      </span>
+                      <span className="book-row-pct">{Math.round(progress * 100)}%</span>
                     </span>
                   )}
                 </button>

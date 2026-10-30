@@ -858,14 +858,12 @@ button:disabled {
 }
 
 .book-row-actions {
-  position: absolute;
-  top: 50%;
-  right: 44px;
+  /* 常驻占位、hover 淡入:绝对定位会和行尾的进度互相踩,布局也不该跳。 */
+  flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
   opacity: 0;
-  transform: translateY(-50%);
   transition: opacity var(--duration-fast) var(--ease-out);
 }
 
@@ -1069,10 +1067,12 @@ button:disabled {
   border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
 }
 
+/* 批量管理进行中:ink 填充与导航选中态同一语言 —— 这是「模式开着」的状态,
+   不是需要 accent 去强调的主操作。 */
 .shelf-manage.is-active {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
-  background: var(--color-accent-soft);
+  color: var(--color-bg);
+  border-color: var(--color-text-primary);
+  background: var(--color-text-primary);
 }
 
 /* Selection ring + check badge, shared by grid cards and list rows. */
@@ -1793,8 +1793,8 @@ button:disabled {
   padding: var(--space-md) var(--space-sm) var(--space-md) var(--space-md);
   border-right: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-surface) 78%, transparent);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   animation: fade-in var(--duration-base) var(--ease-out);
   transition: opacity var(--duration-fast) var(--ease-out);
 }
@@ -1813,12 +1813,9 @@ button:disabled {
   gap: 2px;
 }
 
-/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。
-   选中态是 ink 反色填充,不是浅蓝 pill:accent 只留给主操作与进度,
-   「我在哪个页面」用墨色说,层级感更清楚(Things/Arc 同款做法)。 */
+/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。 */
 .lib-sidebar-nav .sliding-indicator {
   border-radius: var(--radius-md);
-  background: var(--color-text-primary);
 }
 
 .lib-sidebar-item {
@@ -2391,8 +2388,8 @@ button:disabled {
 .reader-scope .ai-drawer,
 .reader-scope .dropdown-menu {
   background: var(--reader-panel, var(--color-surface-glass));
-  backdrop-filter: blur(36px) saturate(1.8);
-  -webkit-backdrop-filter: blur(36px) saturate(1.8);
+  backdrop-filter: var(--glass-blur-heavy);
+  -webkit-backdrop-filter: var(--glass-blur-heavy);
   border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
 }
 
@@ -2577,15 +2574,15 @@ button:disabled {
   cursor: pointer;
 }
 
-.segmented button:hover:not(:disabled) {
+.segmented button:hover:not(:disabled):not(.is-active) {
   color: var(--color-text-primary);
 }
 
 .segmented button.is-active {
-  /* 夜间主题里 surface ≈ 面板底,纯 surface 的选中底会隐身;掺一点文字色
-     保证对 track(surface 82%)永远有对比,浅色下只是轻微变灰。 */
-  background: color-mix(in srgb, var(--color-text-primary) 12%, var(--color-surface));
-  color: var(--color-accent);
+  /* 选中 = ink 反色:夜间主题里 surface ≈ 面板底,浅蓝底会隐身;
+     墨块(暗主题下翻成浅墨)对任何 track 都有对比,也与页签同一套语言。 */
+  background: var(--color-text-primary);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
 }
@@ -2601,7 +2598,8 @@ button:disabled {
   top: 0;
   left: 0;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-text-primary) 12%, var(--color-surface));
+  /* 滑块即选中底:与 .segmented button.is-active 同一套 ink 反色。 */
+  background: var(--color-text-primary);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
   transition:
     translate 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
@@ -2650,14 +2648,16 @@ button:disabled {
   flex-shrink: 0;
 }
 
-.chrome-button:hover:not(:disabled) {
+/* hover 不叠加在 ink 选中态上:开着 的面板按钮保持墨块,hover 只属于未按下的。 */
+.chrome-button:hover:not(:disabled):not(.is-active) {
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
+/* 面板开着的开关按钮:ink 反色 —— 与侧栏/页签同一套「选中 = 墨块」语言。 */
 .chrome-button.is-active {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
 }
 
 .reader-top {
@@ -3347,8 +3347,8 @@ button:disabled {
 }
 
 .reader-toc-tabs button.is-active {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
 }
 
 .annotation-scope {
@@ -3742,8 +3742,8 @@ button:disabled {
 }
 
 .ai-scope button.is-active {
-  background: var(--color-surface);
-  color: var(--color-accent);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
 }
@@ -4274,7 +4274,9 @@ button.ai-citation:hover {
   top: 0;
   left: 0;
   border-radius: var(--radius-full);
-  background: var(--color-accent-soft);
+  /* 选中态是 ink 反色填充,不是浅蓝 pill:它只出现在导航/页签上(书架视图
+     切换、设置页签、侧栏分组),「我在哪」用墨色说,accent 留给主操作与进度。 */
+  background: var(--color-text-primary);
   pointer-events: none;
   z-index: 0;
   /* 测量前不写几何样式(组件留空),所以不会出现"先在角落闪一下再滑到位"。 */
@@ -4324,12 +4326,12 @@ button.ai-citation:hover {
   z-index: 1;
 }
 
-.shelf-view-toggle button:hover:not(:disabled) {
+.shelf-view-toggle button:hover:not(:disabled):not(.is-active) {
   color: var(--color-text-primary);
 }
 
 .shelf-view-toggle button.is-active {
-  color: var(--color-accent);
+  color: var(--color-bg);
 }
 
 .shelf-sort {
@@ -4359,11 +4361,14 @@ button.ai-citation:hover {
 /* 与 .book-card 同一套逐条入场 —— 列表行也因 `key={view}` 而重新挂载。 */
 .book-row {
   position: relative;
+  display: flex;
+  align-items: center;
   animation: fade-up var(--duration-slow) var(--ease-emphasized) backwards;
 }
 
 .book-row-open {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-md);
@@ -4428,24 +4433,38 @@ button.ai-citation:hover {
   color: var(--color-text-tertiary);
 }
 
+/* 行尾的紧凑进度:轨道 + 百分比,与 hero/网格的进度语言一致,
+   不再是压在行底的一条通栏细线。 */
 .book-row-progress {
-  position: absolute;
-  left: var(--space-md);
-  right: var(--space-md);
-  bottom: 2px;
-  height: 2px;
-  background: rgba(29, 27, 23, 0.1);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 118px;
+  margin-left: var(--space-md);
+}
+
+.book-row-track {
+  flex: 1;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
 }
 
 .book-row-progress .book-progress-fill {
   display: block;
   height: 100%;
+  border-radius: inherit;
   background: var(--color-accent);
 }
 
-.book-row-remove {
-  display: inline-flex;
-  opacity: 0;
+.book-row-pct {
+  width: 28px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .book-cover-missing {
@@ -5472,13 +5491,13 @@ dialog.modal-panel {
   white-space: nowrap;
 }
 
-.segmented-button:hover:not(:disabled) {
+.segmented-button:hover:not(:disabled):not(.is-active) {
   color: var(--color-text-primary);
 }
 
 .segmented-button.is-active {
-  background: var(--color-surface);
-  color: var(--color-accent);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
@@ -5523,14 +5542,14 @@ dialog.modal-panel {
   text-align: left;
 }
 
-.tts-voice-item:hover {
-  background: var(--color-accent-soft);
+.tts-voice-item:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
 }
 
 .tts-voice-item.is-active {
-  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
+  border-color: var(--color-text-primary);
+  background: var(--color-text-primary);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
 }
 
@@ -5595,8 +5614,8 @@ dialog.modal-panel {
   padding: 4px 8px 4px 6px;
   border-radius: var(--radius-full);
   background: var(--reader-panel, var(--color-surface-glass));
-  backdrop-filter: blur(36px) saturate(1.8);
-  -webkit-backdrop-filter: blur(36px) saturate(1.8);
+  backdrop-filter: var(--glass-blur-heavy);
+  -webkit-backdrop-filter: var(--glass-blur-heavy);
   border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
   box-shadow: var(--shadow-floating);
   color: var(--reader-fg, var(--color-text-primary));
@@ -6559,6 +6578,9 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .settings-tabs button {
+  /* 提到指示条之上(指示条是 z-index:0 的定位元素,静态按钮会被它盖住)。 */
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: inline-flex;
   align-items: center;
@@ -6585,7 +6607,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .settings-tabs button.is-active {
-  color: var(--color-accent);
+  color: var(--color-bg);
   font-weight: var(--font-weight-medium);
 }
 

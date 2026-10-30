@@ -62,8 +62,10 @@
   --blur-glass: 20px;
   --blur-glass-heavy: 40px;
   /* 玻璃面板复合配方(backdrop-filter 用)。引用 --blur-glass 而非固定值,
-     液态玻璃等主题抬高 --blur-glass 时整套玻璃跟随变化。 */
+     液态玻璃等主题抬高 --blur-glass 时整套玻璃跟随变化。
+     heavy 给阅读器的悬浮面板/迷你播放条(比标准玻璃更厚一档)。 */
   --glass-blur: blur(var(--blur-glass)) saturate(1.7);
+  --glass-blur-heavy: blur(var(--blur-glass-heavy)) saturate(1.8);
 
   /* Motion */
   --duration-fast: 150ms;
@@ -203,6 +205,7 @@
   --color-text-tertiary: #7d8794;
   --color-border: rgba(28, 36, 48, 0.14);
   --blur-glass: 32px;
+  --blur-glass-heavy: 48px;
 }
 
 /* 晨雾:浅色冷灰蓝。暖纸系(纯白/暖纸/象牙)全是暖底,浅灰又太素,
