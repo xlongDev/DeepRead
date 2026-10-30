@@ -10,6 +10,7 @@ import {
   GraduationCap,
   Headphones,
   List,
+  MagnifyingGlass,
   Moon,
   Ruler,
   SlidersHorizontal,
@@ -101,7 +102,8 @@ import { AiDrawer } from './AiDrawer'
 import { TranslationCard, type TranslationCardState } from './TranslationCard'
 import { LookupCard, type LookupResult } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
-import { TocPanel, MAX_SHOWN_SEARCH_RESULTS } from './TocPanel'
+import { TocPanel } from './TocPanel'
+import { SearchPanel, MAX_SHOWN_SEARCH_RESULTS } from './SearchPanel'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { ReaderBottomBar } from './ReaderBottomBar'
 import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
@@ -204,7 +206,7 @@ interface ReaderScreenProps {
 type Phase = 'opening' | 'reading' | 'error'
 
 /** 同一时刻只开一个浮层:它们共用顶栏按钮的激活态与「点空白关闭」逻辑。 */
-type OpenPanel = 'toc' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | 'parallel'
+type OpenPanel = 'toc' | 'search' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | 'parallel'
 
 /**
  * 正在编辑的批注笔记。`id` 缺失 = 这条笔记还没有对应的划线,提交时新建;
@@ -1828,7 +1830,7 @@ export function ReaderScreen({
     const query = selection.text.trim().slice(0, 60)
     if (query === '') return
     if (searchInputRef.current !== null) searchInputRef.current.value = query
-    setOpenPanel('toc')
+    setOpenPanel('search')
     void runSearchWith(query)
     // 工具栏不关:搜索结果在侧栏,选区的墨水/笔记还能接着用。
   }, [selection, runSearchWith])
@@ -2347,12 +2349,25 @@ export function ReaderScreen({
           )}
           <button
             type="button"
+            className={`chrome-button${openPanel === 'search' ? ' is-active' : ''}`}
+            onClick={() => {
+              setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
+              setChromeVisible(true)
+            }}
+            title="搜索全书"
+            aria-haspopup="dialog"
+            aria-expanded={openPanel === 'search'}
+          >
+            <MagnifyingGlass size={18} weight="regular" aria-hidden />
+          </button>
+          <button
+            type="button"
             className="chrome-button"
             onClick={() => {
               setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
               setChromeVisible(true)
             }}
-            title="目录与搜索"
+            title="目录"
           >
             <List size={18} weight="regular" aria-hidden />
           </button>
@@ -2416,15 +2431,6 @@ export function ReaderScreen({
             toc={toc}
             isTxt={book.format === 'txt'}
             onClose={() => setOpenPanel(null)}
-            searchState={searchState}
-            searchProgress={searchProgress}
-            searchMatchCase={searchMatchCase}
-            onSearchMatchCaseChange={setSearchMatchCase}
-            onCancelSearch={() => searchAbortRef.current?.abort()}
-            searchResults={searchResults}
-            searchTruncated={searchTruncated}
-            onSearch={() => void runSearch()}
-            searchInputRef={searchInputRef}
             onGoToCfi={goToCfi}
             onGoToTocItem={goToTocItem}
             onStartRepair={startRepair}
@@ -2444,6 +2450,22 @@ export function ReaderScreen({
             onCommitNote={() => void commitNote()}
             onStartNote={startNote}
             onRemoveAnnotation={(id) => void removeAnnotation(id)}
+          />
+        )}
+
+        {openPanel === 'search' && (
+          <SearchPanel
+            searchState={searchState}
+            searchProgress={searchProgress}
+            searchMatchCase={searchMatchCase}
+            onSearchMatchCaseChange={setSearchMatchCase}
+            onCancelSearch={() => searchAbortRef.current?.abort()}
+            searchResults={searchResults}
+            searchTruncated={searchTruncated}
+            onSearch={() => void runSearch()}
+            searchInputRef={searchInputRef}
+            onGoToCfi={goToCfi}
+            onClose={() => setOpenPanel(null)}
           />
         )}
 

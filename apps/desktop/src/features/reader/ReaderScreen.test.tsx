@@ -122,7 +122,7 @@ function respond(command: string): unknown {
   }
 }
 
-/** 顶栏 11 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。 */
+/** 顶栏 12 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。 */
 const TOP_KEYS = [
   '返回书架',
   '在此页添加书签',
@@ -134,7 +134,8 @@ const TOP_KEYS = [
   'AI 助手',
   '朗读 / 听书',
   '学习(卡片 / 测验 / 错题本)',
-  '目录与搜索',
+  '搜索全书',
+  '目录',
 ] as const
 
 function topKeyTitles(): readonly (string | null)[] {
@@ -286,7 +287,12 @@ describe('顶栏 11 键', () => {
     render(<ReaderScreen book={BOOK} onBack={vi.fn()} onOpenParallel={onOpenParallel} />)
     await waitFor(() => expect(document.querySelector('.reader-opening')).toBeNull())
 
-    expect(topKeyTitles()).toEqual([...TOP_KEYS.slice(0, -1), '对照阅读(两本书并排)', '目录与搜索'])
+    expect(topKeyTitles()).toEqual([
+      ...TOP_KEYS.slice(0, -2),
+      '对照阅读(两本书并排)',
+      '搜索全书',
+      '目录',
+    ])
 
     fireEvent.click(screen.getByTitle('对照阅读(两本书并排)'))
     const picker = await screen.findByRole('region', { name: '选择对照的书' })
@@ -329,8 +335,8 @@ describe('面板开合', () => {
         { id: 'c2', title: '第二章 灯塔', href: 'ch2.xhtml', children: [] },
       ],
     })
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    const panel = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(screen.getByTitle('目录'))
+    const panel = await screen.findByRole('navigation', { name: '目录' })
     expect(within(panel).getByText('第一章 夜航')).toBeInTheDocument()
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
   })
@@ -342,8 +348,8 @@ describe('面板开合', () => {
         { location: { cfi: '', progress: 0 }, excerpt: '无 CFI 的命中跳过' },
       ],
     })
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    const panel = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(screen.getByTitle('搜索全书'))
+    const panel = await screen.findByRole('navigation', { name: '搜索' })
     fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
       target: { value: '灯' },
     })
@@ -358,8 +364,8 @@ describe('面板开合', () => {
   it('内核搜索失败时给出明确错误态,不永远停在「搜索中」', async () => {
     const { adapter } = await renderReader()
     adapter.search.mockRejectedValue(new Error('内核搜索崩溃'))
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    const panel = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(screen.getByTitle('搜索全书'))
+    const panel = await screen.findByRole('navigation', { name: '搜索' })
     fireEvent.change(within(panel).getByPlaceholderText('搜索全书…'), {
       target: { value: '灯塔' },
     })
@@ -587,12 +593,12 @@ describe('键盘事件契约', () => {
 
   it('焦点在输入框里 Escape 仍关闭面板(既有行为不因守卫失效)', async () => {
     await renderReader()
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('目录'))
+    expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     const input = document.createElement('input')
     document.body.appendChild(input)
     fireEvent.keyDown(input, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录' })).toBeNull())
     input.remove()
   })
 
@@ -687,19 +693,19 @@ describe('阅读尺与版式互不干涉', () => {
 describe('Escape 关面板', () => {
   it('阅读态下 Escape 关闭已开的面板', async () => {
     await renderReader()
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('目录'))
+    expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录' })).toBeNull())
   })
 
   it('错误态下 Escape 也能关闭面板(错误态顶栏仍在,面板可开)', async () => {
     await renderReader({ openError: new Error('书籍文件损坏') })
     await screen.findByRole('alert')
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    expect(await screen.findByRole('navigation', { name: '目录与搜索' })).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('目录'))
+    expect(await screen.findByRole('navigation', { name: '目录' })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录与搜索' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: '目录' })).toBeNull())
   })
 
   it('TTS 抽屉在时 Escape 不关面板:收起归抽屉自己(迷你条那帧要能画出来)', async () => {
@@ -772,7 +778,7 @@ describe('批注:多色划线 / 笔记 / 列表面板', () => {
 
   /** 侧栏切到批注页签。 */
   function openAnnotationsTab(): HTMLElement {
-    fireEvent.click(screen.getByTitle('目录与搜索'))
+    fireEvent.click(screen.getByTitle('目录'))
     fireEvent.click(screen.getByText(/^批注/))
     return document.querySelector<HTMLElement>('.reader-toc') as HTMLElement
   }
@@ -1111,8 +1117,8 @@ describe('TXT 章节规则', () => {
     await waitFor(() => {
       expect(document.querySelector('.reader-opening')).toBeNull()
     })
-    fireEvent.click(screen.getByTitle('目录与搜索'))
-    const toc = await screen.findByRole('navigation', { name: '目录与搜索' })
+    fireEvent.click(screen.getByTitle('目录'))
+    const toc = await screen.findByRole('navigation', { name: '目录' })
     fireEvent.click(within(toc).getByText('自定义'))
     return await within(toc).findByLabelText('规则预览')
   }
@@ -1137,7 +1143,7 @@ describe('TXT 章节规则', () => {
 
   it('非法正则挡住保存,修好才放行', async () => {
     const preview = await openRulesPanel()
-    const toc = screen.getByRole('navigation', { name: '目录与搜索' })
+    const toc = screen.getByRole('navigation', { name: '目录' })
     fireEvent.click(within(toc).getByText('新增规则'))
     const rows = within(toc).getAllByPlaceholderText(/正则/)
     fireEvent.change(rows[0]!, { target: { value: '第(章' } })
@@ -1151,7 +1157,7 @@ describe('TXT 章节规则', () => {
 
   it('保存前强制预览:命中行带规则名,保存后落库并重建章节', async () => {
     const preview = await openRulesPanel()
-    const toc = screen.getByRole('navigation', { name: '目录与搜索' })
+    const toc = screen.getByRole('navigation', { name: '目录' })
     fireEvent.click(within(toc).getByText('新增规则'))
     fireEvent.change(within(toc).getByPlaceholderText(/规则名/), { target: { value: '第 N 卷' } })
     fireEvent.change(within(toc).getAllByPlaceholderText(/正则/)[0]!, {
