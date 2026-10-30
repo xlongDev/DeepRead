@@ -527,10 +527,7 @@ describe('LibraryScreen 外部打开(ADR-0013)', () => {
       return () => {}
     })
     const { onOpenBook } = await renderLibrary()
-    expect(vi.mocked(listenEvent)).toHaveBeenCalledWith(
-      'app.open_file',
-      expect.any(Function),
-    )
+    expect(vi.mocked(listenEvent)).toHaveBeenCalledWith('app.open_file', expect.any(Function))
 
     // 前端只收到路径:导入命令按内容二次校验,这里 mock 返回书架里已有的书。
     const standard = invokeCommandMock.getMockImplementation()!
