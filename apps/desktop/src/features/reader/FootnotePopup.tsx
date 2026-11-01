@@ -50,7 +50,7 @@ export function FootnotePopup({ view, type, onClose }: FootnotePopupProps) {
       <div className="lookup-head">
         <strong>{label}</strong>
         <button type="button" className="chrome-button" onClick={onClose} title="关闭">
-          <X size={12} weight="regular" aria-hidden />
+          <X size={14} weight="regular" aria-hidden />
         </button>
       </div>
       <div ref={bodyRef} className="footnote-popup-body" />

@@ -687,7 +687,7 @@ export function AiDrawer({
     <aside className="ai-drawer ai-chat" aria-label="AI 助手">
       <header className="ai-head">
         <span className="ai-head-icon" aria-hidden>
-          <Sparkle size={13} weight="fill" />
+          <Sparkle size={14} weight="fill" />
         </span>
         <div className="ai-head-text">
           <strong>AI 助手</strong>
@@ -796,7 +796,7 @@ export function AiDrawer({
           <span className="ai-insights-title">本书洞察</span>
           {artifactCount > 0 && <span className="ai-badge">{artifactCount}</span>}
           <CaretDown
-            size={12}
+            size={14}
             weight="bold"
             className={`ai-chevron${insightsOpen ? ' is-open' : ''}`}
             aria-hidden
@@ -1070,9 +1070,9 @@ export function AiDrawer({
                     }}
                   >
                     {savedNotes.has(index) ? (
-                      <Check size={13} weight="bold" aria-hidden />
+                      <Check size={14} weight="bold" aria-hidden />
                     ) : (
-                      <Note size={13} weight="regular" aria-hidden />
+                      <Note size={14} weight="regular" aria-hidden />
                     )}
                     {savedNotes.has(index) ? '已写入批注' : '写入批注笔记'}
                   </button>
@@ -1152,7 +1152,7 @@ export function AiDrawer({
             onClick={() => void cancel()}
             title="停止"
           >
-            <X size={15} weight="bold" aria-hidden />
+            <X size={14} weight="bold" aria-hidden />
           </button>
         ) : (
           <button
@@ -1165,7 +1165,7 @@ export function AiDrawer({
             title="发送"
             aria-label="发送"
           >
-            <PaperPlaneRight size={15} weight="fill" aria-hidden />
+            <PaperPlaneRight size={14} weight="fill" aria-hidden />
           </button>
         )}
       </form>

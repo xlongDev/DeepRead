@@ -79,7 +79,7 @@ export function TagPopover({ label, tags, onChange, onClose }: TagPopoverProps) 
               onClick={() => toggle(tag)}
             >
               {tag}
-              <X size={10} weight="bold" aria-hidden />
+              <X size={14} weight="bold" aria-hidden />
             </button>
           ))}
         </div>
@@ -101,7 +101,7 @@ export function TagPopover({ label, tags, onChange, onClose }: TagPopoverProps) 
           }}
         />
         <button type="button" aria-label="添加标签" disabled={draft.trim() === ''} onClick={commit}>
-          <Plus size={13} weight="bold" aria-hidden />
+          <Plus size={14} weight="bold" aria-hidden />
         </button>
       </div>
 

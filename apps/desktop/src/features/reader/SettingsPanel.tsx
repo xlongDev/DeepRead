@@ -1,9 +1,13 @@
 /**
- * 排版设置面板:阅读背景、原书排版总开关、自定义档位组(行距/段距/缩进/
- * 字重/方向)、字号与页边距、字体(内置 + 自定义导入)、简繁转换与词典。
- * 从 ReaderScreen 拆出的纯展示件 —— 排版状态本身是宿主的 `typography`
- * 单一对象,唯一变更入口 updateLayout(patch) 以 prop 传入;换主题的
- * 落库与内核下发也在宿主回调里。
+ * 排版设置(阅读设置的「排版」页):阅读背景、原书排版总开关、自定义档位组
+ * (行距/段距/缩进/字重/方向)、字号与页边距、字体(内置 + 自定义导入)、
+ * 简繁转换与词典。从 ReaderScreen 拆出的纯展示件 —— 排版状态本身是宿主的
+ * `typography` 单一对象,唯一变更入口 updateLayout(patch) 以 prop 传入;
+ * 换主题的落库与内核下发也在宿主回调里。
+ *
+ * 外壳(玻璃面板、页签、滚动区)归宿主,本件只负责这一页的内容。原先它和
+ * 「显示设置」各占一颗顶栏键,一个叫排版一个叫显示,读者分不清哪个装了什么
+ * —— 现在合成一个「阅读设置」面板,两页切换。
  */
 
 import { Minus, Plus, Trash, X } from '@phosphor-icons/react'
@@ -70,7 +74,7 @@ export function SettingsPanel({
   themeVars,
 }: SettingsPanelProps) {
   return (
-    <section className="reader-settings" aria-label="排版设置">
+    <div className="settings-pane">
       {/* 主题:与正文同屏,换档立刻看得见。 */}
       <div className="settings-group">
         <span className="settings-group-label">阅读背景</span>
@@ -288,7 +292,9 @@ export function SettingsPanel({
               onClick={() => updateLayout({ fontFamily: font.name })}
               title={`${font.name}(点按使用;长按列表删除)`}
             >
-              {font.name.length > 6 ? `${font.name.slice(0, 5)}…` : font.name}
+              {/* 名字长短由网格格子决定,超长交给 CSS 省略号(.segmented-wrap
+                  > button);这里切片会切在中英混排的奇怪位置。 */}
+              {font.name}
             </button>
           ))}
         </Segmented>
@@ -299,7 +305,7 @@ export function SettingsPanel({
             onClick={() => void importReadingFont()}
             disabled={fontBusy}
           >
-            <Plus size={13} weight="bold" aria-hidden />
+            <Plus size={14} weight="bold" aria-hidden />
             {fontBusy ? '导入中…' : '导入字体'}
           </button>
           {customFontInUse !== null && (
@@ -309,7 +315,7 @@ export function SettingsPanel({
               onClick={() => void removeReadingFont(customFontInUse)}
               title="删除当前使用的自定义字体"
             >
-              <Trash size={13} aria-hidden /> 删除当前字体
+              <Trash size={14} aria-hidden /> 删除当前字体
             </button>
           )}
         </div>
@@ -342,7 +348,7 @@ export function SettingsPanel({
                 onClick={() => void removeDictionary(dictionary.id)}
                 title="移除词典"
               >
-                <X size={12} weight="regular" aria-hidden />
+                <X size={14} weight="regular" aria-hidden />
               </button>
             </div>
           ))}
@@ -361,6 +367,6 @@ export function SettingsPanel({
           {panelProblem}
         </p>
       )}
-    </section>
+    </div>
   )
 }

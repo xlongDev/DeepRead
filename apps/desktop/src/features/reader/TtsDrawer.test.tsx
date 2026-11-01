@@ -303,7 +303,7 @@ describe('待机与播放', () => {
     await flush()
     expect(synthRequests()).toHaveLength(0)
     expect(props.onPlayingChange).toHaveBeenCalledWith(false)
-    expect(screen.getByText('待机')).toBeInTheDocument()
+    expect(screen.getByText('从本章开头朗读')).toBeInTheDocument()
   })
 
   it('播放:按单元合成第一句(edge 参数不含 rate),句子列表逐句渲染,首句 current', async () => {
@@ -404,7 +404,7 @@ describe('待机与播放', () => {
 
     expect(props.jumpSection).not.toHaveBeenCalled()
     expect(props.onPlayingChange).toHaveBeenLastCalledWith(false)
-    expect(screen.getByText('待机')).toBeInTheDocument()
+    expect(screen.getByText('从本章开头朗读')).toBeInTheDocument()
   })
 })
 
@@ -682,7 +682,7 @@ describe('取消与收起', () => {
     })
     expect(source.stopped).toBe(true)
     expect(props.onPlayingChange).toHaveBeenLastCalledWith(false)
-    expect(screen.getByText('待机')).toBeInTheDocument()
+    expect(screen.getByText('从本章开头朗读')).toBeInTheDocument()
     expect(sentenceTexts()).toEqual([])
   })
 

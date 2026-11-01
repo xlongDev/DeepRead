@@ -1405,7 +1405,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
                       onClick={triggerImport}
                       aria-label="导入书籍"
                     >
-                      <Plus size={15} weight="bold" aria-hidden />
+                      <Plus size={14} weight="bold" aria-hidden />
                       导入
                     </button>
                   </div>

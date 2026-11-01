@@ -68,12 +68,12 @@ export function ParallelPicker({ excludeHash, onPick, onClose }: ParallelPickerP
       <div className="reader-pick-head">
         <span className="settings-label">并排阅读</span>
         <button type="button" className="chrome-button" onClick={onClose} title="关闭">
-          <X size={12} weight="regular" aria-hidden />
+          <X size={14} weight="regular" aria-hidden />
         </button>
       </div>
 
       <div className="reader-search reader-pick-search">
-        <MagnifyingGlass size={13} weight="regular" aria-hidden />
+        <MagnifyingGlass size={14} weight="regular" aria-hidden />
         <input
           type="search"
           className="reader-search-input"

@@ -48,7 +48,7 @@ export function TranslationCard({
       <div className="lookup-head">
         <strong>翻译 → {targetLanguage}</strong>
         <button type="button" className="chrome-button" onClick={onClose} title="关闭">
-          <X size={12} weight="regular" aria-hidden />
+          <X size={14} weight="regular" aria-hidden />
         </button>
       </div>
       <DropdownMenu
@@ -93,7 +93,7 @@ export function TranslationCard({
             onClick={() => void navigator.clipboard?.writeText(translation.body)}
             title="复制译文"
           >
-            <Copy size={12} weight="regular" aria-hidden />
+            <Copy size={14} weight="regular" aria-hidden />
           </button>
         </div>
       </div>

@@ -14,6 +14,10 @@
 :root {
   color-scheme: light;
   --shadow-color: 20, 18, 14;
+  /* 工具条控件同高。必须是全局变量:它挂在 `.shelf-tools` 上时,笔记页的
+     工具条(没有这层壳)读到的是「变量未定义」,height 退回 auto,于是
+     「仅有笔记」22.8px、「复制为 Markdown」20.8px —— 两个并排的胶囊差 2px。 */
+  --shelf-control: 36px;
 }
 
 * {
@@ -168,8 +172,37 @@ button:disabled {
   cursor: default;
 }
 
-/* ---------- Glass recipe (chrome only, per DESIGN.md) ---------- */
+/* 填充型按钮禁用时**不**压透明度:半透明的实心 accent 在浅底上读作「一颗
+   更浅的蓝按钮」,仍然像能点;它上面的白字还会掉到 3:1 以下,看起来像坏了
+   而不是像禁用。换成中性底 + 三级墨色 —— 颜色本身就是「能不能点」的信号,
+   不该和透明度两套信号打架。(书架「复制为 Markdown」空态就踩过这条。) */
+.shelf-import:disabled,
+.btn-primary:disabled,
+.ai-apply:disabled,
+.tts-mini-btn.tts-mini-play:disabled {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-tertiary);
+  box-shadow: none;
+}
 
+/* ---------- Glass chrome (FlClash recipe) ----------
+
+   Translated from FlClash's `LiquidGlassStyle.regular`:
+     tint 62% of the surface · blur + saturate(1.9) · rim, ring, hairline.
+
+   What makes glass read as glass is *not* the blur radius. It is three
+   things, and dropping any one of them turns it into frosted plastic:
+
+     1. A low tint (62%) — you have to be able to see the page move behind it.
+     2. A saturated backdrop — the colour behind should bloom, not grey out.
+     3. An edge: a 1px light rim on the top face, a ring just inside, and a
+        hairline outside. That ring is the whole trick. FlClash draws it in a
+        fragment shader; CSS gets it from three stacked shadows.
+
+   Only chrome wears it. Cards, page bodies and list rows are opaque on
+   purpose — glass on everything is what makes an interface look like it is
+   made of nothing. */
 .reader-top,
 .reader-bottom,
 .reader-toc,
@@ -178,37 +211,51 @@ button:disabled {
 .lookup-card,
 .repair-panel,
 .ai-drawer,
-.settings-panel,
 .modal-panel {
   position: fixed;
   /* 划词工具压在一切 chrome 之上:选区时它才是当前任务,抽屉/播放条都得让位。
-     阅读区 iframe 的 z-index 是 auto,所以任何正数都够;40 与它自己的规则一致。 */
-  z-index: 40;
-  background:
-    linear-gradient(135deg, var(--color-highlight), transparent 42%), var(--color-surface-glass);
+     阅读区 iframe 的 z-index 是 auto,所以任何正数都够。 */
+  z-index: var(--z-chrome);
+  background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--color-border);
-  box-shadow:
-    var(--shadow-floating),
-    inset 0 1px 0 var(--color-highlight);
+  box-shadow: var(--glass-edge);
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .reader-top,
-  .reader-bottom,
-  .reader-toc,
-  .reader-settings,
-  .selection-toolbar,
-  .lookup-card,
-  .repair-panel,
-  .ai-drawer,
-  .settings-panel,
-  .modal-panel {
-    background: var(--color-surface);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
+/* Panels that hold running text get the *page* tone, not the card tone —
+   which is what lets the cards inside them read as cards. FlClash's sheets are
+   page-coloured for exactly this reason: a white sheet with white groups is a
+   flat white room.
+
+   Same material, thicker pour. */
+.reader-toc,
+.reader-settings,
+.lookup-card,
+.repair-panel,
+.ai-drawer,
+.modal-panel {
+  --glass-tint: color-mix(in srgb, var(--surface-page) 78%, transparent);
+  --glass-sheen: color-mix(in srgb, var(--surface-page) 66%, #ffffff);
+  background: var(--glass-bg-bar);
+}
+
+/* The reading themes swap the glass tint with the paper, so a cream book does
+   not float under a white slab. */
+.reader .reader-top,
+.reader .reader-bottom,
+.reader .reader-toc,
+.reader .reader-settings,
+.reader .lookup-card,
+.reader .selection-toolbar {
+  /* 兜底值不能省:--reader-bg 只在 .reader 上定义,任何一处漏挂都会让
+     color-mix 变成 invalid-at-computed-value,background 直接退回 transparent
+     —— 工具条会静默消失。 */
+  --glass-tint: color-mix(in srgb, var(--reader-bg, var(--color-surface)) 62%, transparent);
+  --glass-sheen: color-mix(
+    in srgb,
+    var(--reader-bg, var(--color-surface)) 82%,
+    var(--reader-fg, var(--color-text-primary))
+  );
 }
 
 /* ---------- Library (shelf home) ---------- */
@@ -227,14 +274,10 @@ button:disabled {
   /* 侧栏收起 = 第一列归零。grid-template-columns 本身可过渡,所以不用改结构、
      也不用给内容加包装层。不支持的引擎会瞬间切换,功能不受影响。 */
   transition: grid-template-columns var(--duration-base) var(--ease-emphasized);
-  background:
-    radial-gradient(
-      1100px 460px at 18% -8%,
-      color-mix(in srgb, var(--color-accent) 7%, transparent),
-      transparent 68%
-    ),
-    radial-gradient(900px 420px at 88% -12%, rgba(255, 166, 87, 0.05), transparent 66%),
-    var(--color-bg);
+  /* 桌面,不是舞台。原来两层 radial-gradient(accent + 橙色)让整个书架浮在
+     一片雾上 —— 那是营销页的语法,不是工具的。FlClash 的页面是纯色的:
+     层次全部由「页面 / 卡片」两级表面差赚出来,不靠背景光。 */
+  background: var(--surface-page);
   overflow: hidden;
 }
 
@@ -249,7 +292,7 @@ button:disabled {
 .lib-sidebar-top {
   height: 40px;
   flex-shrink: 0;
-  margin: calc(var(--space-md) * -1) calc(var(--space-sm) * -1) 0 calc(var(--space-md) * -1);
+  margin: calc(var(--space-16) * -1) calc(var(--space-8) * -1) 0 calc(var(--space-16) * -1);
 }
 
 /* 无系统标题栏:窗口顶部 40px 是拖拽把手。用 fixed 而不是占一格,是为了侧栏
@@ -322,13 +365,6 @@ button:disabled {
     opacity var(--duration-base) var(--ease-out);
 }
 
-.library-brand-block {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
 /* 品牌在交通灯下方、侧栏内;拖动窗口由它和上面的顶部条一起承担。
    刻意不画底部分隔线:品牌和导航项是一体的,线会把它切成两块。 */
 .lib-brand {
@@ -338,8 +374,8 @@ button:disabled {
   min-width: 0;
   /* 只抵消左右:纵向的内边距已经被 .lib-sidebar-top 的负 margin 用掉了,
      这里再抵消一次就会压到顶部条下面。 */
-  margin: 0 calc(var(--space-sm) * -1) 0 calc(var(--space-md) * -1);
-  padding: var(--space-sm) var(--space-sm) var(--space-md) var(--space-md);
+  margin: 0 calc(var(--space-8) * -1) 0 calc(var(--space-16) * -1);
+  padding: var(--space-8) var(--space-8) var(--space-16) var(--space-16);
 }
 
 /* App mark: the one piece of brand color in the chrome. */
@@ -361,7 +397,7 @@ button:disabled {
 }
 
 .library-brand {
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -373,17 +409,17 @@ button:disabled {
   overflow-y: auto;
   width: min(1240px, 100%);
   margin: 0 auto;
-  padding: var(--space-xl) var(--space-xl) var(--space-xxl);
+  padding: var(--space-32) var(--space-32) var(--space-48);
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: var(--space-24);
 }
 
 .shelf-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
@@ -391,13 +427,37 @@ button:disabled {
 .shelf-tools {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
+}
+
+/* 同一条水平线上的控件必须一样高。搜索 34 / 排序 37 / 管理 41 / 导入 37 ——
+   四个高度并排时「管理」比「导入」高半头,整条工具条就散了。统一走
+   `--shelf-control`(:root),高度写在高度上,不靠 padding 撑(字体会让
+   padding 方案漂)。 */
+.shelf-search,
+.shelf-view-toggle,
+.shelf-sort-dir,
+.shelf-manage,
+.shelf-import,
+.shelf-tools .dropdown-trigger {
+  height: var(--shelf-control);
+}
+
+/* 三组,不是一排同权控件:搜索 / 浏览方式 / 操作。
+   六颗按钮统一 8px 间距时,眼睛找不到真正的两个入口(搜什么、怎么导入),
+   于是整条工具栏读作「一堆按钮」。组内 8px,组间加倍。 */
+.shelf-tools > .shelf-search {
+  margin-right: var(--space-8);
+}
+
+.shelf-tools > .shelf-manage {
+  margin-left: var(--space-8);
 }
 
 .shelf-title {
   margin: 0;
-  font-size: 30px;
+  font-size: var(--font-size-3xl);
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: var(--line-height-tight);
@@ -421,9 +481,10 @@ button:disabled {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface);
-  padding: 7px 14px;
+  padding: var(--space-6) var(--space-14);
   color: var(--color-text-tertiary);
-  box-shadow: var(--shadow-soft);
+  /* 已有 1px border 就不要再叠一层 shadow:两条边界在浅纸底上互相削弱,
+     输入框会显得既没有高度也没有明确轮廓。 */
   cursor: text;
   transition:
     border-color var(--duration-base) var(--ease-out),
@@ -464,8 +525,8 @@ button:disabled {
 /* 快捷键提示:装饰品,聚焦即撤(输入宽度优先给用户正在打的字)。 */
 .shelf-search-kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-none);
   padding: 3px 5px;
   border: 1px solid var(--color-border);
   border-radius: 5px;
@@ -488,18 +549,16 @@ button:disabled {
   color: var(--color-on-accent);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  padding: 9px 18px;
+  padding: 0 var(--space-16);
   cursor: pointer;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
-    0 6px 18px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  /* 实底 + 一层贴地阴影。FlClash 的主按钮不发光:它是一块色,不是一个光源。
+     彩色霓虹阴影会让按钮从纸面浮起,也把唯一的饱和色糊成一片。 */
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
 }
 
-.shelf-import:hover {
-  filter: brightness(1.07);
-  box-shadow:
-    0 2px 4px color-mix(in srgb, var(--color-accent) 40%, transparent),
-    0 10px 26px color-mix(in srgb, var(--color-accent) 34%, transparent);
+.shelf-import:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 88%, #000000);
+  box-shadow: 0 2px 6px rgba(var(--shadow-color), 0.22);
 }
 
 /* ---------- Shelf grid ---------- */
@@ -510,7 +569,7 @@ button:disabled {
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: var(--space-xl) var(--space-lg);
+  gap: var(--space-32) var(--space-24);
 }
 
 /* 固定行数:工具条「每行」选了具体数字。minmax(0,1fr) 让封面随列数均分,
@@ -543,17 +602,19 @@ button:disabled {
   position: relative;
   aspect-ratio: 3 / 4;
   width: 100%;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  /* 书是一张卡片,所以走卡片的圆角(12)和发丝边,不是 8px 的「控件」。
+     阴影留着 —— 封面是实物,纸页有厚度;但只留一层,不做三层堆叠。 */
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-sm);
-  padding: var(--space-md);
-  box-shadow: var(--shadow-cover);
+  gap: var(--space-8);
+  padding: var(--space-16);
+  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.08);
   transform: translateY(0);
   transition:
     transform var(--duration-base) var(--ease-spring),
@@ -564,7 +625,7 @@ button:disabled {
    都删了 —— 每个都单看有理,叠在一起就是"热闹"。 */
 .book-cover:hover {
   transform: translateY(-4px);
-  box-shadow: var(--shadow-cover-hover);
+  box-shadow: 0 8px 24px -8px rgba(var(--shadow-color), 0.3);
 }
 
 .book-cover:active {
@@ -577,12 +638,12 @@ button:disabled {
   font-size: 52px;
   font-weight: var(--font-weight-medium);
   color: rgba(29, 27, 23, 0.78);
-  line-height: 1;
+  line-height: var(--leading-none);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 .book-cover-title {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   line-height: var(--line-height-tight);
   color: rgba(29, 27, 23, 0.62);
   text-align: center;
@@ -679,7 +740,7 @@ button:disabled {
 
 /* 作者自己一行:与进度同一行时会被定宽尾巴压窄,只剩「迟…」。 */
 .book-meta-author {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
 
@@ -716,9 +777,9 @@ button:disabled {
   height: 27px;
   border: 0;
   border-radius: var(--radius-full);
-  background: rgba(20, 18, 14, 0.44);
-  backdrop-filter: blur(8px) saturate(1.3);
-  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+  /* 浮在封面图上:一个实心的深色圆点比「半透明+模糊」更清楚,也不用为
+     每一个按钮重算一次底下那张图的模糊。 */
+  background: rgba(20, 18, 14, 0.62);
   color: #ffffff;
   cursor: pointer;
   transition:
@@ -766,9 +827,7 @@ button:disabled {
   height: 28px;
   border: 0;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
-  backdrop-filter: blur(10px) saturate(1.3);
-  -webkit-backdrop-filter: blur(10px) saturate(1.3);
+  background: var(--color-surface);
   box-shadow: var(--shadow-soft);
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -885,8 +944,8 @@ button:disabled {
 
 /* 文件信息一行:格式与大小从书架卡片退到这里 —— 详情弹窗是它们唯一的展示位。 */
 .book-info-file {
-  margin: calc(var(--space-sm) * -1) 0 var(--space-md);
-  font-size: 12px;
+  margin: calc(var(--space-8) * -1) 0 var(--space-16);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -917,7 +976,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: var(--space-sm);
+  margin-top: var(--space-8);
 }
 
 .book-info-tag {
@@ -925,15 +984,14 @@ button:disabled {
   border-radius: var(--radius-full);
   background: var(--color-accent-soft);
   color: var(--color-accent);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .shelf-sort-dir {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
   padding: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
@@ -974,7 +1032,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 140px auto;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
   width: 100%;
   padding: 8px 10px;
   border: 0;
@@ -992,7 +1050,7 @@ button:disabled {
 }
 
 .stats-rank-index {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -1022,7 +1080,7 @@ button:disabled {
 }
 
 .stats-rank-time {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -1049,7 +1107,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 9px 14px;
+  padding: 0 14px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--color-surface) 72%, transparent);
@@ -1067,12 +1125,12 @@ button:disabled {
   border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
 }
 
-/* 批量管理进行中:ink 填充与导航选中态同一语言 —— 这是「模式开着」的状态,
-   不是需要 accent 去强调的主操作。 */
+/* 批量管理进行中:accent 徽记与导航选中态同一语言 —— 这是「模式开着」的状态,
+   不是一块需要压过所有内容的主按钮。 */
 .shelf-manage.is-active {
-  color: var(--color-bg);
-  border-color: var(--color-text-primary);
-  background: var(--color-text-primary);
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+  background: var(--color-accent-soft);
 }
 
 /* Selection ring + check badge, shared by grid cards and list rows. */
@@ -1094,9 +1152,7 @@ button:disabled {
   justify-content: center;
   border: 1.5px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: var(--color-surface);
   color: var(--color-on-accent);
   /* 进入批量态时圆圈从中心弹出来;checked 时背景/边框平滑过渡到 accent。
      错开 30ms 让封面封边的蓝色 ring 先出现,圆圈再弹。 */
@@ -1151,11 +1207,11 @@ button:disabled {
 
 .shelf-bulk {
   position: sticky;
-  bottom: var(--space-md);
+  bottom: var(--space-16);
   z-index: 15;
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   /* 它是 .library-main(flex 列)的子项:书一多、内容超高时,flex 会把它
      **压扁**来腾地方 —— overflow: hidden 又恰好把默认的 min-height:auto
      保护关掉了。书架一满,工具条就被压成一条缝(用户看到的"变形")。 */
@@ -1163,13 +1219,11 @@ button:disabled {
   /* 一条浮在书架上的工具条,宽度跟着内容走、居中 —— 横跨整屏既没必要,
      也让它看起来像页脚而不是"针对选中项的操作"。 */
   width: fit-content;
-  margin: var(--space-lg) auto 0;
+  margin: var(--space-24) auto 0;
   padding: 8px 12px 8px 18px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: var(--color-surface-glass);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--color-surface);
   box-shadow: var(--shadow-floating);
   animation: fade-up var(--duration-base) var(--ease-emphasized);
   /* 退场要收高度:只淡出的话那一块空间会在卸载的瞬间塌掉,书跟着跳上来。
@@ -1213,7 +1267,7 @@ button:disabled {
 .book-info-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 @media (max-width: 560px) {
@@ -1227,7 +1281,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: var(--space-sm);
+  margin-top: var(--space-8);
 }
 
 .tag-chip {
@@ -1237,7 +1291,7 @@ button:disabled {
   background: var(--color-surface);
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition:
     color var(--duration-fast) var(--ease-out),
@@ -1285,7 +1339,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.06em;
   color: var(--color-text-tertiary);
 }
@@ -1308,7 +1362,7 @@ button:disabled {
   gap: 4px;
   border: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 
@@ -1386,7 +1440,7 @@ button:disabled {
   /* 固定宽度而不是 fit-content:输入框是 flex:1,宽度定下来才不会被
      标签数量牵着忽宽忽窄。420px 让 13 个预设标签排成整齐的三行。 */
   width: min(92vw, 420px);
-  z-index: 20;
+  z-index: var(--z-panel);
   padding: 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -1401,7 +1455,7 @@ button:disabled {
 .shelf-skeleton {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: var(--space-xl) var(--space-lg);
+  gap: var(--space-32) var(--space-24);
 }
 
 .shelf-skeleton-card {
@@ -1445,7 +1499,7 @@ button:disabled {
 .empty-shelf {
   display: flex;
   flex-direction: column;
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-24);
 }
 
 .empty-shelf-row {
@@ -1525,8 +1579,8 @@ button:disabled {
 }
 
 .library-empty-title {
-  margin: 0 0 var(--space-sm);
-  font-size: 26px;
+  margin: 0 0 var(--space-8);
+  font-size: var(--font-size-2xl);
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: var(--line-height-tight);
@@ -1540,9 +1594,9 @@ button:disabled {
 }
 
 .library-empty-formats {
-  margin: var(--space-lg) 0 0;
+  margin: var(--space-24) 0 0;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 /* 继续阅读 hero 卡:书架在排序之外永远浮现「上次在读的那本」。
@@ -1551,7 +1605,7 @@ button:disabled {
 .continue-reading {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
+  gap: var(--space-24);
   width: 100%;
   padding: 20px 22px;
   margin: 0;
@@ -1594,7 +1648,7 @@ button:disabled {
   font-family: var(--font-serif);
   font-size: 40px;
   font-weight: var(--font-weight-medium);
-  line-height: 1;
+  line-height: var(--leading-none);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
@@ -1607,12 +1661,12 @@ button:disabled {
 }
 
 .continue-reading-eyebrow {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
 .continue-reading-title {
-  font-size: 20px;
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.015em;
   line-height: var(--line-height-tight);
@@ -1650,7 +1704,7 @@ button:disabled {
 }
 
 .continue-reading-pct {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1681,8 +1735,8 @@ button:disabled {
 @media (max-width: 720px) {
   /* 窄窗口里 hero 收成一排小卡:封面 64px,字号回落,右侧圆钮让位。 */
   .continue-reading {
-    gap: var(--space-md);
-    padding: var(--space-md);
+    gap: var(--space-16);
+    padding: var(--space-16);
   }
 
   .continue-reading-cover {
@@ -1702,15 +1756,15 @@ button:disabled {
 /* 读架失败态的按钮行:重试 + 导入并排,居中跟空态文案对齐。 */
 .library-empty-actions {
   display: flex;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   justify-content: center;
-  margin-top: var(--space-lg);
+  margin-top: var(--space-24);
 }
 
 .library-empty-note {
-  margin: var(--space-xs) 0 0;
+  margin: var(--space-4) 0 0;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 /* 空书架的顶部栏只剩标题和导入 —— 导入顶到最右,和它有书时的位置一致
@@ -1730,7 +1784,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-md);
+  gap: var(--space-16);
   margin-bottom: 10px;
 }
 
@@ -1741,7 +1795,7 @@ button:disabled {
 
 .library-error {
   margin: 0;
-  padding: 10px var(--space-md);
+  padding: 10px var(--space-16);
   border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-danger) 7%, transparent);
@@ -1753,8 +1807,8 @@ button:disabled {
 /* Drop overlay (full-window) */
 .drop-overlay {
   position: fixed;
-  inset: var(--space-md);
-  z-index: 50;
+  inset: var(--space-16);
+  z-index: var(--z-overlay);
   border: 2px dashed var(--color-accent);
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
@@ -1772,15 +1826,24 @@ button:disabled {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   box-shadow: var(--shadow-floating);
-  padding: var(--space-md) var(--space-xl);
+  padding: var(--space-16) var(--space-32);
   font-weight: var(--font-weight-medium);
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
 }
 
-/* ---------- Library sidebar ---------- */
+/* ---------- Library sidebar ----------
 
-/* 侧栏 = 安静的玻璃书脊:半透明磨砂把主区的暖色渐变透上来,形成层次,
-   而不是和内容抢同一片白。 */
+   FlClash's sidebar is the *page*, not a panel: same tone, no divider, no
+   card. The only structure is the row you are on. That is why it can hold 8
+   destinations without looking like a list — the eye reads one highlighted
+   row, not eight boxes.
+
+   Selection has two parts, and they do different jobs:
+     · the row fill slides between destinations (neutral, 7% ink)
+     · a 3×16 accent bar sits at the sidebar's own left edge
+   The bar is what you actually track while scrolling; the fill is what tells
+   you the row is live. Neither one is the accent-tinted pill this used to be
+   — an accent fill on a nav row competes with the primary action. */
 .lib-sidebar {
   grid-column: 1;
   grid-row: 1;
@@ -1790,11 +1853,8 @@ button:disabled {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--space-md) var(--space-sm) var(--space-md) var(--space-md);
-  border-right: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  padding: var(--space-16) var(--space-12) var(--space-16) var(--space-16);
+  background: transparent;
   animation: fade-in var(--duration-base) var(--ease-out);
   transition: opacity var(--duration-fast) var(--ease-out);
 }
@@ -1810,22 +1870,53 @@ button:disabled {
   /* indicator 的父容器,必须 relative;grid 保持原排版。 */
   position: relative;
   display: grid;
-  gap: 2px;
+  gap: var(--space-4);
 }
 
-/* 侧栏的项是圆角矩形(不是胶囊),指示条跟着它的形状走。 */
+/* 指示条 = 选中行的底。中性,不是 accent —— 「我在哪」靠位置说,不靠颜色喊。
+   圆角跟着行(10px),滑动由组件写 transform。 */
 .lib-sidebar-nav .sliding-indicator {
-  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  border-radius: var(--radius-control);
+  transition:
+    transform var(--duration-base) var(--spring-snappy),
+    width var(--duration-base) var(--spring-snappy),
+    height var(--duration-fast) var(--ease-out);
+}
+
+/* 滑块既然是实心 accent,被它盖住的文字就必须翻纸色 —— 否则 accent 字压在
+   accent 底上等于消失。用 :has 限定,只有真画了滑块的容器才受影响;侧栏
+   那处滑块被改成中性灰,它的文字规则特异性更高,不受这条干扰。 */
+:has(> .sliding-indicator) button.is-active,
+:has(> .sliding-indicator) button[aria-pressed='true'],
+:has(> .sliding-indicator) button[aria-current='page'] {
+  color: var(--color-on-accent);
+}
+
+/* 当前项的记号:3×16 的 accent 短竖条,贴在选中胶囊左缘外侧 6px。
+   曾经写 `left: calc(var(--space-16) * -1)`(导航还没有内边距时留下的算式),
+   于是它跑到窗口最左边,与选中行隔了整整 16px —— 既不像这一行的记号,也
+   不像窗口的导轨,只像一条渲染毛刺。 */
+.lib-sidebar-nav .sliding-indicator::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: calc(var(--space-6) * -1);
+  width: 3px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
 }
 
 .lib-sidebar-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 34px;
-  padding: 0 10px;
+  gap: var(--space-12);
+  height: 40px;
+  padding: 0 var(--space-12);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--color-text-secondary);
   font: inherit;
@@ -1836,13 +1927,11 @@ button:disabled {
      切 background 反而会和 indicator 打架。 */
   position: relative;
   z-index: 1;
-  transition:
-    color var(--duration-fast) var(--ease-out),
-    font-weight var(--duration-fast) var(--ease-out);
+  transition: color var(--duration-fast) var(--ease-out);
 }
 
 .lib-sidebar-item:hover {
-  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   color: var(--color-text-primary);
 }
 
@@ -1853,45 +1942,45 @@ button:disabled {
   background: transparent;
 }
 
-/* nav 内(视图 + 我的分组)的高亮:背景交给 indicator(ink 填充),这里只换
-   字色与字重。aria-current 跟着指示条走,屏幕阅读器不会丢「当前页」。 */
+/* nav 内的激活行:文字回到墨色(不是 accent),只有图标是 accent。
+   整行的 accent 字会让八个目的地读起来像八个主操作。 */
 .lib-sidebar-nav .lib-sidebar-item.is-active,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'],
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] {
-  color: var(--color-bg);
+  color: var(--color-text-primary);
   font-weight: var(--font-weight-medium);
 }
 
-/* nav 内的高亮项里,图标与计数也跟着翻成纸色 —— 整个墨块看起来统一。 */
+/* nav 内的高亮项里,图标与计数也跟着翻成 accent —— 整块看起来统一。 */
 .lib-sidebar-nav .lib-sidebar-item.is-active svg,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'] svg,
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] svg,
 .lib-sidebar-nav .lib-sidebar-item.is-active .lib-sidebar-count,
 .lib-sidebar-nav .lib-sidebar-item[aria-current='page'] .lib-sidebar-count,
 .lib-sidebar-nav .lib-sidebar-item[aria-pressed='true'] .lib-sidebar-count {
-  color: var(--color-bg);
+  color: var(--color-accent);
 }
 
 /* 标签组的 chip 不在 nav 里,且项数随用户而变 —— 不画 indicator,
-   高亮走按钮自己的 ink 背景,与分组同一套语言。 */
+   高亮走按钮自己的 accent 淡底,与分组同一套语言。 */
 .lib-sidebar-item.is-tag[aria-pressed='true'] {
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
   font-weight: var(--font-weight-medium);
 }
 
 .lib-sidebar-item.is-tag[aria-pressed='true'] svg,
 .lib-sidebar-item.is-tag[aria-pressed='true'] .lib-sidebar-count {
-  color: var(--color-bg);
+  color: var(--color-accent);
 }
 
 .lib-sidebar-item.is-tag[aria-pressed='true'] .lib-sidebar-dot {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-text-primary) 70%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 32%, transparent);
 }
 
 .lib-sidebar-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -1901,12 +1990,17 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: var(--space-lg) 0 var(--space-xs);
-  padding: 0 10px;
-  font-size: 11px;
+  margin: var(--space-24) 0 var(--space-4);
+  /* 与行内文字同一个 12px 内边距:10 会与下面的行错开两像素,一眼看不出
+     却让整列像没对齐。 */
+  padding: 0 var(--space-12);
+  font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
+  /* 小标题用二级墨色,不是三级:11px 的三级墨在纸底上只有 2.6:1,读它得像
+     猜。同一个角色的 `.modal-section-label` 一直是 12px + 二级墨 —— 两处
+     同职不同色,是最容易被看见的那种不齐。 */
+  color: var(--color-text-secondary);
 }
 
 .lib-sidebar-clear {
@@ -1915,7 +2009,7 @@ button:disabled {
   background: none;
   color: var(--color-text-tertiary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   cursor: pointer;
 }
 
@@ -1932,19 +2026,22 @@ button:disabled {
 .lib-sidebar-goal {
   display: block;
   width: 100%;
-  margin: 0 0 var(--space-sm);
-  padding: 12px 12px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: none;
+  margin: 0 0 var(--space-8);
+  padding: var(--space-12);
+  border: 0;
+  /* 侧栏是页面色,所以这里真是一张卡片:比页面亮一档,圆角 12。 */
+  border-radius: var(--radius-group);
+  background: var(--surface-card);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--duration-fast) var(--ease-out);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .lib-sidebar-goal:hover {
-  border-color: color-mix(in srgb, var(--color-text-primary) 24%, var(--color-border));
+  box-shadow: 0 0 0 1px var(--color-border);
 }
 
 .lib-sidebar-goal.is-plain {
@@ -1966,7 +2063,7 @@ button:disabled {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   margin-bottom: 8px;
 }
 
@@ -1978,7 +2075,7 @@ button:disabled {
 }
 
 .lib-goal-target {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2004,9 +2101,9 @@ button:disabled {
   display: grid;
   gap: 2px;
   margin-top: auto;
-  margin-right: calc(var(--space-sm) * -1);
-  margin-left: calc(var(--space-md) * -1);
-  padding: var(--space-md) var(--space-sm) 0 var(--space-md);
+  margin-right: calc(var(--space-8) * -1);
+  margin-left: calc(var(--space-16) * -1);
+  padding: var(--space-16) var(--space-8) 0 var(--space-16);
   border-top: 1px solid var(--color-border);
 }
 
@@ -2024,7 +2121,7 @@ button:disabled {
 .stats-page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: var(--space-24);
   /* 统计图表铺满 1240px 会变成一排宽方块;给页面一个阅读友好的上限。 */
   max-width: 880px;
   animation: fade-up var(--duration-base) var(--ease-out);
@@ -2033,8 +2130,8 @@ button:disabled {
 .notes-empty {
   display: grid;
   justify-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-xxl) var(--space-xl);
+  gap: var(--space-8);
+  padding: var(--space-48) var(--space-32);
   /* 不用虚线框:那是上传区的语言(与书架空态同一原则),批注聚合页是内容页。 */
   color: var(--color-text-tertiary);
   text-align: center;
@@ -2057,19 +2154,19 @@ button:disabled {
 .notes-groups {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xl);
+  gap: var(--space-32);
 }
 
 .note-group {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .note-group-head {
   display: flex;
   align-items: baseline;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .note-group-title {
@@ -2079,7 +2176,7 @@ button:disabled {
 }
 
 .note-group-count {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -2087,7 +2184,7 @@ button:disabled {
 .note-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2096,8 +2193,8 @@ button:disabled {
 .note-card {
   position: relative;
   display: flex;
-  gap: var(--space-md);
-  padding: var(--space-md) var(--space-md) var(--space-md) var(--space-lg);
+  gap: var(--space-16);
+  padding: var(--space-16) var(--space-16) var(--space-16) var(--space-24);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -2116,8 +2213,8 @@ button:disabled {
 /* 左侧那道颜色条 = 这条批注在书里用的高亮色:两处看到的是一回事。 */
 .note-swatch {
   position: absolute;
-  top: var(--space-md);
-  bottom: var(--space-md);
+  top: var(--space-16);
+  bottom: var(--space-16);
   left: 0;
   width: 3px;
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
@@ -2139,7 +2236,7 @@ button:disabled {
 
 .note-own {
   margin: 0;
-  padding-left: var(--space-md);
+  padding-left: var(--space-16);
   border-left: 2px solid color-mix(in srgb, var(--color-text-primary) 10%, transparent);
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
@@ -2149,16 +2246,16 @@ button:disabled {
 .note-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
   margin-top: 2px;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .notes-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
@@ -2177,7 +2274,7 @@ button:disabled {
   background: var(--color-surface);
   color: var(--color-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition:
     color var(--duration-fast) var(--ease-out),
@@ -2195,7 +2292,7 @@ button:disabled {
 .note-actions {
   margin-left: auto;
   display: flex;
-  gap: var(--space-md);
+  gap: var(--space-16);
   opacity: 0;
   transform: translateX(4px);
   transition:
@@ -2215,7 +2312,7 @@ button:disabled {
   background: none;
   color: var(--color-accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -2266,12 +2363,12 @@ button:disabled {
 .note-edit-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
 }
 
 .note-edit-hint {
   margin-right: auto;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
 
@@ -2301,10 +2398,10 @@ button:disabled {
     grid-row: 1;
     flex-direction: row;
     align-items: center;
-    gap: var(--space-sm);
+    gap: var(--space-8);
     overflow-x: auto;
     overflow-y: hidden;
-    padding: var(--space-sm) var(--space-md);
+    padding: var(--space-8) var(--space-16);
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
   }
@@ -2332,7 +2429,7 @@ button:disabled {
   }
 
   .lib-sidebar-count {
-    margin-left: var(--space-xs);
+    margin-left: var(--space-4);
   }
 
   /* 横向排布时「沉底」失效,改成靠右并去掉那根竖分隔线(负 margin 一并归零)。 */
@@ -2384,8 +2481,10 @@ button:disabled {
 .reader .repair-panel,
 .reader .ai-drawer,
 .reader .dropdown-menu,
+.reader .action-menu,
 .reader-scope .ai-drawer,
-.reader-scope .dropdown-menu {
+.reader-scope .dropdown-menu,
+.reader-scope .action-menu {
   background: var(--reader-panel, var(--color-surface-glass));
   backdrop-filter: var(--glass-blur-heavy);
   -webkit-backdrop-filter: var(--glass-blur-heavy);
@@ -2403,8 +2502,10 @@ button:disabled {
 .reader .repair-panel,
 .reader .ai-drawer,
 .reader .dropdown-menu,
+.reader .action-menu,
 .reader-scope .ai-drawer,
-.reader-scope .dropdown-menu {
+.reader-scope .dropdown-menu,
+.reader-scope .action-menu {
   --color-text-primary: var(--reader-fg, var(--color-text-primary));
   --color-text-secondary: color-mix(
     in srgb,
@@ -2418,6 +2519,22 @@ button:disabled {
   );
   --color-surface: var(--reader-panel-solid, var(--color-surface));
   --color-border: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent);
+  /* 表面三级也必须跟着纸走。`--surface-*` 是从 **app** 主题派生的阶,
+     夜间阅读时它仍是浅色,而上面几行已经把文字换成亮色 —— 结果就是
+     白底白字:设置分组卡片在深色纸上是一块发光的白板,里面的说明文字
+     几乎看不见。按纸与墨重新推导:浅纸上略深一档、深纸上略亮一档,
+     两个方向都读得出「这是一块面」,也永远不会和字同色。 */
+  --surface-page: var(--reader-panel-solid, var(--color-surface));
+  --surface-card: color-mix(
+    in srgb,
+    var(--reader-panel-solid, var(--color-surface)) 94%,
+    var(--reader-fg, var(--color-text-primary))
+  );
+  --surface-sunk: color-mix(
+    in srgb,
+    var(--reader-panel-solid, var(--color-surface)) 88%,
+    var(--reader-fg, var(--color-text-primary))
+  );
   color: var(--reader-fg, var(--color-text-primary));
 }
 
@@ -2509,15 +2626,15 @@ button:disabled {
 .reader-settings {
   top: 64px;
   right: max(16px, calc(50% - 320px));
-  /* 300px:最窄的「四档分段控件 + 四个字标签」一行也要放得下(左右/上下
-     边距各四档)。再窄就被面板的 overflow-x:hidden 咬掉最后一档。 */
+  /* 300px:四字标签 + 四档分段里每档还有 41px(够放两个汉字)。再窄一档
+     标签就先被挤,胶囊等分后档位也不足两字宽。 */
   width: 300px;
   max-width: calc(100vw - 32px);
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-16);
   /* 面板加高后必须能滚:顶 64px 起,底给底栏(16px + ~56px)留位,
      否则简繁转换等下面的行被伸出视口、永远点不到。
      overflow-x:hidden 顺带收掉:面板里 nowrap 的按钮行(.segmented 多颗)
@@ -2527,15 +2644,59 @@ button:disabled {
   overflow-x: hidden;
   /* 与 .reader-bottom 同为 z-index:40 时,DOM 在后的底栏会盖住面板
      (设置面板在底部工具条之前渲染)——抬一级,浮层面永远压在底栏上。 */
-  z-index: 45;
+  z-index: var(--z-chrome-top);
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 阅读设置 = 一个面板两页(排版 / 显示)。面板本身不再滚:页签钉在顶上,
+   只有内容区滚 —— 和设置弹窗同一条规矩,滚到底时页签还在手里。
+   自撑高度也要收:原先是两个独立面板各自 overflow-y,合并后必须由
+   flex 子项(min-height:0)接住滚动,否则内容把面板顶出 max-height。 */
+.reader-settings.reader-prefs {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* 页签带:一条**滚不走**的横带,内容和它之间没有缝。滚上来的卡片会在它的
+   下边缘被切住 —— 切在一条画出来的横线上读作「滚到头部下面去了」,切在一条
+   透明的缝里则读作「卡片飞出来了」。它自己不刷底色:面板本来就是一块玻璃,
+   再刷一层同料只会多出一道明度台阶。 */
+.reader-prefs-head {
+  flex-shrink: 0;
+  padding: var(--space-12) var(--space-16) var(--space-8);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.reader-prefs-tabs {
+  flex-shrink: 0;
+}
+
+.reader-prefs .settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-height: 0;
+  /* 上下两端都靠渐隐收口:硬切一刀读作「界面坏了」,渐隐读作「还有下文」
+     (与 `.settings-body` 同一套)。**渐隐长度必须等于内边距长度** —— 长了,
+     滚到头的最后一行也会被虚化,于是「读完了」看着像「还没完」。 */
+  padding: var(--space-32) var(--space-16) var(--space-24);
+  overflow-y: auto;
+  overflow-x: hidden;
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 var(--space-32),
+    #000 calc(100% - var(--space-24)),
+    transparent 100%
+  );
 }
 
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   min-width: 0;
 }
 
@@ -2545,6 +2706,33 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* 一行「四个字标签 + 四档分段」在 300px 面板里放不下。胶囊只会按内容排:
+   `max-width: 100%` 拦得住盒子,拦不住里面的按钮 —— 实测行宽 236、胶囊右缘
+   903,越过卡片内容右缘 15px,最后一档就压在边线上被面板的 overflow 咬掉。
+   分段控件的宽度不是「几颗字拼起来的」,它占满这一行剩下的宽度,所以档位要
+   **等分**那份宽度,而不是各按字数分。放得下时(单档的「选择 .ifo」)
+   保持原宽,不硬撑成一条通栏按钮。 */
+.settings-row > .segmented {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.settings-row > .segmented > button:not(.chrome-button),
+.settings-group > .segmented:not(.segmented-wrap) > button {
+  flex: 1 1 0;
+  min-width: 0;
+  /* 11px 是按「内容宽」定的;等分后一档可能只有 41px,两字标签 26 + 22 就
+     顶到边。6px 留出余量,蓝色滑块仍然铺满整档。 */
+  padding-inline: var(--space-6);
+}
+
+/* 分段控件自己就是一颗胶囊,不该再吃「组内分割线」的 padding-top ——
+   那 12px 空槽长在胶囊里面,把滑块顶到底部,看着像控件塌了一半。
+   上边线不用管:分割线用的是同一支 1px border,与胶囊自己的边框重合。 */
+.settings-group > .segmented {
+  padding-top: 0;
+}
+
 .segmented {
   display: flex;
   align-items: center;
@@ -2552,14 +2740,15 @@ button:disabled {
   padding: 2px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  /* track 由 ink 混出来,不是由 surface 混出来:surface 在浅色主题下就是
+     纸色本身,82% 混透明后 track 和底几乎同色,滑块(白)便无处落脚。
+     用 ink 的 6% 则永远比纸面深一档,滑块永远比 track 亮一档 —— 这条对
+     十个 app 主题和任意阅读纸色都成立。 */
+  /* 凹槽由 ink 混出,滑块是 accent 实底 —— FlClash 的分段控件就是这样:
+     灰槽 + 蓝胶囊。它不是「一个更灰的按钮」,它是一个开关,开关需要明确的
+     两个位置。 */
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
   max-width: 100%;
-}
-
-/* 选项较多的分段控件(字体列表等):允许换行。 */
-.segmented-wrap {
-  flex-wrap: wrap;
-  border-radius: var(--radius-md);
 }
 
 .segmented button {
@@ -2577,13 +2766,15 @@ button:disabled {
   color: var(--color-text-primary);
 }
 
+/* 选中 = 实心 accent + 翻纸色字。这条与 .segmented-animated 的滑块是同一块
+   料:同一个控件家族不该有两副长相 —— 带滑块的那几处用实心蓝,不带滑块的
+   (目录面板里的窄行)却用淡底 + 蓝字,并排出现时读者会当成两种控件。
+   深色主题的 accent 是提亮过的,所以字必须取 --color-on-accent(在白字上
+   只有 2.4:1)。 */
 .segmented button.is-active {
-  /* 选中 = ink 反色:夜间主题里 surface ≈ 面板底,浅蓝底会隐身;
-     墨块(暗主题下翻成浅墨)对任何 track 都有对比,也与页签同一套语言。 */
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
   font-weight: var(--font-weight-medium);
-  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
 }
 
 /* 弹性滑动滑块(Segmented 组件):active 底色由滑块接管,按钮自身透明,
@@ -2597,9 +2788,10 @@ button:disabled {
   top: 0;
   left: 0;
   border-radius: var(--radius-full);
-  /* 滑块即选中底:与 .segmented button.is-active 同一套 ink 反色。 */
-  background: var(--color-text-primary);
-  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
+  /* 滑块是「凹槽里凸起的一块面」,不是一块墨:surface + 一圈 1px 的环 +
+     极轻阴影。选中语义交给文字色(accent),滑块只负责位置。 */
+  background: var(--color-accent);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
   transition:
     translate 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
     width 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
@@ -2617,6 +2809,37 @@ button:disabled {
 .segmented-animated > button.is-active {
   background: transparent;
   box-shadow: none;
+  /* 滑块是蓝的,字就必须跟着翻白 —— 否则 accent 字压在 accent 底上消失。 */
+  color: var(--color-on-accent);
+}
+
+/* 选项较多的分段控件(字体列表):三列等宽网格,不是一排长短不一的胶囊。
+   之前是 `flex-wrap`:字数从 2 到 4,折成三四行,每行宽窄都不一样 —— 八种
+   字体看着像八颗随手撒上去的胶囊。改成网格后每格同宽、行行对齐,名字再长
+   也只影响自己那一格。放在 `.segmented button` / `.segmented-animated` 之后
+   是必须的:选择器权重与它们相同,靠顺序取胜。
+   Segmented 量的是按钮的 offsetLeft/offsetTop/offsetWidth,网格里照常对位;
+   绝对定位的滑块不参与网格布局,不会占掉一格。 */
+.segmented-wrap {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-radius: var(--radius-md);
+}
+
+.segmented-wrap > button {
+  /* 内圆角 = 外圆角 - 内边距。否则格子角比轨道角更圆,四角会露出一小块轨道
+     (胶囊装进圆角矩形就是这个毛病)。 */
+  border-radius: calc(var(--radius-md) - 2px);
+  padding-inline: var(--space-6);
+  /* 自定义字体名可能比格子长:截断交给 CSS。在 JSX 里切字符串 + 拼省略号,
+     既会切在中英混排的奇怪位置,也让「有没有截断」成了逻辑问题。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 与格子同一支圆角:滑块就是被选中的那一格。 */
+.segmented-wrap.segmented-animated > .segmented-thumb {
+  border-radius: calc(var(--radius-md) - 2px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2633,6 +2856,15 @@ button:disabled {
   color: var(--color-text-primary);
 }
 
+/* 分段控件里的步进按钮(字号 −/+)与同排选项同高。`.chrome-button` 是 34px
+   的方形热区,塞进 2px 内边距的胶囊里会把整个控件撑到 40px —— 一列里只有
+   「字号」那行比上下两行胖一圈,读起来像放错了控件。29px 是 `.segmented
+   button` 实测出来的内容高。 */
+.segmented .chrome-button {
+  width: 32px;
+  height: 29px;
+}
+
 .chrome-button {
   display: inline-flex;
   align-items: center;
@@ -2647,16 +2879,17 @@ button:disabled {
   flex-shrink: 0;
 }
 
-/* hover 不叠加在 ink 选中态上:开着 的面板按钮保持墨块,hover 只属于未按下的。 */
+/* hover 不叠加在选中态上:开着的面板按钮保持 accent 淡底,hover 只属于未按下的。 */
 .chrome-button:hover:not(:disabled):not(.is-active) {
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
-/* 面板开着的开关按钮:ink 反色 —— 与侧栏/页签同一套「选中 = 墨块」语言。 */
+/* 面板开着的开关按钮:accent 淡底 + accent 图标 —— 与侧栏/页签同一套「选中 =
+   徽记」语言。比 hover 的 12% 深一档(18%),所以「开着」和「正被划过」分得开。 */
 .chrome-button.is-active {
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
 }
 
 .reader-top {
@@ -2666,7 +2899,9 @@ button:disabled {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 2px;
+  /* 组与组之间 8px、组内 2px。同一个间距铺满一条 12 键工具条时,
+     眼睛拿不到任何「这里换了一类事」的信号,于是它读作一堆按钮。 */
+  gap: var(--space-8);
   padding: 5px;
   border-radius: var(--radius-full);
   transition:
@@ -2689,18 +2924,69 @@ button:disabled {
   margin-inline: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
+  gap: var(--space-12);
+  /* 与顶栏同高(44px):两条 chrome 是同一个家族,差 4px 就会看出来。
+     高度定死不靠 padding 撑:滑杆 18px、文字 19px,靠 padding 算出来的
+     高度会随统计项有无而跳。 */
+  min-height: 44px;
+  padding: 0 var(--space-16);
   border-radius: var(--radius-full);
   transition:
     opacity var(--duration-base) var(--ease-out),
     transform var(--duration-base) var(--ease-out);
 }
 
+/* 第二组读数(字数 / 剩余时间)。组间一条发丝线,和顶栏的三组同一配方:
+   18px 高、前景色 16% —— 比滑杆本身还淡,不会把底栏切成两截。 */
+.reader-stats {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding-left: var(--space-16);
+}
+
+.reader-stats::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: var(--space-6);
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 16%, transparent);
+}
+
 .reader:not(.chrome-visible) .reader-top,
 .reader:not(.chrome-visible) .reader-bottom {
   opacity: 0;
   pointer-events: none;
+}
+
+/* 顶栏分组:组内紧凑、组间一条发丝线。线用 reader 的前景色派生,所以
+   夜间/羊皮纸主题下它跟着纸的色温走,不会突然冒出半截冷灰。 */
+.chrome-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chrome-group + .chrome-group {
+  position: relative;
+  padding-left: var(--space-8);
+}
+
+/* 线比按钮矮一半:34px 的通高竖线在 44px 的胶囊里读作「隔断墙」,
+   而它只是「这里换了一类事」。18px 是分隔,不是分割。 */
+.chrome-group + .chrome-group::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: var(--space-4);
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 16%, transparent);
 }
 
 .reader:not(.chrome-visible) .reader-top {
@@ -2713,7 +2999,7 @@ button:disabled {
 
 .reader-title {
   max-width: 320px;
-  margin: 0 6px;
+  margin: 0 var(--space-6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2721,7 +3007,11 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 
-/* Custom range: quiet track, thumb grows on hover, accent while dragging. */
+/* Custom range: the track carries the reading position itself — filled solid
+   accent up to the thumb, a quiet remainder after it. Without the fill the
+   only evidence of progress was a 14px dot, and the track read as decoration.
+   `--fill` is handed in from ReaderBottomBar (CSS cannot read a range's
+   value), so the gradient has to be restated per vendor pseudo-element. */
 .reader-slider {
   -webkit-appearance: none;
   appearance: none;
@@ -2729,14 +3019,22 @@ button:disabled {
   height: 18px;
   background: transparent;
   cursor: pointer;
+  /* 触摸下压不许缩:滑块本身已有可拖动的位移反馈。 */
+  --fill: 0%;
 }
 
 .reader-slider::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-text-tertiary) 30%, transparent);
+  background: linear-gradient(
+    to right,
+    var(--color-accent) 0 var(--fill),
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent) var(--fill)
+      100%
+  );
 }
 
+/* 拇指用纸色描边而不是白:奶油纸上白圈会浮成一圈光晕。 */
 .reader-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 14px;
@@ -2744,8 +3042,8 @@ button:disabled {
   margin-top: -5px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  border: 2px solid var(--color-surface);
-  box-shadow: 0 1px 4px rgba(var(--shadow-color), 0.3);
+  border: 2px solid var(--reader-bg, var(--color-surface));
+  box-shadow: 0 1px 4px rgba(var(--shadow-color), 0.28);
   transition: transform var(--duration-fast) var(--ease-spring);
 }
 
@@ -2758,39 +3056,36 @@ button:disabled {
   transform: scale(1.35);
 }
 
-.reader-arrow {
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-}
-
-.reader-percent {
-  min-width: 0;
-  text-align: right;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 字数(本章/全书):点按切换口径,视觉与相邻只读统计一致。 */
-.reader-count-toggle {
+/* 底栏读数:同一枚叶子两种墨色。层级靠「墨色 + 字重」而不是字号 ——
+   缩放字号会在 12px 上掉可读性,而页码本来就该比估算值更确定。 */
+.reader-stat {
   border: none;
   background: transparent;
   padding: 0;
   min-width: 0;
-  text-align: right;
-  font-size: 12px;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
 }
 
-.reader-count-toggle:hover {
+.reader-stat.is-strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* 字数:点按切换本章/全书口径。视觉与相邻只读统计一致,只有 hover 亮起来
+   —— 它是个开关,但不是这条栏里的主角。 */
+.reader-stat.is-toggle {
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.reader-stat.is-toggle:hover {
   color: var(--color-text-primary);
 }
 
@@ -2802,7 +3097,7 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
   background: var(--reader-bg, var(--color-bg));
   color: var(--reader-fg, var(--color-text-primary));
   font-size: var(--font-size-md);
@@ -2834,9 +3129,9 @@ button:disabled {
   left: 50%;
   bottom: 96px;
   transform: translateX(-50%);
-  z-index: 40;
+  z-index: var(--z-chrome);
   max-width: min(420px, 80%);
-  padding: 8px var(--space-md);
+  padding: 8px var(--space-16);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   background: var(--color-surface-glass);
@@ -2868,9 +3163,8 @@ button:disabled {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
-    0 6px 18px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  /* 实底,不发光。彩色投影让按钮看起来在放射,而不是在纸上。 */
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
 }
 
 .reader-error-button:hover:not(:disabled),
@@ -2887,7 +3181,7 @@ button:disabled {
   left: max(16px, env(safe-area-inset-left));
   bottom: max(16px, env(safe-area-inset-bottom));
   width: min(312px, 84vw);
-  padding: var(--space-md);
+  padding: var(--space-16);
   overflow-y: auto;
   border-radius: var(--radius-lg);
 }
@@ -2897,7 +3191,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   font-weight: var(--font-weight-medium);
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-8);
 }
 
 .toc-item {
@@ -2907,7 +3201,7 @@ button:disabled {
   border: none;
   background: transparent;
   border-radius: var(--radius-md);
-  padding: 8px var(--space-md);
+  padding: 8px var(--space-16);
   color: var(--color-text-primary);
   cursor: pointer;
   font-size: var(--font-size-sm);
@@ -2918,7 +3212,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-8);
   padding: 2px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
@@ -2948,7 +3242,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 var(--space-sm);
+  margin: 0 0 var(--space-8);
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -2960,7 +3254,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .search-result {
@@ -2973,8 +3267,8 @@ button:disabled {
 }
 
 .reader-section-label {
-  margin: var(--space-md) 0 var(--space-xs);
-  font-size: 12px;
+  margin: var(--space-16) 0 var(--space-4);
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.04em;
   color: var(--color-text-tertiary);
@@ -3006,7 +3300,7 @@ button:disabled {
 
 .selection-toolbar {
   position: fixed;
-  z-index: 40;
+  z-index: var(--z-chrome);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3187,7 +3481,7 @@ button:disabled {
 .selection-note {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--space-4);
   padding-top: 2px;
 }
 
@@ -3201,7 +3495,11 @@ button:disabled {
   gap: 2px;
 }
 
-.note-action {
+/* 划词工具条里的「保存 / 清空」是**按钮**(有底色、有热区),笔记列表里的
+   「编辑 / 删除」是**文字链**(无底色、行内)。两者曾经共用 `.note-action`,
+   后定义的那块把前者挤出可点区域之外,又把后者撑成一颗带内边距的按钮 ——
+   同一份样式同时输给两种意图,谁排后面谁赢。名字分开,意图就分开了。 */
+.selection-note-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3214,16 +3512,16 @@ button:disabled {
   cursor: pointer;
 }
 
-.note-action:hover:not(:disabled) {
+.selection-note-action:hover:not(:disabled) {
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
-.note-action.is-danger {
+.selection-note-action.is-danger {
   color: var(--color-text-tertiary);
 }
 
-.note-action.is-danger:hover:not(:disabled) {
+.selection-note-action.is-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-danger) 12%, transparent);
   color: var(--color-danger);
 }
@@ -3232,7 +3530,7 @@ button:disabled {
   margin-left: auto;
   padding-right: 2px;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 /* ---- 入场:从面板将落的那一侧滑入(data-placement 由 layout effect 写) ---- */
@@ -3280,8 +3578,8 @@ button:disabled {
 
 .highlight-palette {
   display: flex;
-  gap: var(--space-sm);
-  margin: var(--space-sm) 0;
+  gap: var(--space-8);
+  margin: var(--space-8) 0;
 }
 
 .note-editor-float {
@@ -3291,7 +3589,7 @@ button:disabled {
 }
 
 .note-editor-quote {
-  margin: 0 0 var(--space-xs);
+  margin: 0 0 var(--space-4);
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   display: -webkit-box;
@@ -3302,7 +3600,7 @@ button:disabled {
 
 .note-input {
   width: 100%;
-  padding: var(--space-sm);
+  padding: var(--space-8);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-surface) 82%, transparent);
@@ -3321,43 +3619,59 @@ button:disabled {
 .note-editor-actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-sm);
-  margin-top: var(--space-sm);
+  gap: var(--space-8);
+  margin-top: var(--space-8);
 }
 
 .note-editor-actions .btn {
-  padding: 6px var(--space-md);
+  padding: 6px var(--space-16);
   font-size: var(--font-size-sm);
 }
 
+/* 目录 / 批注:两页之间的切换,与设置弹窗、阅读设置页签同一块料 ——
+   灰轨道 + 实心 accent 胶囊。原来这里是 accent 淡底 + accent 字,那是
+   「浮层正开着」的徽记,不是「我选中了哪个」;同一个界面里两种页签长相,
+   读者会把它们读成两种不同的控件。 */
 .reader-toc-tabs {
   display: flex;
-  gap: 2px;
+  gap: var(--space-2);
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 7%, transparent);
 }
 
 .reader-toc-tabs button {
-  padding: 6px var(--space-md);
+  padding: 5px var(--space-14);
   border: none;
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: var(--font-size-sm);
+  white-space: nowrap;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.reader-toc-tabs button:hover:not(.is-active) {
+  color: var(--color-text-primary);
 }
 
 .reader-toc-tabs button.is-active {
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
 }
 
 .annotation-scope {
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-8);
 }
 
 .annotation-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   padding: 2px 0;
 }
 
@@ -3377,7 +3691,7 @@ button:disabled {
 .annotation-item {
   display: block;
   width: 100%;
-  padding: 8px var(--space-sm);
+  padding: 8px var(--space-8);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3409,7 +3723,7 @@ button:disabled {
 .translate-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   max-height: 420px;
 }
 
@@ -3426,31 +3740,31 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   border-top: 1px solid var(--color-border);
-  padding-top: var(--space-xs);
+  padding-top: var(--space-4);
 }
 
 .translate-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 /* 成本诚实:这译文是谁出的、用的哪个模型。 */
 .translate-provider {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
 
 /* ---------- Dictionary lookup card ---------- */
 
 .lookup-card {
-  z-index: 20;
+  z-index: var(--z-panel);
   width: min(320px, 80vw);
   max-height: 300px;
   overflow-y: auto;
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-lg);
   animation: scale-pop var(--duration-fast) var(--ease-emphasized);
 }
@@ -3459,8 +3773,8 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-sm);
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
   font-size: var(--font-size-md);
 }
 
@@ -3480,9 +3794,9 @@ button:disabled {
   z-index: 30;
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   width: min(380px, calc(100vw - 48px));
-  padding: var(--space-md);
+  padding: var(--space-16);
   border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
   border-radius: var(--radius-lg);
   background: var(--reader-panel-solid, var(--color-surface));
@@ -3507,11 +3821,11 @@ button:disabled {
 }
 
 .lookup-entry {
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-8);
 }
 
 .lookup-dict {
-  margin: 0 0 var(--space-xs);
+  margin: 0 0 var(--space-4);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
@@ -3528,13 +3842,13 @@ button:disabled {
 /* ---------- Repair review panel ---------- */
 
 .repair-panel {
-  z-index: 20;
+  z-index: var(--z-panel);
   right: 16px;
   top: 64px;
   width: min(360px, 84vw);
   max-height: min(480px, 80vh);
   overflow-y: auto;
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-lg);
   animation: drawer-in var(--duration-base) var(--ease-emphasized);
 }
@@ -3542,8 +3856,8 @@ button:disabled {
 .repair-item {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-sm);
-  padding: var(--space-sm) 0;
+  gap: var(--space-8);
+  padding: var(--space-8) 0;
   cursor: pointer;
 }
 
@@ -3576,7 +3890,7 @@ button:disabled {
 }
 
 .repair-row {
-  margin-top: var(--space-sm);
+  margin-top: var(--space-8);
 }
 
 /* ---------- Drawers (AI / Learning / TTS / Sync) ---------- */
@@ -3584,7 +3898,7 @@ button:disabled {
 /* 抽屉基座(TTS / 学习 / 同步共用):flex 列 + 内边距。AI 聊天抽屉在
    .ai-chat 里改成三段 grid —— 它的头与输入区不参与滚动。 */
 .ai-drawer {
-  z-index: 20;
+  z-index: var(--z-panel);
   top: 64px;
   right: 16px;
   width: min(400px, calc(100vw - 32px));
@@ -3592,7 +3906,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-lg);
   animation: drawer-in var(--duration-base) var(--ease-emphasized);
 }
@@ -3612,8 +3926,8 @@ button:disabled {
 .ai-head {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-md) var(--space-md) 10px;
+  gap: var(--space-8);
+  padding: var(--space-16) var(--space-16) 10px;
   min-width: 0;
 }
 
@@ -3634,7 +3948,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  line-height: 1.25;
+  line-height: var(--line-height-tight);
 }
 
 .ai-head-text strong {
@@ -3644,7 +3958,7 @@ button:disabled {
 }
 
 .ai-head-sub {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3703,7 +4017,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 var(--space-md) var(--space-sm);
+  padding: 0 var(--space-16) var(--space-8);
 }
 
 .ai-drawer-body > * {
@@ -3728,7 +4042,7 @@ button:disabled {
   border-radius: 9px;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   padding: 6px 4px;
   cursor: pointer;
   overflow: hidden;
@@ -3741,10 +4055,9 @@ button:disabled {
 }
 
 .ai-scope button.is-active {
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
   font-weight: var(--font-weight-medium);
-  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12);
 }
 
 .ai-scope button:disabled {
@@ -3757,9 +4070,9 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
 
@@ -3774,7 +4087,7 @@ button:disabled {
   border: none;
   background: transparent;
   color: var(--color-text-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-2xs);
   cursor: pointer;
   text-align: left;
 }
@@ -3785,8 +4098,8 @@ button:disabled {
 }
 
 .ai-badge {
-  font-size: 10px;
-  line-height: 1;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-none);
   padding: 2px 6px;
   border-radius: var(--radius-full);
   background: var(--color-accent-soft);
@@ -3807,7 +4120,7 @@ button:disabled {
 .ai-tools {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   padding: 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -3817,7 +4130,7 @@ button:disabled {
 
 /* 工具卡里的说明文案比面板正文小一号,别盖过芯片。 */
 .ai-tools .ai-privacy {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
 }
 
 .ai-chip-grid {
@@ -3841,7 +4154,7 @@ button:disabled {
 }
 
 .ai-chip-row-label {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
 
@@ -3855,7 +4168,7 @@ button:disabled {
   border-radius: 9px;
   background: var(--color-surface);
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   padding: 7px 8px;
   text-align: center;
   cursor: pointer;
@@ -3880,7 +4193,7 @@ button:disabled {
 .ai-chip-ghost {
   flex: 0 1 auto;
   padding: 5px 9px;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   background: transparent;
   border-style: dashed;
   color: var(--color-text-secondary);
@@ -3892,8 +4205,8 @@ button:disabled {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
   color: var(--color-text-secondary);
-  font-size: 11.5px;
-  line-height: 1.55;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-sm);
 }
 
 /* 结果卡:每份洞察一张,标题行说明这是什么。 */
@@ -3910,7 +4223,7 @@ button:disabled {
 
 .ai-result-label {
   margin: 0;
-  font-size: 10.5px;
+  font-size: var(--font-size-2xs);
   letter-spacing: 0.04em;
   color: var(--color-text-tertiary);
 }
@@ -3921,7 +4234,7 @@ button:disabled {
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: var(--color-on-accent);
-  font-size: 11.5px;
+  font-size: var(--font-size-2xs);
   padding: 6px 12px;
   cursor: pointer;
 }
@@ -3933,10 +4246,10 @@ button:disabled {
 .ai-messages {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   min-width: 0;
   flex: 1;
-  padding: var(--space-xs) 0;
+  padding: var(--space-4) 0;
 }
 
 /* 空态:一句标题 + 一句人话,不摆一坨占位文案。 */
@@ -3957,8 +4270,8 @@ button:disabled {
 
 .ai-empty-hint {
   margin: 0;
-  font-size: 11.5px;
-  line-height: 1.6;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-body);
   color: var(--color-text-tertiary);
 }
 
@@ -3967,7 +4280,7 @@ button:disabled {
   padding: 9px 14px;
   border-radius: 16px;
   font-size: var(--font-size-sm);
-  line-height: 1.6;
+  line-height: var(--line-height-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   animation: fade-up var(--duration-base) var(--ease-emphasized);
@@ -3990,7 +4303,7 @@ button:disabled {
 
 .ai-error {
   margin: 0;
-  padding: var(--space-xs) 0;
+  padding: var(--space-4) 0;
   color: var(--color-danger);
   font-size: var(--font-size-sm);
 }
@@ -3999,9 +4312,9 @@ button:disabled {
 .ai-composer {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   min-width: 0;
-  padding: 10px var(--space-md) var(--space-md);
+  padding: 10px var(--space-16) var(--space-16);
   border-top: 1px solid var(--color-border);
 }
 
@@ -4035,31 +4348,6 @@ button:disabled {
 .ai-send.is-stop {
   background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
   color: var(--color-text-primary);
-}
-
-.ai-provider-select,
-.field-select {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  padding: 5px 10px;
-  max-width: 190px;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.ai-config {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.ai-presets {
-  flex-wrap: wrap;
 }
 
 .ai-input,
@@ -4191,11 +4479,11 @@ button.ai-citation:hover {
 .graph-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-chrome);
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-md);
+  gap: var(--space-8);
+  padding: var(--space-16);
   background: var(--color-bg);
   animation: fade-in var(--duration-base) var(--ease-out);
 }
@@ -4203,7 +4491,7 @@ button.ai-citation:hover {
 .graph-head {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
 }
 
 .graph-head strong {
@@ -4235,12 +4523,16 @@ button.ai-citation:hover {
   color: var(--color-text-tertiary);
 }
 
-/* Preset chips: standalone wrap instead of a cramped segmented pill */
+/* Preset chips: standalone wrap instead of a cramped segmented pill.
+   这里把 `.segmented` 的壳整块改掉(边框/底色/内边距归零),所以 wrap 必须在
+   这一块里声明 —— 上一版的 wrap 写在文件中段另一条同名规则里,删掉那条时
+   芯片会挤成一行溢出。 */
 .ai-presets {
   border: none;
   background: transparent;
   padding: 0;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .ai-presets button {
@@ -4273,18 +4565,21 @@ button.ai-citation:hover {
   top: 0;
   left: 0;
   border-radius: var(--radius-full);
-  /* 选中态是 ink 反色填充,不是浅蓝 pill:它只出现在导航/页签上(书架视图
-     切换、设置页签、侧栏分组),「我在哪」用墨色说,accent 留给主操作与进度。 */
-  background: var(--color-text-primary);
+  /* 滑块是实心 accent,与 .segmented-thumb 同一块料:页签和分段控件是同一个
+     控件家族,选中态就该是同一个东西。侧栏那处例外(见 .lib-sidebar-nav),
+     因为导航不是开关,它只是一行「你在哪」。 */
+  background: var(--color-accent);
   pointer-events: none;
   z-index: 0;
   /* 测量前不写几何样式(组件留空),所以不会出现"先在角落闪一下再滑到位"。 */
   width: 0;
   height: 0;
+  /* 弹簧,不是缓动:滑块要有质量感。linear() 曲线的过冲让它在落位时
+     微微「顶一下」,这就是 FlClash 那种丝滑的来源。 */
   transition:
-    transform var(--duration-base) var(--ease-spring),
-    width var(--duration-base) var(--ease-spring),
-    height var(--duration-base) var(--ease-spring);
+    transform var(--duration-base) var(--spring-snappy),
+    width var(--duration-base) var(--spring-snappy),
+    height var(--duration-base) var(--spring-snappy);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4300,12 +4595,13 @@ button.ai-citation:hover {
 .shelf-view-toggle {
   position: relative;
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-soft);
+  /* 轨道是「凹槽」,不是又一颗白按钮 —— 白轨道 + 蓝滑块会让整条控件读作
+     「两颗按钮里亮了一颗」,而它其实是一个开关。 */
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
 }
 
 .shelf-view-toggle button {
@@ -4330,7 +4626,8 @@ button.ai-citation:hover {
 }
 
 .shelf-view-toggle button.is-active {
-  color: var(--color-bg);
+  /* 滑块是实心 accent,图标翻纸色 —— accent 图标压在 accent 底上等于没有。 */
+  color: var(--color-on-accent);
 }
 
 .shelf-sort {
@@ -4370,11 +4667,11 @@ button.ai-citation:hover {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
-  padding: 10px var(--space-md);
+  padding: 10px var(--space-16);
   cursor: pointer;
   text-align: left;
   color: var(--color-text-primary);
@@ -4408,7 +4705,7 @@ button.ai-citation:hover {
 }
 
 .book-row-cover .book-cover-char {
-  font-size: 20px;
+  font-size: var(--font-size-xl);
 }
 
 .book-row-main {
@@ -4440,7 +4737,7 @@ button.ai-citation:hover {
   align-items: center;
   gap: 8px;
   width: 118px;
-  margin-left: var(--space-md);
+  margin-left: var(--space-16);
 }
 
 .book-row-track {
@@ -4461,7 +4758,7 @@ button.ai-citation:hover {
 .book-row-pct {
   width: 28px;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -4478,7 +4775,7 @@ button.ai-citation:hover {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-24);
 }
 
 .shelf-search-hits-label {
@@ -4494,7 +4791,7 @@ button.ai-citation:hover {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  padding: 10px var(--space-md);
+  padding: 10px var(--space-16);
   cursor: pointer;
   text-align: left;
   color: var(--color-text-primary);
@@ -4511,7 +4808,7 @@ button.ai-citation:hover {
 .shelf-search-hit-head {
   display: flex;
   align-items: baseline;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   min-width: 0;
 }
 
@@ -4542,14 +4839,14 @@ button.ai-citation:hover {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-modal);
   background: rgba(20, 18, 14, 0.32);
   backdrop-filter: blur(10px) saturate(1.2);
   -webkit-backdrop-filter: blur(10px) saturate(1.2);
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 11vh var(--space-md) var(--space-lg);
+  padding: 11vh var(--space-16) var(--space-24);
   animation: fade-in var(--duration-fast) var(--ease-out);
 }
 
@@ -4567,12 +4864,17 @@ button.ai-citation:hover {
   z-index: 1;
   width: min(460px, 100%);
   max-height: min(78dvh, 720px);
-  overflow-y: auto;
+  /* 面板自己是「三明治」:标题、页签、页脚固定,只有 .settings-body 滚。
+     原来滚动条挂在整块面板上,一滚就把标题和「完成」一起推出去 —— 用户在
+     长一点的设置页里根本看不见「完成」,读作「按钮被裁了」。 */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-  border-radius: var(--radius-xl);
+  gap: var(--space-16);
+  padding: var(--space-24);
+  /* 弹窗是 sheet,不是卡片:28px 是 FlClash alert 那一档(它用 34)。
+     16px 的大窗口读作「放大的卡片」,而这里是一整块浮起的面板。 */
+  border-radius: var(--radius-sheet);
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
 }
 
@@ -4580,13 +4882,9 @@ button.ai-citation:hover {
 dialog.modal-panel {
   border: 1px solid var(--color-border);
   color: var(--color-text-primary);
-  background:
-    linear-gradient(135deg, var(--color-highlight), transparent 42%), var(--color-surface-glass);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow:
-    var(--shadow-floating),
-    inset 0 1px 0 var(--color-highlight);
+  /* 背景与阴影继承 .modal-panel 的浮动面板配方。这里曾经是同一套液态玻璃的
+     第二份拷贝 —— 两处配方各自演化,改一处漏一处。遮罩已经把背景虚化了,
+     面板自己再模糊一次是重复付费。 */
 }
 
 /* 点击遮罩关闭:用铺满的按钮,键盘也能到达。 */
@@ -4602,11 +4900,11 @@ dialog.modal-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .modal-title {
-  font-size: 17px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -4614,20 +4912,40 @@ dialog.modal-panel {
 .modal-section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
+/* 分区标题在卡片**外面** —— 这是分组列表的关键。标题在卡内,卡片就变成
+   「带标题的盒子」;标题在外,卡片才是「这一组东西」。FlClash 的每个设置页
+   都是这个结构,也是 iOS 分组列表的结构。 */
 .modal-section-label {
-  margin: 0;
-  font-size: 12px;
+  margin: 0 0 0 var(--space-4);
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.05em;
-  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
+/* 一组设置 = 一张卡。行与行之间是发丝线,不是间隙:分开的是「这一组的第几项」,
+   不是「几个互不相干的东西」。 */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+.settings-group > * + * {
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--color-border);
 }
 
 .modal-actions {
   display: flex;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
@@ -4636,9 +4954,12 @@ dialog.modal-panel {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  border: 1px solid var(--color-border);
+  border: 0;
   border-radius: var(--radius-full);
-  background: var(--color-surface);
+  /* 次按钮是「卡片里的一块凹陷」,所以取 sunk 而不是 surface —— surface 在
+     白色分组卡上就是白加白,按钮会消失。 */
+  background: var(--surface-sunk);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border) 70%, transparent);
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
@@ -4672,22 +4993,28 @@ dialog.modal-panel {
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .theme-swatch {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: var(--space-6);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   color: var(--color-text-secondary);
-  font-size: 12px;
-  padding: 6px;
+  font-size: var(--font-size-xs);
+  padding: var(--space-6);
   cursor: pointer;
   text-align: center;
+  /* 没有这一行,hover 位移就是硬跳:卡片瞬间上移 2px,读作「抖」。 */
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
 }
 
 .theme-swatch:hover {
@@ -4698,14 +5025,23 @@ dialog.modal-panel {
 
 .theme-swatch.is-active {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  /* 3px 的柔光环在九张卡并排时太吵;2px 足够说「就是这张」。 */
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
   color: var(--color-text-primary);
 }
 
 .theme-swatch-color {
   position: relative;
   width: 100%;
-  height: 44px;
+  height: 52px;
+  /* 三条横杠几乎等长、居中对齐 —— 那是线框图,不是页面。改成一段真的
+     「文字块」:首行短(标题)、正文两行、间距交给 flex。于是每个 swatch
+     读起来是「这个主题下的一页字」,而不是「一个色卡」。 */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(0, 0, 0, 0.08);
   overflow: hidden;
@@ -4713,39 +5049,32 @@ dialog.modal-panel {
 
 /* Mini page preview drawn from the theme's own colors (set inline). */
 .theme-swatch-line {
-  position: absolute;
-  left: 12%;
-  right: 34%;
-  top: 26%;
-  height: 3px;
-  border-radius: var(--radius-full);
+  height: 2px;
+  border-radius: 1px;
 }
 
-.theme-swatch-line + .theme-swatch-line {
-  top: 48%;
-  right: 20%;
+.theme-swatch-line:nth-child(1) {
+  width: 44%;
+  margin-bottom: 2px;
 }
 
-.theme-swatch-line + .theme-swatch-line + .theme-swatch-line {
-  top: 70%;
-  right: 44%;
+.theme-swatch-line:nth-child(2) {
+  width: 86%;
 }
 
-.theme-swatch-dot {
-  position: absolute;
-  right: 10%;
-  top: 22%;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
+.theme-swatch-line:nth-child(3) {
+  width: 68%;
 }
+
+/* 强调色小圆点已从模板里移除(十二个主题的强调色几乎同色,点不传达信息,
+   反而和选中边框抢读法)。这条样式一并删掉,免得下次有人照着复原。 */
 
 /* ---------- Chapter rules (TXT, spec §15) ---------- */
 
 .chapter-rules {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--space-4);
   width: 100%;
 }
 
@@ -4753,7 +5082,7 @@ dialog.modal-panel {
   display: grid;
   grid-template-columns: 1fr 1.4fr 64px auto auto;
   align-items: center;
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 .chapter-rule-row .ai-input {
@@ -4762,7 +5091,7 @@ dialog.modal-panel {
 
 .chapter-rule-priority {
   width: 64px;
-  padding: var(--space-xs);
+  padding: var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
@@ -4789,8 +5118,8 @@ dialog.modal-panel {
 .chapter-rule-candidates {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
-  padding: var(--space-xs);
+  gap: var(--space-4);
+  padding: var(--space-4);
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-sm);
 }
@@ -4799,7 +5128,7 @@ dialog.modal-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-xs);
+  gap: var(--space-4);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
@@ -4814,7 +5143,7 @@ dialog.modal-panel {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: var(--space-xs);
+  margin-top: var(--space-4);
 }
 
 .chapter-rule-stat {
@@ -4826,8 +5155,8 @@ dialog.modal-panel {
 .chapter-rule-sample {
   max-height: 220px;
   overflow-y: auto;
-  margin-top: var(--space-xs);
-  padding: var(--space-xs);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   content-visibility: auto;
@@ -4854,14 +5183,14 @@ dialog.modal-panel {
 .sync-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .field-label {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
 }
@@ -4870,7 +5199,7 @@ dialog.modal-panel {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px var(--space-md);
+  padding: 10px var(--space-16);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-surface) 60%, transparent);
@@ -4886,7 +5215,7 @@ dialog.modal-panel {
 .sync-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 /* 自动同步开关行:静态文本行 + 原生 checkbox(去原生控件偏好只限主行动,
@@ -4894,8 +5223,8 @@ dialog.modal-panel {
 .sync-auto-row {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: 10px var(--space-md);
+  gap: var(--space-8);
+  padding: 10px var(--space-16);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-surface) 60%, transparent);
@@ -4908,13 +5237,13 @@ dialog.modal-panel {
 .sync-report {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
-  padding-top: var(--space-sm);
+  gap: var(--space-4);
+  padding-top: var(--space-8);
   border-top: 1px solid var(--color-border);
 }
 
 .conflict-item {
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-8) var(--space-16);
   border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
   background: color-mix(in srgb, var(--color-danger) 5%, transparent);
@@ -4934,7 +5263,7 @@ dialog.modal-panel {
   right: 16px;
   width: min(420px, calc(100vw - 32px));
   height: min(640px, calc(100dvh - 88px));
-  gap: var(--space-md);
+  gap: var(--space-16);
   /* 底部卡的定时下拉向上弹,不能被抽屉裁剪。 */
   overflow: visible;
 }
@@ -4954,7 +5283,7 @@ dialog.modal-panel {
 .tts-head {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-16);
 }
 
 .tts-cover {
@@ -4974,7 +5303,7 @@ dialog.modal-panel {
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-family: var(--font-serif);
-  font-size: 22px;
+  font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-medium);
 }
 
@@ -4987,7 +5316,7 @@ dialog.modal-panel {
 }
 
 .tts-title {
-  font-size: 15px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -4996,40 +5325,26 @@ dialog.modal-panel {
 }
 
 .tts-section {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 收起键 = 画中画:与旁边的关闭键同尺寸,但图标语义是「缩小」不是「关掉」。 */
-.tts-minimize {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.tts-minimize:hover {
-  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
-  color: var(--color-text-primary);
-}
+/* 收起键已经并入 .chrome-button(与关闭键同尺寸、同底色);旧的
+   .tts-minimize 只留在历史里,模板再没有引用它。 */
 
 /* 朗读句子列表:音乐播放器歌词页——当前句大字高亮,前后句弱化,
    点击任意句跳转,切句自动滚居中。 */
 .tts-sentences {
   position: relative;
   flex: 1;
-  min-height: 120px;
+  /* 抽屉高度封顶 640、窗口更矮时还要缩:歌词板是唯一可按压的那块,
+     给它 0 的下限,让设置区先保住,而不是让底部开关被裁出去。 */
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 4%, transparent);
   scroll-behavior: smooth;
@@ -5051,8 +5366,8 @@ dialog.modal-panel {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-tertiary);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-loose);
   text-align: left;
   padding: 5px 10px;
   cursor: pointer;
@@ -5075,17 +5390,73 @@ dialog.modal-panel {
 /* 当前句:大字高亮,轻微放大。 */
 .tts-sentence-item.is-current {
   color: var(--color-text-primary);
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   font-weight: var(--font-weight-medium);
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   transform: scale(1.01);
 }
 
-.tts-sentence-text.is-idle {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: 14px;
+/* 待机:这块板没内容时仍占抽屉里最大的一片面积,所以它得说点什么。
+   图标 + 一句动作 + 一句备选路径,居中。 */
+.tts-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  height: 100%;
+  padding: var(--space-16);
   text-align: center;
+}
+
+.tts-idle-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 6%, transparent);
+  color: var(--color-text-tertiary);
+}
+
+.tts-idle-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.tts-idle-hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 播放控制 / 可调项之间的发丝线。抽屉靠 gap 做节奏,所以线本身不加外边距,
+   两侧的 16px 间隙就是分节留白。 */
+.tts-divider {
+  height: 0;
+  /* 抽屉靠 gap 16px 做节奏:线自身占的 1px 之外,两侧各留 12px 就够 → 把
+     默认的 16px 间隙吃掉 4px,分节留白不虚。 */
+  margin: -4px 0;
+  border: none;
+  border-top: 1px solid
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 10%, transparent);
+}
+
+/* 分段控件的组标题(与设置面板的 group label 同一档墨色)。 */
+.tts-setting-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* 标签与分段同行:标签贴左,控件贴右 —— 控件宽度由内容决定,不争满宽
+   (上面那排引擎是主选择,这排是次级粒度)。 */
+.tts-highlight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
 }
 
 /* 整章合成中:五根声波从中心向两侧呼吸,呼应「语音」主题。 */
@@ -5149,82 +5520,25 @@ dialog.modal-panel {
 }
 
 .tts-loading-label {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   animation: fade-in 1.2s var(--ease-out) backwards;
 }
 
-/* 切音色的瞬时过渡:spinner + 三点呼吸,告诉用户「我还在,等一下」。 */
-.tts-switching-dots {
-  display: inline-flex;
-  gap: 3px;
-  align-items: center;
-  height: 6px;
-}
-.tts-switching-dots span {
-  width: 4px;
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-  animation: tts-dot-pulse 1.2s var(--ease-in-out) infinite;
-}
-.tts-switching-dots span:nth-child(2) {
-  animation-delay: 160ms;
-}
-.tts-switching-dots span:nth-child(3) {
-  animation-delay: 320ms;
-}
-
-@keyframes tts-dot-pulse {
-  0%,
-  100% {
-    transform: scale(0.55);
-    opacity: 0.4;
-  }
-  50% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* 音色热切换指示:悬浮在句子区右下角。 */
-.tts-switching {
-  position: absolute;
-  right: 16px;
-  bottom: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-full);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-soft);
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  animation: fade-up var(--duration-base) var(--ease-emphasized);
-}
-
-.tts-switching svg {
-  animation: spin 900ms linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* 「切音色中」的悬浮提示(`.tts-switching` / `-dots` / `@keyframes spin`)曾经
+   存在,但音色现在走的是语音列表里的 `is-active` 即时反馈,那段 DOM 没再被
+   渲染过 —— 样式一并删掉,不留一份没人会看到的动画。 */
 
 /* 进度:时间 + 拖动条。 */
 .tts-progress {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .tts-clock {
   min-width: 38px;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
   text-align: center;
@@ -5271,7 +5585,7 @@ dialog.modal-panel {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-lg);
+  gap: var(--space-24);
 }
 
 .tts-play {
@@ -5321,7 +5635,7 @@ dialog.modal-panel {
 .tts-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .tts-card {
@@ -5343,7 +5657,7 @@ dialog.modal-panel {
 }
 
 .tts-card-value {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   max-width: 100%;
   overflow: hidden;
@@ -5352,13 +5666,14 @@ dialog.modal-panel {
 }
 
 .tts-card-label {
-  font-size: 10px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
 }
 
-/* 连读下一章开关行。 */
+/* 连读下一章开关行。左右不留内边距:「连读下一章」与上面的「正文高亮」
+   组标题左对齐,行内 10px 缩进会让两行错开一格。 */
 .tts-auto-next {
-  padding: 6px 10px;
+  padding: 4px 0;
 }
 
 /* 定时关闭下拉卡:与三卡等高的按钮形态。 */
@@ -5391,8 +5706,15 @@ dialog.modal-panel {
 }
 
 .tts-card-dropdown .dropdown-trigger > span:first-child {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
+}
+
+/* 三张卡对读者是同一件事(点一下改一项),中间那张(语音)不是下拉,所以
+   这里把两颗下拉的箭头收掉 —— 竖排卡片里箭头会被挤到标签下方,一张有、
+   一张没有,读起来像两种控件。 */
+.tts-card-dropdown .dropdown-trigger > svg {
+  display: none;
 }
 
 /* 引擎切换。 */
@@ -5405,16 +5727,17 @@ dialog.modal-panel {
   background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 3%, transparent);
 }
 
-/* TTS 正文高亮:档位三档 + 6 套预设色点 + 自定义色。 */
+/* TTS 正文高亮:组标题 + 档位三档 + 6 套预设色点 + 自定义色。 */
 .tts-highlight {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--space-8);
 }
 
 .tts-highlight-mode {
-  /* 复用 segmented 形态;字号稍小让一行塞下。 */
-  font-size: 11px;
+  /* 复用 segmented 形态;字号稍小让一行塞下,宽度按内容。 */
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
 }
 
 .tts-highlight-colors {
@@ -5495,24 +5818,23 @@ dialog.modal-panel {
 }
 
 .segmented-button.is-active {
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
   font-weight: var(--font-weight-medium);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 /* 语音选择页。 */
 .tts-voices {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   min-height: 0;
   flex: 1;
 }
 
 .tts-voices-sub {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -5529,7 +5851,7 @@ dialog.modal-panel {
 .tts-voice-item {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   width: 100%;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -5546,9 +5868,9 @@ dialog.modal-panel {
 }
 
 .tts-voice-item.is-active {
-  border-color: var(--color-text-primary);
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
   font-weight: var(--font-weight-medium);
 }
 
@@ -5556,7 +5878,7 @@ dialog.modal-panel {
 .tts-role-row {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   padding: 6px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -5571,7 +5893,7 @@ dialog.modal-panel {
 
 .tts-role-count {
   margin-left: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -5583,7 +5905,7 @@ dialog.modal-panel {
   background: color-mix(in srgb, var(--color-surface) 82%, transparent);
   color: var(--color-text-primary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .tts-voice-name {
@@ -5595,7 +5917,7 @@ dialog.modal-panel {
 }
 
 .tts-voice-locale {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -5841,7 +6163,7 @@ dialog.modal-panel {
   background: var(--color-accent-soft);
   color: var(--color-accent);
   font-family: var(--font-serif);
-  font-size: 14px;
+  font-size: var(--font-size-md);
 }
 
 .tts-mini-text {
@@ -5852,9 +6174,9 @@ dialog.modal-panel {
 }
 
 .tts-mini-title {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  line-height: 1.3;
+  line-height: var(--leading-2xl);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5865,8 +6187,8 @@ dialog.modal-panel {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: 11px;
-  line-height: 1.3;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-2xl);
   color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 60%, transparent);
   font-variant-numeric: tabular-nums;
 }
@@ -5889,7 +6211,7 @@ dialog.modal-panel {
 
 /* 出错行:悬浮条上的错误不弹 toast,替掉章节/时钟那一行(参照播放器惯例)。 */
 .tts-mini-error {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-danger);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5976,7 +6298,7 @@ dialog.modal-panel {
 .review-section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .review-progress {
@@ -5988,18 +6310,18 @@ dialog.modal-panel {
 .card-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .card-front {
   margin: 0;
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   line-height: var(--line-height-body);
 }
 
 .card-back {
   margin: 0;
-  padding: var(--space-md);
+  padding: var(--space-16);
   border-radius: var(--radius-md);
   background: var(--color-accent-soft);
   line-height: var(--line-height-body);
@@ -6009,7 +6331,7 @@ dialog.modal-panel {
 
 .card-source {
   display: block;
-  margin-top: var(--space-xs);
+  margin-top: var(--space-4);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
@@ -6017,7 +6339,7 @@ dialog.modal-panel {
 .grade-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 .grade-row button {
@@ -6050,8 +6372,8 @@ dialog.modal-panel {
 .quiz-item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
-  padding: var(--space-md);
+  gap: var(--space-4);
+  padding: var(--space-16);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
 }
@@ -6105,8 +6427,8 @@ dialog.modal-panel {
 .mistake-item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
-  padding-bottom: var(--space-sm);
+  gap: var(--space-4);
+  padding-bottom: var(--space-8);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -6126,7 +6448,7 @@ dialog.modal-panel {
 
 .mistake-actions {
   display: flex;
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 .mistake-actions button {
@@ -6193,6 +6515,82 @@ dialog.modal-panel {
 /* 位置与 z-index 由组件内联给出(portal 到 body + fixed):容器带
    overflow/backdrop-filter 时会裁掉或收编 absolute/fixed 的菜单。
    min-width 同样内联(至少与触发器同宽),这里只保留下限。 */
+.action-menu {
+  min-width: 208px;
+  max-width: min(300px, 80vw);
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-4);
+  /* 与 .dropdown-menu 同一块玻璃:都是「临时浮起、背后还有东西」的层。
+     分成两个类是因为语义不同(执行动作 vs 选一个值),材质没理由不同。 */
+  --glass-tint: color-mix(in srgb, var(--surface-page) 72%, transparent);
+  border-radius: var(--radius-bar);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-edge);
+  animation: scale-pop var(--duration-fast) var(--spring-snappy);
+}
+
+.action-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  min-height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-6) var(--space-8);
+  cursor: pointer;
+  text-align: left;
+}
+
+.action-option:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+.action-option:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* 开关型动作(全屏 / 阅读尺)开着时整行走 accent —— 和顶栏那颗 is-active
+   是同一句话,只是这里带文字,可以更明确。 */
+.action-option.is-active {
+  color: var(--color-accent);
+}
+
+.action-option-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.action-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-option-hint {
+  flex-shrink: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.action-menu-sep {
+  height: 1px;
+  margin: var(--space-4) var(--space-6);
+  background: var(--color-border);
+}
+
 .dropdown-menu {
   min-width: 200px;
   max-width: min(320px, 80vw);
@@ -6201,28 +6599,22 @@ dialog.modal-panel {
   margin: 0;
   padding: 4px;
   list-style: none;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-glass);
+  /* 浮层走玻璃配方(与 .modal-panel 同一块料):菜单是临时浮起的东西,
+     它背后的一切都还在,该透出来。 */
+  --glass-tint: color-mix(in srgb, var(--surface-page) 72%, transparent);
+  border-radius: var(--radius-bar);
+  background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow-floating);
-  animation: scale-pop var(--duration-fast) var(--ease-emphasized);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .dropdown-menu {
-    background: var(--color-surface);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
+  box-shadow: var(--glass-edge);
+  animation: scale-pop var(--duration-fast) var(--spring-snappy);
 }
 
 .dropdown-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   width: 100%;
   border: none;
   border-radius: var(--radius-sm);
@@ -6257,26 +6649,14 @@ dialog.modal-panel {
 }
 
 .dropdown-hint {
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   flex-shrink: 0;
 }
 
-.dropdown-flex {
-  flex: 1;
-  min-width: 120px;
-  display: flex;
-}
-
-.dropdown-flex .dropdown-trigger {
-  flex: 1;
-  justify-content: space-between;
-}
-
-/* 抽屉头部的小尺寸服务切换 */
 .dropdown-head .dropdown-trigger {
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   max-width: 200px;
 }
 
@@ -6426,12 +6806,13 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 /* ---------- Reader: 排版 / 显示设置面板 ---------- */
 
 /* 一个组 = 一个话题(阅读背景 / 原书排版 / 正文 / 页面 …)。
-   组内紧排(8px),组与组之间由面板自己的 16px 拉开 —— 全场等距时,长短
-   不一的行读不出归属:读者只能逐行猜「字号和边距是一伙的吗」。 */
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+   卡片的配方在设置弹窗那一节(`.settings-group`:底色、圆角、发丝行距)。
+   这里只补阅读面板自己的两处差异 —— **别再整块重写一遍**:两块同名规则
+   会互相盖,后定义的 gap 8 把弹窗的 12 一起改掉,谁也没打算这样。 */
+.reader-settings .settings-group {
+  /* 组内更紧一档:这是 300px 浮动面板,一屏要塞下五六个话题。 */
+  gap: var(--space-8);
+  /* flex 子项默认 min-width:auto,长句/长文件名会把面板顶宽。 */
   min-width: 0;
 }
 
@@ -6453,20 +6834,20 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .settings-hint {
   margin: 0;
   font-size: var(--font-size-sm);
-  line-height: 1.5;
+  line-height: var(--leading-xs);
   color: var(--color-text-tertiary);
 }
 
 .reader-theme-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 .reader-theme-swatch {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   padding: 12px 4px;
   cursor: pointer;
   text-align: center;
@@ -6491,7 +6872,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -6555,7 +6936,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .font-custom-row {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
   flex-wrap: wrap;
 }
 
@@ -6571,9 +6952,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
 }
 
 .settings-tabs button {
@@ -6606,7 +6986,9 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .settings-tabs button.is-active {
-  color: var(--color-bg);
+  /* 滑块是实心 accent,字翻纸色。用 accent 字压在 accent 底上会整条消失
+     —— 这正是切到深色主题时暴露出来的:滑块在,字没了。 */
+  color: var(--color-on-accent);
   font-weight: var(--font-weight-medium);
 }
 
@@ -6614,15 +6996,15 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .keybinding-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--space-4);
 }
 
 .keybinding-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-md);
-  padding: 7px var(--space-sm);
+  gap: var(--space-16);
+  padding: 7px var(--space-8);
   border-radius: var(--radius-md);
 }
 
@@ -6642,7 +7024,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   border-radius: var(--radius-full);
   background: var(--color-surface);
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-out);
 }
@@ -6658,8 +7040,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .keybinding-hint {
-  margin-top: var(--space-sm);
-  font-size: 12px;
+  margin-top: var(--space-8);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -6679,9 +7061,17 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .settings-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-16);
   min-width: 0;
-  animation: settings-page-in var(--duration-base) var(--ease-emphasized) both;
+  /* 三明治里唯一滚动的那一层。min-height:0 是必需的:flex 子项默认
+     min-height:auto = 内容高度,不给 0 的话它会撑破面板而不是滚动。 */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 内容在底部被硬切时,读作「界面坏了」。24px 的渐隐把切边变成「还有下文」,
+     这是滚动容器该有的收口。 */
+  mask-image: linear-gradient(180deg, #000 calc(100% - 28px), transparent 100%);
+  animation: settings-page-in var(--duration-base) var(--spring-gentle) both;
 }
 
 .settings-body[data-dir='back'] {
@@ -6706,8 +7096,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .modal-foot {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-sm);
-  padding-top: var(--space-sm);
+  gap: var(--space-8);
+  padding-top: var(--space-12);
   border-top: 1px solid var(--color-border);
 }
 
@@ -6716,7 +7106,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .ai-provider-module {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .ai-provider-list {
@@ -6727,45 +7117,17 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* ---------- Legacy aliases (kept until every caller migrates) ---------- */
-
-.settings-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: rgba(20, 18, 14, 0.32);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 11vh;
-  animation: fade-in var(--duration-fast) var(--ease-out);
-}
-
-.settings-panel {
-  z-index: 61;
-  width: min(460px, 92vw);
-  max-height: min(78dvh, 720px);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-  border-radius: var(--radius-xl);
-  animation: scale-pop var(--duration-base) var(--ease-emphasized);
-}
+/* ---------- 设置弹窗的正文分组 ----------
+   `.settings-overlay` / `.settings-panel` 是改名前的一层壳,组件早就不用它们
+   了(弹窗走 `.modal-overlay` / `.modal-panel`),留着只会让后来的人以为
+   还有第二条渲染路径。上次清账时一并删掉。 */
 
 .settings-section-label {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);
-}
-
-.library-settings-button {
-  margin-left: 0;
 }
 
 /* ---------- Reduced motion: collapse every choreography ---------- */
@@ -6835,7 +7197,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   }
 
   .toc-item {
-    padding: 12px var(--space-md);
+    padding: 12px var(--space-16);
   }
 
   .dropdown-option {
@@ -6891,7 +7253,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: var(--space-md) var(--space-sm);
+  padding: var(--space-16) var(--space-8);
 }
 
 .stats-tile + .stats-tile {
@@ -6899,7 +7261,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .stats-tile-value {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
@@ -6969,6 +7331,9 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 
 .stats-bar-fill {
   width: 100%;
+  /* 3px 是「读到一点点」的可视下限,不是「零」的形状:零值柱给 0,由
+     `.is-zero` 抹掉这一截。曾经零值日也画这 3px,于是「一天没读」和
+     「读了两分钟」在图上长得一样 —— 图表在这儿说了句假话。 */
   min-height: 3px;
   border-radius: var(--radius-sm);
   background: linear-gradient(
@@ -6983,6 +7348,10 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
      transform/opacity"这条自家规矩。 */
   transform-origin: bottom;
   animation: bar-grow var(--duration-slow) var(--ease-emphasized) backwards;
+}
+
+.stats-bar-fill.is-zero {
+  min-height: 0;
 }
 
 .stats-bar-label {
@@ -7022,8 +7391,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-lg);
-  padding: var(--space-lg);
+  gap: var(--space-24);
+  padding: var(--space-24);
 }
 
 /* 次级行:hairline 之上,名称 / 可视化 / 数值 / 状态 / 动作一行排开。 */
@@ -7031,8 +7400,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-sm) var(--space-md);
-  padding: var(--space-md) var(--space-lg);
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-16) var(--space-24);
   border-top: 1px solid var(--color-border);
 }
 
@@ -7098,7 +7467,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .stats-hero-empty-value {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
@@ -7115,12 +7484,12 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   min-width: 200px;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .stats-hero-line {
   margin: 0;
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
@@ -7180,8 +7549,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   width: 100%;
   flex-direction: column;
-  gap: var(--space-sm);
-  padding-top: var(--space-sm);
+  gap: var(--space-8);
+  padding-top: var(--space-8);
   border-top: 1px solid var(--color-border);
   animation: fade-up var(--duration-fast) var(--ease-out);
 }
@@ -7214,10 +7583,12 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .goal-chip.is-active {
-  /* 选中档位 = ink 反色,与全部页签/分段同一语言;accent 留给环与进度。 */
+  /* 目标芯片是「挑一个标签」,不是「切一页」:方形、可多选、并排还带别的
+     芯片,给它实心 accent 会让这一排读成一组主按钮。所以这里用淡底 + accent
+     字 —— 页签/分段控件才是实心块。 */
   border-color: transparent;
-  background: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
 .goal-chip:disabled {
@@ -7228,7 +7599,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 .goal-editor-custom {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .goal-editor-custom input {
@@ -7284,8 +7655,16 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 
 .stats-heatmap-months {
   height: 14px;
-  font-size: 10px;
+  line-height: 14px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
+}
+
+/* 一列只有 ~16px 宽(列 = 周,一年 53 列),「12 月」摆进去就折成两行 ——
+   折完这一行从 14px 涨到 35px,压在第一行格子上。标签只在换月那一列出现,
+   左右邻列本来就是空的:允许它溢出到右边,比允许它折行好。 */
+.stats-heatmap-months > * {
+  white-space: nowrap;
 }
 
 .stats-heatmap-grid {
@@ -7327,7 +7706,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: var(--space-sm);
+  margin-top: var(--space-8);
   font-size: var(--font-size-xs);
 }
 
@@ -7370,7 +7749,7 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
 }
@@ -7465,7 +7844,14 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   left: 12px;
   right: 12px;
   max-width: calc(100% - 24px);
-  gap: 8px;
+  gap: var(--space-8);
+  padding: 0 var(--space-12);
+}
+
+/* 半屏里发丝线两侧不用留整条 16px:栏本来就窄,统计项要先保住字。 */
+.reader-embedded .reader-stats {
+  gap: var(--space-8);
+  padding-left: var(--space-12);
 }
 
 .reader-embedded .reader-title {
@@ -7638,7 +8024,7 @@ button.parallel-divider:active:not(:disabled) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm);
+  gap: var(--space-8);
 }
 
 .reader-pick-search {
@@ -7684,7 +8070,7 @@ button.parallel-divider:active:not(:disabled) {
 .reader-pick-meta {
   min-width: 0;
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
   text-overflow: ellipsis;

@@ -133,7 +133,7 @@ export function NotesView({
           onClick={copyAll}
           disabled={shown.length === 0}
         >
-          <Copy size={15} weight="regular" aria-hidden />
+          <Copy size={14} weight="regular" aria-hidden />
           {copied === '__all__' ? '已复制' : '复制为 Markdown'}
         </button>
       </div>
@@ -220,7 +220,7 @@ export function NotesView({
                                   className="note-action"
                                   onClick={() => setEditing(null)}
                                 >
-                                  <X size={12} weight="bold" aria-hidden />
+                                  <X size={14} weight="bold" aria-hidden />
                                   取消
                                 </button>
                                 <button
@@ -246,7 +246,7 @@ export function NotesView({
                                     aria-label={`编辑这条批注${entry.note === null ? '(还没有写批注)' : ''}`}
                                     onClick={() => beginEdit(entry)}
                                   >
-                                    <PencilSimple size={12} weight="regular" aria-hidden />
+                                    <PencilSimple size={14} weight="regular" aria-hidden />
                                     编辑
                                   </button>
                                   <button

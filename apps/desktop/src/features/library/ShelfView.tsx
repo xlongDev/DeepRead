@@ -305,7 +305,7 @@ export function ShelfView({
         <div className="shelf-tools">
           {/* label 包住输入框:点 pill 的任意位置都原生聚焦输入框,不借 JS。 */}
           <label className="shelf-search">
-            <MagnifyingGlass size={15} weight="regular" aria-hidden />
+            <MagnifyingGlass size={14} weight="regular" aria-hidden />
             <input
               ref={searchInputRef}
               type="search"
@@ -338,7 +338,7 @@ export function ShelfView({
               title="网格视图"
               aria-pressed={view === 'grid'}
             >
-              <SquaresFour size={15} weight="regular" aria-hidden />
+              <SquaresFour size={14} weight="regular" aria-hidden />
             </button>
             <button
               type="button"
@@ -347,7 +347,7 @@ export function ShelfView({
               title="列表视图"
               aria-pressed={view === 'list'}
             >
-              <ListBullets size={15} weight="regular" aria-hidden />
+              <ListBullets size={14} weight="regular" aria-hidden />
             </button>
           </SlidingIndicator>
           <DropdownMenu
@@ -367,7 +367,7 @@ export function ShelfView({
             title={sortDir === 'asc' ? '升序,点击改为降序' : '降序,点击改为升序'}
             aria-label={`切换排序方向(当前${sortDir === 'asc' ? '升序' : '降序'})`}
           >
-            <ArrowUp size={15} weight="bold" aria-hidden />
+            <ArrowUp size={14} weight="bold" aria-hidden />
           </button>
           <button
             type="button"
@@ -376,11 +376,11 @@ export function ShelfView({
             title={selecting ? '退出批量管理' : '批量管理'}
             aria-pressed={selecting}
           >
-            <CheckSquare size={15} weight={selecting ? 'fill' : 'regular'} aria-hidden />
+            <CheckSquare size={14} weight={selecting ? 'fill' : 'regular'} aria-hidden />
             {selecting ? '完成' : '管理'}
           </button>
           <button type="button" className="shelf-import" onClick={onImport} aria-label="导入书籍">
-            <Plus size={15} weight="bold" aria-hidden /> 导入
+            <Plus size={14} weight="bold" aria-hidden /> 导入
           </button>
         </div>
       </div>
@@ -442,7 +442,7 @@ export function ShelfView({
             )}
           </span>
           <span className="continue-reading-go" aria-hidden>
-            <BookOpen size={17} weight="regular" />
+            <BookOpen size={16} weight="regular" />
           </span>
         </button>
       )}
@@ -538,7 +538,7 @@ export function ShelfView({
                     )}
                     {selecting && (
                       <span className="book-select" aria-hidden>
-                        {isSelected && <Check size={13} weight="bold" />}
+                        {isSelected && <Check size={14} weight="bold" />}
                       </span>
                     )}
                   </button>
@@ -570,7 +570,7 @@ export function ShelfView({
                           menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
                         }
                       >
-                        <DotsThree size={15} weight="bold" aria-hidden />
+                        <DotsThree size={14} weight="bold" aria-hidden />
                       </button>
                     </div>
                   )}
@@ -631,7 +631,7 @@ export function ShelfView({
                       className={`book-select is-inline${isSelected ? ' is-checked' : ''}`}
                       aria-hidden
                     >
-                      {isSelected && <Check size={12} weight="bold" />}
+                      {isSelected && <Check size={14} weight="bold" />}
                     </span>
                   )}
                   <span
@@ -675,7 +675,7 @@ export function ShelfView({
                       aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
                       onClick={() => onToggleFavorite(book)}
                     >
-                      <Star size={15} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
+                      <Star size={14} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
                     </button>
                     <button
                       type="button"

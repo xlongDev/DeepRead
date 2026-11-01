@@ -168,9 +168,9 @@ export function MiniBarWindow() {
           aria-label={state.playing ? '暂停' : '播放'}
         >
           {state.playing ? (
-            <Pause size={15} weight="fill" aria-hidden />
+            <Pause size={14} weight="fill" aria-hidden />
           ) : (
-            <Play size={15} weight="fill" aria-hidden />
+            <Play size={14} weight="fill" aria-hidden />
           )}
         </button>
         <button
@@ -208,11 +208,11 @@ export function MiniBarWindow() {
           title="停止并关闭"
           aria-label="停止并关闭"
         >
-          <X size={13} weight="regular" aria-hidden />
+          <X size={14} weight="regular" aria-hidden />
         </button>
         {sendError !== null && (
           <output className="tts-mini-alert" title={sendError}>
-            <Warning size={12} weight="fill" aria-hidden />
+            <Warning size={14} weight="fill" aria-hidden />
           </output>
         )}
         {state.progress > 0 && state.progress < 1 && (

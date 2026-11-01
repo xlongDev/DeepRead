@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CaretDown, Check } from '@phosphor-icons/react'
+import { useMenuPosition } from './use-menu-position'
 
 export interface DropdownOption<T extends string> {
   readonly value: T
@@ -57,25 +58,9 @@ export function DropdownMenu<T extends string>({
     setOpen(true)
   }
 
-  // 挂载后定位:下方不够且上方更宽裕时翻上去,右侧超出视口时左移。
-  // 位置直接写 DOM(effect 的本职),不落 state —— layout effect 在绘制前
-  // 跑完,portal 首帧即落位,不闪;React Compiler 也不用为它多渲染一轮。
-  useLayoutEffect(() => {
-    const menu = menuRef.current
-    const rect = triggerRef.current?.getBoundingClientRect()
-    if (!open || !menu || !rect) return
-    const below = window.innerHeight - rect.bottom - 8
-    const flip = menu.offsetHeight + 8 > below && rect.top - 8 > below
-    const top = flip ? Math.max(8, rect.top - menu.offsetHeight - 6) : rect.bottom + 6
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8))
-    // 菜单至少与触发器同宽:portal 之后 CSS 的 100% 解析自 body,得手量。
-    const minWidth = Math.max(200, Math.min(rect.width, window.innerWidth - 16))
-    Object.assign(menu.style, {
-      top: `${top}px`,
-      left: `${left}px`,
-      minWidth: `${minWidth}px`,
-    })
-  }, [open])
+  // 落位逻辑与 ActionMenu 共用一份:同一个界面里的两个菜单必须遵守同一套
+  // 翻转 / 夹边规则,否则一个向下弹、一个探出屏幕。
+  useMenuPosition(open, triggerRef, menuRef)
 
   useEffect(() => {
     if (!open) return
@@ -149,7 +134,7 @@ export function DropdownMenu<T extends string>({
             {option.label}
             {option.hint && <span className="dropdown-hint">{option.hint}</span>}
           </span>
-          {option.value === value && <Check size={13} weight="bold" aria-hidden />}
+          {option.value === value && <Check size={14} weight="bold" aria-hidden />}
         </button>
       ))}
     </div>
@@ -180,7 +165,7 @@ export function DropdownMenu<T extends string>({
         {children ?? (
           <span className="dropdown-value">{current?.label ?? options[0]?.label ?? ''}</span>
         )}
-        <CaretDown size={11} weight="bold" aria-hidden />
+        <CaretDown size={14} weight="bold" aria-hidden />
       </button>
       {open
         ? createPortal(

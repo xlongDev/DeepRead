@@ -231,7 +231,7 @@ export function SelectionToolbar({
       {/* 动作带:全宽一行 justify-between;阅读区比九个图标还窄时才换行。 */}
       <div className="selection-actions">
         <button type="button" aria-label="复制" className="sel-icon" onClick={copy} title="复制">
-          {copied ? <Check size={17} className="sel-icon-accent" /> : <Copy size={17} />}
+          {copied ? <Check size={16} className="sel-icon-accent" /> : <Copy size={16} />}
         </button>
         <button
           type="button"
@@ -243,7 +243,7 @@ export function SelectionToolbar({
           }
           disabled={text.trim().length > LOOKUP_MAX_CHARS}
         >
-          <BookOpen size={17} />
+          <BookOpen size={16} />
         </button>
         <button
           type="button"
@@ -252,10 +252,10 @@ export function SelectionToolbar({
           onClick={onTranslate}
           title="翻译"
         >
-          <Translate size={17} />
+          <Translate size={16} />
         </button>
         <button type="button" aria-label="问 AI" className="sel-icon" onClick={onAsk} title="问 AI">
-          <Sparkle size={17} />
+          <Sparkle size={16} />
         </button>
         <button
           type="button"
@@ -264,7 +264,7 @@ export function SelectionToolbar({
           onClick={onSpeak}
           title="朗读此处"
         >
-          <SpeakerHigh size={17} />
+          <SpeakerHigh size={16} />
         </button>
         <button
           type="button"
@@ -273,7 +273,7 @@ export function SelectionToolbar({
           onClick={onSearch}
           title="在本书中搜索"
         >
-          <MagnifyingGlass size={17} />
+          <MagnifyingGlass size={16} />
         </button>
         <button
           type="button"
@@ -288,7 +288,7 @@ export function SelectionToolbar({
           }}
           title="记笔记"
         >
-          <Note size={17} />
+          <Note size={16} />
         </button>
         <button
           type="button"
@@ -297,7 +297,7 @@ export function SelectionToolbar({
           onClick={() => apply(color, style)}
           title={`应用${STYLES.find((s) => s.key === style)?.label ?? ''}`}
         >
-          <Highlighter size={17} />
+          <Highlighter size={16} />
         </button>
         {annotation && (
           <button
@@ -307,7 +307,7 @@ export function SelectionToolbar({
             onClick={onDelete}
             title="取消标注"
           >
-            <Trash size={17} />
+            <Trash size={16} />
           </button>
         )}
         <button
@@ -322,7 +322,7 @@ export function SelectionToolbar({
           }}
           title="关闭"
         >
-          <X size={17} />
+          <X size={16} />
         </button>
       </div>
 
@@ -410,7 +410,7 @@ export function SelectionToolbar({
               disabled={draft.trim() === (annotation?.note ?? '').trim()}
               onClick={commitNote}
             >
-              <Check size={13} />
+              <Check size={14} />
             </NoteAction>
             <NoteAction
               label="清空输入"
@@ -419,7 +419,7 @@ export function SelectionToolbar({
               // 只清字段:已存的笔记要等 保存 或离开面板才动。
               onClick={() => setDraft('')}
             >
-              <Eraser size={13} />
+              <Eraser size={14} />
             </NoteAction>
             {annotation?.note != null && (
               <NoteAction
@@ -432,7 +432,7 @@ export function SelectionToolbar({
                   setDraft(null)
                 }}
               >
-                <Trash size={13} />
+                <Trash size={14} />
               </NoteAction>
             )}
             <span className="selection-note-hint">⌘↵ 保存 · Esc 取消</span>
@@ -465,7 +465,7 @@ function NoteAction({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className={`note-action${danger ? ' is-danger' : ''}`}
+      className={`selection-note-action${danger ? ' is-danger' : ''}`}
     >
       {children}
       {text}

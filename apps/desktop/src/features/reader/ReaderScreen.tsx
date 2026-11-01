@@ -7,13 +7,13 @@ import {
   CaretRight,
   Columns,
   CornersOut,
+  DotsThree,
   GraduationCap,
   Headphones,
   List,
   MagnifyingGlass,
   Moon,
   Ruler,
-  SlidersHorizontal,
   Sparkle,
   Sun,
   TextAa,
@@ -67,6 +67,7 @@ import {
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import { keyHint, useKeybindings } from '../../lib/keybindings'
+import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu'
 import {
   buildFontFacesCss,
   FONT_FAMILY_OPTIONS,
@@ -116,6 +117,7 @@ import {
   persistWakeLockEnabled,
 } from './wake-lock'
 import { DisplayPanel } from './DisplayPanel'
+import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { newTaskId } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
@@ -207,7 +209,10 @@ interface ReaderScreenProps {
 type Phase = 'opening' | 'reading' | 'error'
 
 /** 同一时刻只开一个浮层:它们共用顶栏按钮的激活态与「点空白关闭」逻辑。 */
-type OpenPanel = 'toc' | 'search' | 'settings' | 'display' | 'ai' | 'tts' | 'learning' | 'parallel'
+type OpenPanel = 'toc' | 'search' | 'settings' | 'ai' | 'tts' | 'learning' | 'parallel'
+
+/** 阅读设置的两页:排版(正文怎么排)与显示(翻页、阅读尺、底栏读数)。 */
+type SettingsTab = 'type' | 'display'
 
 /**
  * 正在编辑的批注笔记。`id` 缺失 = 这条笔记还没有对应的划线,提交时新建;
@@ -254,7 +259,7 @@ const BookmarkButton = memo(function BookmarkButton({
       title={bookmarked ? '移除书签' : '在此页添加书签'}
     >
       <BookmarkSimple
-        size={18}
+        size={16}
         weight={bookmarked ? 'fill' : 'regular'}
         aria-hidden
         color={bookmarked ? 'var(--color-accent)' : undefined}
@@ -467,23 +472,35 @@ export function ReaderScreen({
     proposals: readonly RepairChange[]
     accepted: ReadonlySet<string>
   } | null>(null)
-  // 阅读器的面板互斥:同一时刻最多一个浮层(目录/排版/AI/朗读/学习/对照)。
+  // ⋯ 菜单开着时顶栏不能自己溜走:菜单是 portal 出去的,顶栏一隐就只剩
+  // 一块浮在半空的菜单。下面 chrome 自动隐藏的判据要带上它。
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  // 阅读器的面板互斥:同一时刻最多一个浮层(目录/阅读设置/AI/朗读/学习/对照)。
   const [openPanel, setOpenPanel] = useState<OpenPanel | null>(() => {
-    // dev 辅助:?open=…&panel=toc|display|… 直接开着面板进阅读器,
+    // dev 辅助:?open=…&panel=toc|settings|… 直接开着面板进阅读器,
     // 无头截图/视觉回归不用模拟点击。生产树摇掉,永远不会走这条路径。
+    // panel=display 指向合并前的「显示设置」,现在落到阅读设置的显示页。
     if (!import.meta.env.DEV) return null
     const panel = new URLSearchParams(window.location.search).get('panel')
+    if (panel === 'display') return 'settings'
     const valid: readonly OpenPanel[] = [
       'toc',
       'search',
       'settings',
-      'display',
       'ai',
       'tts',
       'learning',
       'parallel',
     ]
     return valid.includes(panel as OpenPanel) ? (panel as OpenPanel) : null
+  })
+  /** 阅读设置里当前那一页。两个旧面板合成一个之后,页签记在宿主:
+      「排版」是常去的那页,默认停在它上面。 */
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => {
+    if (!import.meta.env.DEV) return 'type'
+    return new URLSearchParams(window.location.search).get('panel') === 'display'
+      ? 'display'
+      : 'type'
   })
   const [bookLanguage, setBookLanguage] = useState<string | undefined>(undefined)
   const [sectionLabel, setSectionLabel] = useState<string | null>(null)
@@ -1042,7 +1059,7 @@ export function ReaderScreen({
       const target = event.target as HTMLElement | null
       if (
         target?.closest(
-          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-display,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
+          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
         )
       )
         return
@@ -1052,7 +1069,7 @@ export function ReaderScreen({
     return () => window.removeEventListener('pointerdown', onPointerDown)
   }, [openPanel])
 
-  /** 夜间一键切换:记住亮色主题,再点返回;背景细选仍走排版设置。 */
+  /** 夜间一键切换:记住亮色主题,再点返回;背景细选仍走阅读设置。 */
   const toggleNightTheme = useCallback((): void => {
     const nightIndex = READER_THEMES.findIndex((option) => option.theme.colorScheme === 'dark')
     if (themeIndex === nightIndex) {
@@ -1113,6 +1130,7 @@ export function ReaderScreen({
     if (
       !chromeVisible ||
       openPanel !== null ||
+      moreMenuOpen ||
       selection !== null ||
       activeAnnotation !== null ||
       noteDraft !== null
@@ -1135,7 +1153,7 @@ export function ReaderScreen({
       clearTimeout(timer)
       window.removeEventListener('pointermove', onActivity)
     }
-  }, [chromeVisible, openPanel, selection, activeAnnotation, noteDraft])
+  }, [chromeVisible, openPanel, moreMenuOpen, selection, activeAnnotation, noteDraft])
 
   /**
    * 翻页动画分两条路:
@@ -2202,6 +2220,53 @@ export function ReaderScreen({
   } as React.CSSProperties
   const liveBookmarks = useMemo(() => bookmarks.filter((b) => !b.deleted), [bookmarks])
   const liveAnnotations = annotations.filter((a) => !a.deleted)
+  /**
+   * 顶栏「⋯」里的动作:一年开不到五次的那些。判据是**频率**,不是重要性 ——
+   * 全屏有 F11、阅读尺开一次就一直开着、学习与对照阅读是按需进去的独立场景。
+   * 它们仍要可达,但不该和「目录」「搜索」抢同一条扫描路径。
+   */
+  const moreMenuItems: readonly ActionMenuItem[] = [
+    {
+      label: '全屏阅读',
+      hint: 'F11',
+      icon: <CornersOut size={16} weight="regular" />,
+      active: fullscreen,
+      onSelect: () => void toggleFullscreen(),
+    },
+    {
+      label: '阅读尺',
+      hint: '聚焦当前行',
+      icon: <Ruler size={16} weight="regular" />,
+      active: rulerActive,
+      disabled: !rulerSupported,
+      title: rulerSupported
+        ? '聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)'
+        : '阅读尺暂不支持固定排版(PDF / 漫画)与竖排',
+      onSelect: toggleRuler,
+    },
+    { separator: true },
+    {
+      label: '学习',
+      hint: '卡片 / 测验 / 错题本',
+      icon: <GraduationCap size={16} weight="regular" />,
+      active: openPanel === 'learning',
+      onSelect: () => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning')),
+    },
+    ...(onOpenParallel !== undefined && pane === undefined
+      ? [
+          {
+            label: '对照阅读',
+            hint: '两本书并排',
+            icon: <Columns size={16} weight="regular" />,
+            active: openPanel === 'parallel',
+            onSelect: () => {
+              setOpenPanel((panel) => (panel === 'parallel' ? null : 'parallel'))
+              setChromeVisible(true)
+            },
+          },
+        ]
+      : []),
+  ]
   /** 当前点中的那条划线(CFI 是内核回传的锚点;墓碑不算数,否则刚删完的
    *  划线会在工具条上残留一帧「还在编辑」的假象)。 */
   const activeRecord = annotations.find((a) => a.cfi === activeAnnotation && !a.deleted)
@@ -2281,6 +2346,14 @@ export function ReaderScreen({
           </div>
         )}
 
+        {/* 三组,不是十二颗同权图标。分组依据是读者此刻在做什么:
+            定位(在哪一页)/ 外观(这页长什么样)/ 工具(让机器参与)。
+            组内 2px、组间一条发丝线 —— 眼睛先找到组,再找到键;
+            平铺时要在 12 个等距位置里逐个辨认,所以那 12 个键合起来读作「一堆」。
+
+            分组只做视觉:不挂 role="group"(会触发 prefer-tag-over-role,
+            而 fieldset 进 flex 胶囊有布局风险)。读屏本来就是逐个 Tab 过去
+            念 title,少一层不存在的语义比多一层假语义干净。 */}
         <header className="reader-top">
           <button
             type="button"
@@ -2293,135 +2366,89 @@ export function ReaderScreen({
             }}
             title="返回书架"
           >
-            <ArrowLeft size={18} weight="regular" aria-hidden />
+            <ArrowLeft size={16} weight="regular" aria-hidden />
           </button>
           <span className="reader-title">{title}</span>
-          <BookmarkButton
-            progressStore={progressStore}
-            bookmarks={liveBookmarks}
-            onToggle={toggleBookmark}
-          />
-          <button
-            type="button"
-            className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
-            onClick={toggleNightTheme}
-            title={`阅读背景:点击切换夜间(当前 ${theme.label},在排版设置中可选)`}
-          >
-            {theme.theme.colorScheme === 'dark' ? (
-              <Moon size={18} weight="regular" aria-hidden />
-            ) : (
-              <Sun size={18} weight="regular" aria-hidden />
-            )}
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${fullscreen ? ' is-active' : ''}`}
-            onClick={() => void toggleFullscreen()}
-            title="全屏阅读(F11 / Ctrl+⌘+F)"
-          >
-            <CornersOut size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'settings' ? ' is-active' : ''}`}
-            onClick={() => setOpenPanel((panel) => (panel === 'settings' ? null : 'settings'))}
-            title="排版设置"
-          >
-            <TextAa size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'display' ? ' is-active' : ''}`}
-            onClick={() => setOpenPanel((panel) => (panel === 'display' ? null : 'display'))}
-            title="显示设置"
-          >
-            <SlidersHorizontal size={18} weight="regular" aria-hidden />
-          </button>
-          {/* 阅读尺是一个「开着的模式」,所以给顶栏一颗常驻开关:开着的时候
-              它像夜间/全屏一样是亮的,关掉即回到普通正文。开尺会把版式切到
-              滚动(当前行居中的唯一版式),关尺还原 —— 见 toggleRuler。 */}
-          <button
-            type="button"
-            className={`chrome-button${rulerActive ? ' is-active' : ''}`}
-            onClick={toggleRuler}
-            disabled={!rulerSupported}
-            aria-pressed={rulerActive}
-            title={
-              rulerSupported
-                ? rulerActive
-                  ? '关闭阅读尺'
-                  : '阅读尺:聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)'
-                : '阅读尺暂不支持固定排版(PDF / 漫画)与竖排'
-            }
-          >
-            <Ruler size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
-            onClick={() => setOpenPanel((panel) => (panel === 'ai' ? null : 'ai'))}
-            title="AI 助手"
-          >
-            <Sparkle size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'tts' ? ' is-active' : ''}`}
-            onClick={() => setOpenPanel((panel) => (panel === 'tts' ? null : 'tts'))}
-            title="朗读 / 听书"
-          >
-            <Headphones size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
-            onClick={() => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))}
-            title="学习(卡片 / 测验 / 错题本)"
-          >
-            <GraduationCap size={18} weight="regular" aria-hidden />
-          </button>
-          {/* 对照阅读是「再加一本书」而不是又一个视图开关,所以放在目录前、
-              紧贴最右:读者翻到这里时手已经在最右侧了。已在并排模式时藏起来
-              —— 一栏里没有第三栏可开。 */}
-          {onOpenParallel !== undefined && pane === undefined && (
+          <div className="chrome-group">
+            <BookmarkButton
+              progressStore={progressStore}
+              bookmarks={liveBookmarks}
+              onToggle={toggleBookmark}
+            />
             <button
               type="button"
-              className={`chrome-button${openPanel === 'parallel' ? ' is-active' : ''}`}
+              className={`chrome-button${openPanel === 'search' ? ' is-active' : ''}`}
               onClick={() => {
-                setOpenPanel((panel) => (panel === 'parallel' ? null : 'parallel'))
+                setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
                 setChromeVisible(true)
               }}
-              title="对照阅读(两本书并排)"
+              title={`搜索全书(${keyHint('search', keybindings)})`}
               aria-haspopup="dialog"
-              aria-expanded={openPanel === 'parallel'}
+              aria-expanded={openPanel === 'search'}
             >
-              <Columns size={18} weight="regular" aria-hidden />
+              <MagnifyingGlass size={16} weight="regular" aria-hidden />
             </button>
-          )}
-          <button
-            type="button"
-            className={`chrome-button${openPanel === 'search' ? ' is-active' : ''}`}
-            onClick={() => {
-              setOpenPanel((panel) => (panel === 'search' ? null : 'search'))
-              setChromeVisible(true)
-            }}
-            title={`搜索全书(${keyHint('search', keybindings)})`}
-            aria-haspopup="dialog"
-            aria-expanded={openPanel === 'search'}
-          >
-            <MagnifyingGlass size={18} weight="regular" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="chrome-button"
-            onClick={() => {
-              setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
-              setChromeVisible(true)
-            }}
-            title={`目录(${keyHint('sidebar', keybindings)})`}
-          >
-            <List size={18} weight="regular" aria-hidden />
-          </button>
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'toc' ? ' is-active' : ''}`}
+              onClick={() => {
+                setOpenPanel((panel) => (panel === 'toc' ? null : 'toc'))
+                setChromeVisible(true)
+              }}
+              title={`目录(${keyHint('sidebar', keybindings)})`}
+            >
+              <List size={16} weight="regular" aria-hidden />
+            </button>
+          </div>
+          <div className="chrome-group">
+            <button
+              type="button"
+              className={`chrome-button${theme.theme.colorScheme === 'dark' ? ' is-active' : ''}`}
+              onClick={toggleNightTheme}
+              title={`阅读背景:点击切换夜间(当前 ${theme.label},在阅读设置中可选)`}
+            >
+              {theme.theme.colorScheme === 'dark' ? (
+                <Moon size={16} weight="regular" aria-hidden />
+              ) : (
+                <Sun size={16} weight="regular" aria-hidden />
+              )}
+            </button>
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'settings' ? ' is-active' : ''}`}
+              onClick={() => setOpenPanel((panel) => (panel === 'settings' ? null : 'settings'))}
+              title="阅读设置(排版 / 显示)"
+            >
+              <TextAa size={16} weight="regular" aria-hidden />
+            </button>
+          </div>
+          <div className="chrome-group">
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'ai' ? ' is-active' : ''}`}
+              onClick={() => setOpenPanel((panel) => (panel === 'ai' ? null : 'ai'))}
+              title="AI 助手"
+            >
+              <Sparkle size={16} weight="regular" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'tts' ? ' is-active' : ''}`}
+              onClick={() => setOpenPanel((panel) => (panel === 'tts' ? null : 'tts'))}
+              title="朗读 / 听书"
+            >
+              <Headphones size={16} weight="regular" aria-hidden />
+            </button>
+            <ActionMenu
+              ariaLabel="更多"
+              triggerTitle="更多(全屏 / 阅读尺 / 学习 / 对照阅读)"
+              trigger={<DotsThree size={16} weight="bold" aria-hidden />}
+              triggerActive={moreMenuOpen || openPanel === 'learning' || openPanel === 'parallel'}
+              onOpenChange={setMoreMenuOpen}
+              themeVars={readerVars}
+              items={moreMenuItems}
+            />
+          </div>
         </header>
 
         {openPanel === 'parallel' && onOpenParallel !== undefined && (
@@ -2436,45 +2463,80 @@ export function ReaderScreen({
         )}
 
         {openPanel === 'settings' && (
-          <SettingsPanel
-            typography={typography}
-            themeIndex={themeIndex}
-            onThemeChange={changeTheme}
-            updateLayout={updateLayout}
-            changeFontSize={changeFontSize}
-            customFonts={customFonts}
-            fontBusy={fontBusy}
-            importReadingFont={importReadingFont}
-            removeReadingFont={removeReadingFont}
-            customFontInUse={customFontInUse}
-            zhConvert={zhConvert}
-            changeZhConvert={changeZhConvert}
-            dictionaries={dictionaries}
-            removeDictionary={removeDictionary}
-            importDictionary={importDictionary}
-            panelProblem={panelProblem}
-            themeVars={readerVars}
-          />
-        )}
-
-        {openPanel === 'display' && (
-          <DisplayPanel
-            typography={typography}
-            updateLayout={updateLayout}
-            scrollModeSupported={scrollModeSupported}
-            statsSettings={statsSettings}
-            onStatsToggle={changeStatsSetting}
-            pageTurnStyle={pageTurnStyle}
-            onPageTurnChange={changePageTurnStyle}
-            rulerActive={rulerActive}
-            rulerSupported={rulerSupported}
-            rulerSettings={rulerSettings}
-            updateRuler={updateRuler}
-            toggleRuler={toggleRuler}
-            wakeLockEnabled={wakeLockEnabled}
-            wakeLockSupported={wakeLockSupported}
-            onWakeLockChange={changeWakeLock}
-          />
+          <section className="reader-settings reader-prefs" aria-label="阅读设置">
+            {/* 页签用设置弹窗那套滑动指示条:同一个 App 里「在几页之间切换」
+                只该长成一个样子。
+                外面这层横带是**滚不动**的:内容滚上来会在它下边缘停住,而它
+                自己是一条与面板同料的面 —— 少了这层,滚到中途会在页签下面
+                露出半张卡片(还带着半颗滑块),读作「界面坏了」。 */}
+            <div className="reader-prefs-head">
+              <SlidingIndicator
+                activeKey={settingsTab}
+                className="settings-tabs reader-prefs-tabs"
+                role="tablist"
+                ariaLabel="阅读设置分区"
+                activeSelector="button.is-active"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === 'type'}
+                  className={settingsTab === 'type' ? 'is-active' : ''}
+                  onClick={() => setSettingsTab('type')}
+                >
+                  排版
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === 'display'}
+                  className={settingsTab === 'display' ? 'is-active' : ''}
+                  onClick={() => setSettingsTab('display')}
+                >
+                  显示
+                </button>
+              </SlidingIndicator>
+            </div>
+            {settingsTab === 'type' ? (
+              <SettingsPanel
+                typography={typography}
+                themeIndex={themeIndex}
+                onThemeChange={changeTheme}
+                updateLayout={updateLayout}
+                changeFontSize={changeFontSize}
+                customFonts={customFonts}
+                fontBusy={fontBusy}
+                importReadingFont={importReadingFont}
+                removeReadingFont={removeReadingFont}
+                customFontInUse={customFontInUse}
+                zhConvert={zhConvert}
+                changeZhConvert={changeZhConvert}
+                dictionaries={dictionaries}
+                removeDictionary={removeDictionary}
+                importDictionary={importDictionary}
+                panelProblem={panelProblem}
+                themeVars={readerVars}
+              />
+            ) : (
+              <DisplayPanel
+                typography={typography}
+                updateLayout={updateLayout}
+                scrollModeSupported={scrollModeSupported}
+                statsSettings={statsSettings}
+                onStatsToggle={changeStatsSetting}
+                pageTurnStyle={pageTurnStyle}
+                onPageTurnChange={changePageTurnStyle}
+                rulerActive={rulerActive}
+                rulerSupported={rulerSupported}
+                rulerSettings={rulerSettings}
+                updateRuler={updateRuler}
+                toggleRuler={toggleRuler}
+                wakeLockEnabled={wakeLockEnabled}
+                wakeLockSupported={wakeLockSupported}
+                onWakeLockChange={changeWakeLock}
+              />
+            )}
+          </section>
         )}
 
         {openPanel === 'toc' && (
@@ -2544,7 +2606,7 @@ export function ReaderScreen({
                 onClick={() => setRepairReview(null)}
                 title="放弃"
               >
-                <X size={12} weight="regular" aria-hidden />
+                <X size={14} weight="regular" aria-hidden />
               </button>
             </div>
             {repairReview.proposals.length === 0 && (

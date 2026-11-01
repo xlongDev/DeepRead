@@ -295,7 +295,7 @@ export function SettingsDialog({
             role="tab"
             aria-selected={settingsTab === 'ai'}
           >
-            <Sparkle size={13} weight="fill" aria-hidden /> AI 服务
+            <Sparkle size={14} weight="fill" aria-hidden /> AI 服务
           </button>
           <button
             type="button"
@@ -315,55 +315,64 @@ export function SettingsDialog({
             <>
               <section className="modal-section">
                 <p className="modal-section-label">界面主题</p>
-                <div className="theme-grid">
-                  {APP_THEMES.map((theme) => (
-                    <button
-                      key={theme.id}
-                      type="button"
-                      className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
-                      onClick={() => onThemeChange(theme.id)}
-                      aria-pressed={appTheme === theme.id}
-                    >
-                      <span
-                        className="theme-swatch-color"
-                        style={{ background: theme.swatch, color: theme.ink }}
+                <div className="settings-group">
+                  <div className="theme-grid">
+                    {APP_THEMES.map((theme) => (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
+                        onClick={() => onThemeChange(theme.id)}
+                        aria-pressed={appTheme === theme.id}
                       >
                         <span
-                          className="theme-swatch-line"
-                          style={{ background: theme.ink, opacity: 0.85 }}
-                        />
-                        <span
-                          className="theme-swatch-line"
-                          style={{ background: theme.ink, opacity: 0.55 }}
-                        />
-                        <span
-                          className="theme-swatch-line"
-                          style={{ background: theme.ink, opacity: 0.35 }}
-                        />
-                        <span className="theme-swatch-dot" style={{ background: theme.accent }} />
-                      </span>
-                      {theme.label}
-                    </button>
-                  ))}
+                          className="theme-swatch-color"
+                          style={{ background: theme.swatch, color: theme.ink }}
+                        >
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.85 }}
+                          />
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.55 }}
+                          />
+                          <span
+                            className="theme-swatch-line"
+                            style={{ background: theme.ink, opacity: 0.35 }}
+                          />
+                          {/* 曾经这里有一颗强调色小圆点。十二个主题的强调色
+                              几乎全是同一档蓝,于是十二颗一模一样的点既没
+                              传达「这个主题的强调色」,又因为排在预览页的
+                              视觉重心上,被读成「每张都被选中了」—— 而真正
+                              的选中信号是边框。没有信息量的装饰就是噪声。 */}
+                        </span>
+                        {theme.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </section>
               <section className="modal-section">
                 <p className="modal-section-label">书架偏好(自动保存)</p>
-                <div className="settings-shelf-columns">
-                  <span className="settings-shelf-columns-label">网格每行书本数</span>
-                  <DropdownMenu
-                    ariaLabel="每行显示的书本数"
-                    value={shelfColumns === 'auto' ? 'auto' : String(shelfColumns)}
-                    options={SHELF_COLUMN_OPTIONS}
-                    onChange={(value) =>
-                      onShelfColumns(value === 'auto' ? 'auto' : (Number(value) as ShelfColumns))
-                    }
-                    title="自适应按窗口宽度自动安排;固定列数在窄窗口会回落自适应"
-                  />
+                <div className="settings-group">
+                  <div className="settings-shelf-columns">
+                    <span className="settings-shelf-columns-label">网格每行书本数</span>
+                    <DropdownMenu
+                      ariaLabel="每行显示的书本数"
+                      value={shelfColumns === 'auto' ? 'auto' : String(shelfColumns)}
+                      options={SHELF_COLUMN_OPTIONS}
+                      onChange={(value) =>
+                        onShelfColumns(value === 'auto' ? 'auto' : (Number(value) as ShelfColumns))
+                      }
+                      title="自适应按窗口宽度自动安排;固定列数在窄窗口会回落自适应"
+                    />
+                  </div>
+                  <p className="ai-privacy">
+                    排序、视图与列数自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa
+                    面板设置。
+                  </p>
                 </div>
-                <p className="ai-privacy">
-                  排序、视图与列数自动记忆;阅读排版(字号、行距、翻页方式)在阅读器内的 Aa 面板设置。
-                </p>
               </section>
             </>
           )}
@@ -373,43 +382,46 @@ export function SettingsDialog({
           {settingsTab === 'ai' && (
             <section className="modal-section">
               <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
-              {/*
-               * 浏览器端不给表单。填了也存不下 —— 密钥在那边没有安全的地方
-               * 放(IndexedDB 是明文的),而且直连各家 API 会被 CORS 拦下。
-               * 与其让用户填完再撞一句「Tauri 运行时不可用」,不如一开始就
-               * 说清楚;那也是「点了没反应」和「明确说没有」的区别。
-               */}
-              {!isTauriRuntime() ? (
-                <p className="ai-privacy">
-                  AI 助手与云端朗读仅在桌面版提供。浏览器里没有安全存放 API
-                  密钥的地方(本地存储是明文的),直连各家服务也会被跨域策略拦下。
-                </p>
-              ) : (
-                <>
-                  <AiProviderForm
-                    providers={providers}
-                    configForm={aiConfigForm}
-                    onFormChange={setAiConfigForm}
-                    onSave={() => saveAiProvider()}
-                    onRemove={removeAiProvider}
-                    onApplyPreset={(preset) => {
-                      setAiConfigForm((form) => ({
-                        ...form,
-                        name: preset.label,
-                        baseUrl: preset.baseUrl,
-                        model: preset.model,
-                      }))
-                    }}
-                    error={aiProviderError}
-                  />
-                  {aiLoaded && providers.length > 0 && (
-                    <p className="ai-privacy">
-                      配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
-                      {providers.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}。
-                    </p>
-                  )}
-                </>
-              )}
+              <div className="settings-group">
+                {/*
+                 * 浏览器端不给表单。填了也存不下 —— 密钥在那边没有安全的地方
+                 * 放(IndexedDB 是明文的),而且直连各家 API 会被 CORS 拦下。
+                 * 与其让用户填完再撞一句「Tauri 运行时不可用」,不如一开始就
+                 * 说清楚;那也是「点了没反应」和「明确说没有」的区别。
+                 */}
+                {!isTauriRuntime() ? (
+                  <p className="ai-privacy">
+                    AI 助手与云端朗读仅在桌面版提供。浏览器里没有安全存放 API
+                    密钥的地方(本地存储是明文的),直连各家服务也会被跨域策略拦下。
+                  </p>
+                ) : (
+                  <>
+                    <AiProviderForm
+                      providers={providers}
+                      configForm={aiConfigForm}
+                      onFormChange={setAiConfigForm}
+                      onSave={() => saveAiProvider()}
+                      onRemove={removeAiProvider}
+                      onApplyPreset={(preset) => {
+                        setAiConfigForm((form) => ({
+                          ...form,
+                          name: preset.label,
+                          baseUrl: preset.baseUrl,
+                          model: preset.model,
+                        }))
+                      }}
+                      error={aiProviderError}
+                    />
+                    {aiLoaded && providers.length > 0 && (
+                      <p className="ai-privacy">
+                        配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
+                        {providers.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}
+                        。
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </section>
           )}
 
@@ -417,68 +429,72 @@ export function SettingsDialog({
             <>
               <section className="modal-section">
                 <p className="modal-section-label">备份与恢复</p>
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void runBackup()}
-                    disabled={backupBusy}
-                  >
-                    {/* 桌面端要选存到哪;浏览器端直接下载,没有"到哪"这一步。 */}
-                    {backupBusy ? '备份中…' : isTauriRuntime() ? '备份到…' : '导出备份'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void runRestore(onRestored)}
-                    disabled={backupBusy}
-                  >
-                    {backupBusy ? '恢复中…' : '从备份恢复…'}
-                  </button>
-                </div>
-                {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
-                {/* 浏览器里书是自己存下来的,空间有上限 —— 在"备份"这一格
+                <div className="settings-group">
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void runBackup()}
+                      disabled={backupBusy}
+                    >
+                      {/* 桌面端要选存到哪;浏览器端直接下载,没有"到哪"这一步。 */}
+                      {backupBusy ? '备份中…' : isTauriRuntime() ? '备份到…' : '导出备份'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void runRestore(onRestored)}
+                      disabled={backupBusy}
+                    >
+                      {backupBusy ? '恢复中…' : '从备份恢复…'}
+                    </button>
+                  </div>
+                  {backupMsg !== null && <p className="library-note">{backupMsg}</p>}
+                  {/* 浏览器里书是自己存下来的,空间有上限 —— 在"备份"这一格
                     顺带如实告诉用户还剩多少,别等写满了才发现。 */}
-                {!isTauriRuntime() && storageUsage !== null && storageUsage.quota > 0 && (
-                  <p className="library-note">
-                    浏览器已用 {formatBytes(storageUsage.usage)},配额约{' '}
-                    {formatBytes(storageUsage.quota)}。
-                  </p>
-                )}
+                  {!isTauriRuntime() && storageUsage !== null && storageUsage.quota > 0 && (
+                    <p className="library-note">
+                      浏览器已用 {formatBytes(storageUsage.usage)},配额约{' '}
+                      {formatBytes(storageUsage.quota)}。
+                    </p>
+                  )}
+                </div>
               </section>
               <section className="modal-section">
                 <p className="modal-section-label">更新</p>
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void checkForUpdates()}
-                    disabled={updateBusy}
-                  >
-                    {updateBusy ? '检查中…' : '检查更新'}
-                  </button>
-                  {update !== null && (
+                <div className="settings-group">
+                  <div className="modal-actions">
                     <button
                       type="button"
-                      className="btn-primary"
-                      onClick={() => void installUpdate()}
+                      className="btn"
+                      onClick={() => void checkForUpdates()}
                       disabled={updateBusy}
                     >
-                      下载并安装
+                      {updateBusy ? '检查中…' : '检查更新'}
                     </button>
-                  )}
-                  {update !== null && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={ignoreUpdate}
-                      disabled={updateBusy}
-                    >
-                      忽略此版本
-                    </button>
-                  )}
+                    {update !== null && (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void installUpdate()}
+                        disabled={updateBusy}
+                      >
+                        下载并安装
+                      </button>
+                    )}
+                    {update !== null && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={ignoreUpdate}
+                        disabled={updateBusy}
+                      >
+                        忽略此版本
+                      </button>
+                    )}
+                  </div>
+                  {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
                 </div>
-                {updateMsg !== null && <p className="library-note">{updateMsg}</p>}
               </section>
             </>
           )}

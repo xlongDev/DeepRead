@@ -2,10 +2,15 @@
  * 底栏:进度滑杆 + 页码/字数/预计时间。从 ReaderScreen 下沉的进度消费者
  * —— 进度经 progress-store 订阅(useSyncExternalStore),relocate 高频
  * 写入只重渲染这一个 memo 化的叶件,不再拖动整棵阅读器树。
+ *
+ * 分两组,和顶栏同一套语言:滑杆与它的读数(页码)是一件事,字数/剩余时间
+ * 是另一件事,中间一条发丝线。原先的 ← → 是初版留下的装饰性 span
+ * (aria-hidden、无 onClick),读者会当成翻页键去点,所以删掉 —— 翻页靠
+ * 两侧的 page-flip 热区与方向键。
  */
 
 import { memo, useMemo } from 'react'
-import { ArrowLeft, ArrowRight } from '@phosphor-icons/react'
+import type { CSSProperties } from 'react'
 import { buildReadingStats } from './reading-indicators'
 import type { BookCharStats } from '@deepread/reader-core'
 import { type StatsSettings } from './reader-options'
@@ -58,6 +63,11 @@ export const ReaderBottomBar = memo(function ReaderBottomBar({
     ],
   )
 
+  /** 三块读数各有开关(设置里勾),关掉的那块不占位。 */
+  const showPage = statsSettings.progress && readingStats.page !== null
+  const showWords = statsSettings.words && readingStats.chars !== null
+  const showTime = statsSettings.time && readingStats.time !== null
+
   return (
     <footer className="reader-bottom">
       <input
@@ -67,6 +77,9 @@ export const ReaderBottomBar = memo(function ReaderBottomBar({
         max={1000}
         value={Math.round(snapshot.fraction * 1000)}
         aria-label="阅读进度"
+        /* 轨道要用「已读」实心到拇指:range 的 value 只有 CSS 读不到,
+           所以把比例作为自定义属性递给 ::-webkit-slider-runnable-track。 */
+        style={{ '--fill': `${(snapshot.fraction * 100).toFixed(2)}%` } as CSSProperties}
         onChange={(event) => {
           // Scrubbing only moves the thumb: a goTo per input event relayouts
           // the whole book. The jump happens once, on release.
@@ -78,34 +91,28 @@ export const ReaderBottomBar = memo(function ReaderBottomBar({
         onKeyUp={onScrubCommit}
         onBlur={onScrubCommit}
       />
-      <span className="reader-arrow" aria-hidden>
-        <ArrowLeft size={14} weight="regular" />
-      </span>
-      <span className="reader-arrow" aria-hidden>
-        <ArrowRight size={14} weight="regular" />
-      </span>
-      {statsSettings.words && readingStats.chars && (
-        <button
-          type="button"
-          className="reader-count-toggle"
-          title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
-          onClick={() => {
-            onWordsScopeChange({
-              ...statsSettings,
-              wordsScope:
-                statsSettings.wordsScope === 'book' ? ('section' as const) : ('book' as const),
-            })
-          }}
-        >
-          {readingStats.chars}
-        </button>
-      )}
-      {statsSettings.time && readingStats.time && (
-        <span className="reader-percent">{readingStats.time}</span>
-      )}
-      {statsSettings.progress && readingStats.page && (
-        <span className="reader-percent reader-percent-strong">{readingStats.page}</span>
-      )}
+      {showPage && <span className="reader-stat is-strong">{readingStats.page}</span>}
+      {showWords || showTime ? (
+        <div className="reader-stats">
+          {showWords && (
+            <button
+              type="button"
+              className="reader-stat is-toggle"
+              title={`当前显示${statsSettings.wordsScope === 'book' ? '全书' : '本章'}字数,点按切换`}
+              onClick={() => {
+                onWordsScopeChange({
+                  ...statsSettings,
+                  wordsScope:
+                    statsSettings.wordsScope === 'book' ? ('section' as const) : ('book' as const),
+                })
+              }}
+            >
+              {readingStats.chars}
+            </button>
+          )}
+          {showTime && <span className="reader-stat">{readingStats.time}</span>}
+        </div>
+      ) : null}
     </footer>
   )
 })

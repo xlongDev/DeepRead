@@ -224,7 +224,7 @@ async function drainMacrotasks(): Promise<void> {
 /** 仍在播音:暂停钮在(phase=playing),待机文案不在。 */
 function expectStillPlaying(): void {
   expect(screen.queryAllByTitle('暂停').length).toBeGreaterThan(0)
-  expect(screen.queryByText('待机')).toBeNull()
+  expect(screen.queryByText('从本章开头朗读')).toBeNull()
 }
 
 beforeEach(() => {

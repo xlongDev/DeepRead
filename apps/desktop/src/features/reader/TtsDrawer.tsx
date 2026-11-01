@@ -20,6 +20,7 @@ import {
   Pause,
   PictureInPicture,
   Play,
+  SpeakerHigh,
   X,
 } from '@phosphor-icons/react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -75,6 +76,21 @@ export const HIGHLIGHT_PRESETS = [
   { name: '蜜橙', color: '#fdba74' },
   { name: '紫罗兰', color: '#c4b5fd' },
 ] as const
+
+/** Edge 音色的 shortName 是内部标识(`zh-CN-XiaoxiaoNeural` /
+ *  `zh-CN-liaoning-XiaobeiNeural`),原样塞进 22px 高的卡片会被截成
+ *  「zh-CN-Xiaoxi…」—— 读者既读不出是谁,也分不清几个音色的差别。去掉语言
+ *  前缀与 Neural 后缀,只留名字;语言信息交给列表第二列。
+ *
+ *  只给 **id** 用:系统语音的 `name` 本来就是人话(`Tingting`),再过一遍会
+ *  把 `Microsoft Huihui Desktop - Chinese (Simplified)` 切成语言名。 */
+function voiceDisplayName(id: string): string {
+  const name = id
+    .replace(/Neural$/, '')
+    .split(/[.-]/)
+    .at(-1)
+  return name !== undefined && name !== '' ? name : id
+}
 
 type HighlightMode = 'off' | 'sentence' | 'word'
 
@@ -926,8 +942,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
 
   const voiceLabel =
     settings.engine === 'edge'
-      ? (edgeVoices.find((voice) => voice.shortName === settings.narratorEdge)?.shortName ??
-        settings.narratorEdge)
+      ? voiceDisplayName(
+          edgeVoices.find((voice) => voice.shortName === settings.narratorEdge)?.shortName ??
+            settings.narratorEdge,
+        )
       : settings.engine === 'cloud'
         ? settings.narratorCloud
         : (voices.find((voice) => voice.voiceURI === settings.narratorSystem)?.name ?? '默认')
@@ -1004,9 +1022,9 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           aria-label={phase === 'playing' ? '暂停' : '播放'}
         >
           {phase === 'playing' ? (
-            <Pause size={17} weight="fill" aria-hidden />
+            <Pause size={16} weight="fill" aria-hidden />
           ) : (
-            <Play size={17} weight="fill" aria-hidden />
+            <Play size={16} weight="fill" aria-hidden />
           )}
         </button>
         <button
@@ -1191,10 +1209,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                       setView('player')
                     }}
                   >
-                    <span className="tts-voice-name">{voice.shortName.replace(/Neural$/, '')}</span>
+                    <span className="tts-voice-name">{voiceDisplayName(voice.shortName)}</span>
                     <span className="tts-voice-locale">{voice.locale}</span>
                     {settings.narratorEdge === voice.shortName && (
-                      <Check size={15} weight="bold" aria-hidden />
+                      <Check size={14} weight="bold" aria-hidden />
                     )}
                   </button>
                 ))}
@@ -1208,7 +1226,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                   }}
                 >
                   <span className="tts-voice-name">默认</span>
-                  {!settings.narratorSystem && <Check size={15} weight="bold" aria-hidden />}
+                  {!settings.narratorSystem && <Check size={14} weight="bold" aria-hidden />}
                 </button>
               )}
               {settings.engine === 'system' &&
@@ -1225,7 +1243,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                     <span className="tts-voice-name">{voice.name}</span>
                     <span className="tts-voice-locale">{voice.lang}</span>
                     {settings.narratorSystem === voice.voiceURI && (
-                      <Check size={15} weight="bold" aria-hidden />
+                      <Check size={14} weight="bold" aria-hidden />
                     )}
                   </button>
                 ))}
@@ -1245,7 +1263,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                     <span className="tts-voice-name">
                       {provider.name} · {provider.ttsModel ?? '未配置 TTS 模型'}
                     </span>
-                    {activeId === provider.id && <Check size={15} weight="bold" aria-hidden />}
+                    {activeId === provider.id && <Check size={14} weight="bold" aria-hidden />}
                   </button>
                 ))}
             </div>
@@ -1273,10 +1291,10 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               onClick={onMinimize}
               title="收起为迷你播放条"
             >
-              <CaretDown size={15} weight="bold" aria-hidden />
+              <CaretDown size={14} weight="bold" aria-hidden />
             </button>
             <button type="button" className="chrome-button" onClick={onClose} title="停止并关闭">
-              <X size={15} weight="regular" aria-hidden />
+              <X size={14} weight="regular" aria-hidden />
             </button>
           </div>
 
@@ -1293,9 +1311,19 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 <span className="tts-loading-label">正在合成语音…</span>
               </div>
             ) : sentences.length === 0 ? (
-              <p className="tts-sentence-text is-idle">
-                {phase === 'idle' ? '待机' : '正在加载章节…'}
-              </p>
+              /* 待机不是「空」:这块板是整章歌词的容器,没内容时它仍是抽屉里
+                 最大的一片面积。写一个「待机」等于把最大的面积留给了两个字。 */
+              <div className="tts-idle">
+                <span className="tts-idle-mark" aria-hidden>
+                  <SpeakerHigh size={18} weight="regular" />
+                </span>
+                <p className="tts-idle-title">
+                  {phase === 'idle' ? '从本章开头朗读' : '正在加载章节…'}
+                </p>
+                {phase === 'idle' && (
+                  <p className="tts-idle-hint">按下方 ▶ 开始;划词后也能选「朗读此处」</p>
+                )}
+              </div>
             ) : (
               <ol className="tts-sentence-list" ref={sentenceListRef}>
                 {sentences.map((sentence, index) => (
@@ -1343,7 +1371,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               title="上一章"
               aria-label="上一章"
             >
-              <CaretDoubleLeft size={17} weight="bold" aria-hidden />
+              <CaretDoubleLeft size={16} weight="bold" aria-hidden />
             </button>
             <button
               type="button"
@@ -1352,7 +1380,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               title="上一句"
               aria-label="上一句"
             >
-              <CaretLeft size={17} weight="bold" aria-hidden />
+              <CaretLeft size={16} weight="bold" aria-hidden />
             </button>
             {phase === 'playing' ? (
               <button
@@ -1362,7 +1390,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 title="暂停"
                 aria-label="暂停"
               >
-                <Pause size={22} weight="fill" aria-hidden />
+                <Pause size={20} weight="fill" aria-hidden />
               </button>
             ) : (
               <button
@@ -1372,7 +1400,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 title={phase === 'paused' ? '继续' : '播放本章'}
                 aria-label="播放"
               >
-                <Play size={22} weight="fill" aria-hidden />
+                <Play size={20} weight="fill" aria-hidden />
               </button>
             )}
             <button
@@ -1382,7 +1410,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               title="下一句"
               aria-label="下一句"
             >
-              <CaretRight size={17} weight="bold" aria-hidden />
+              <CaretRight size={16} weight="bold" aria-hidden />
             </button>
             <button
               type="button"
@@ -1391,9 +1419,12 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               title="下一章"
               aria-label="下一章"
             >
-              <CaretDoubleRight size={17} weight="bold" aria-hidden />
+              <CaretDoubleRight size={16} weight="bold" aria-hidden />
             </button>
           </div>
+
+          {/* 播放控制到此为止,下面是可调项 —— 一条发丝线替读者划这道界。 */}
+          <hr className="tts-divider" />
 
           <div className="tts-cards">
             <DropdownMenu
@@ -1420,9 +1451,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               onClick={() => setView('voices')}
               title="选择语音"
             >
-              <span className="tts-card-value">
-                {voiceLabel.length > 14 ? `${voiceLabel.slice(0, 13)}…` : voiceLabel}
-              </span>
+              <span className="tts-card-value">{voiceLabel}</span>
               <span className="tts-card-label">{ENGINE_LABELS[settings.engine]}</span>
             </button>
             <DropdownMenu
@@ -1468,25 +1497,31 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           </div>
 
           <div className="tts-highlight" aria-label="正文高亮设置">
-            <div className="tts-engine-row tts-highlight-mode" aria-label="高亮粒度">
-              {(['off', 'sentence', 'word'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`segmented-button${settings.highlightMode === mode ? ' is-active' : ''}`}
-                  onClick={() => setSettings((current) => ({ ...current, highlightMode: mode }))}
-                  aria-pressed={settings.highlightMode === mode}
-                  title={
-                    mode === 'off'
-                      ? '关闭正文高亮'
-                      : mode === 'sentence'
-                        ? '按整句高亮(自动翻页)'
-                        : '按词高亮(引擎报回的词边界,逐词洗色)'
-                  }
-                >
-                  {mode === 'off' ? '关' : mode === 'sentence' ? '句级' : '词级'}
-                </button>
-              ))}
+            {/* 「关 / 句级 / 词级」三颗自己不说明选的是什么 —— 与上面那排
+                引擎名不同,它们不是自解释的。标签与控件同行:抽屉高度按
+                640 封顶,再单占一行会把歌词板挤到最小高。 */}
+            <div className="tts-highlight-head">
+              <span className="tts-setting-label">正文高亮</span>
+              <div className="tts-engine-row tts-highlight-mode" aria-label="高亮粒度">
+                {(['off', 'sentence', 'word'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`segmented-button${settings.highlightMode === mode ? ' is-active' : ''}`}
+                    onClick={() => setSettings((current) => ({ ...current, highlightMode: mode }))}
+                    aria-pressed={settings.highlightMode === mode}
+                    title={
+                      mode === 'off'
+                        ? '关闭正文高亮'
+                        : mode === 'sentence'
+                          ? '按整句高亮(自动翻页)'
+                          : '按词高亮(引擎报回的词边界,逐词洗色)'
+                    }
+                  >
+                    {mode === 'off' ? '关' : mode === 'sentence' ? '句级' : '词级'}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="tts-highlight-colors" aria-label="高亮颜色">
               {/* 一行六个预设色点 + 自定义色芯片:点得到、看得见,不套
@@ -1517,7 +1552,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                   }
                   aria-label="自定义高亮颜色"
                 />
-                <Highlighter size={13} weight="bold" aria-hidden />
+                <Highlighter size={14} weight="bold" aria-hidden />
               </label>
             </div>
           </div>

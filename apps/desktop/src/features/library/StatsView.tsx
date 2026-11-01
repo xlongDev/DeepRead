@@ -282,7 +282,7 @@ export function StatsView({
             {/* 每周:一行 —— 名称、最近 7 天圆点、进度值、状态、动作。 */}
             <div className="stats-overview-row">
               <span className="stats-overview-name">
-                <CalendarCheck size={15} weight="regular" aria-hidden />
+                <CalendarCheck size={14} weight="regular" aria-hidden />
                 每周阅读
               </span>
               <span className="stats-overview-viz">
@@ -346,7 +346,7 @@ export function StatsView({
             {/* 年度:一行 —— 有目标才有进度条,没目标是引导文案(不画假进度)。 */}
             <div className="stats-overview-row">
               <span className="stats-overview-name">
-                <Books size={15} weight="regular" aria-hidden />
+                <Books size={14} weight="regular" aria-hidden />
                 年度读完
               </span>
               {goals.yearlyBooks > 0 ? (
@@ -404,49 +404,63 @@ export function StatsView({
           {/* ---- 最近 7 天 ---- */}
           <section className="modal-section">
             <p className="modal-section-label">最近 7 天</p>
-            <div className="stats-chart">
-              {/* 绘图区与标签行分开:目标线按绘图区高度定位,才和柱高同一把尺。 */}
-              <div className="stats-chart-plot">
-                {series.map((entry, index) => (
-                  <div
-                    key={entry.day}
-                    className="stats-bar"
-                    title={`${entry.day} · ${formatStatDuration(entry.seconds)}`}
-                  >
-                    <span className="stats-bar-track">
-                      <span
-                        className="stats-bar-fill"
-                        style={{
-                          height: `${Math.round((entry.seconds / chartPeak) * 100)}%`,
-                          // 从周到日依次长起来:一排同时弹满的柱子读不出先后。
-                          animationDelay: `${index * 40}ms`,
-                        }}
-                      />
-                    </span>
-                  </div>
-                ))}
-                {/* 目标线:虚线横在每日目标的高度上 —— 柱头越过它就是达标,
+            {/* 全周零读数时不画图:七根空槽并排读起来像还没加载完的骨架,
+                而不是「这周没读书」。空槽只是刻度,没有读数它不承载信息。 */}
+            {weekSeconds === 0 ? (
+              <p className="library-note">
+                这 7 天还没有阅读记录;累计 {formatStatDuration(stats.totalSeconds)}。
+              </p>
+            ) : (
+              <div className="stats-chart">
+                {/* 绘图区与标签行分开:目标线按绘图区高度定位,才和柱高同一把尺。 */}
+                <div className="stats-chart-plot">
+                  {series.map((entry, index) => (
+                    <div
+                      key={entry.day}
+                      className="stats-bar"
+                      title={`${entry.day} · ${formatStatDuration(entry.seconds)}`}
+                    >
+                      <span className="stats-bar-track">
+                        <span
+                          // 零值日不画柱:`.stats-bar-fill` 有 3px 的可视下限,
+                          // 留着它会让「一天没读」和「读了两分钟」长得一样。
+                          className={`stats-bar-fill${entry.seconds === 0 ? ' is-zero' : ''}`}
+                          style={{
+                            height: `${Math.round((entry.seconds / chartPeak) * 100)}%`,
+                            // 从周到日依次长起来:一排同时弹满的柱子读不出先后。
+                            animationDelay: `${index * 40}ms`,
+                          }}
+                        />
+                      </span>
+                    </div>
+                  ))}
+                  {/* 目标线:虚线横在每日目标的高度上 —— 柱头越过它就是达标,
                     比每根柱子顶一个点更读得出"比目标高还是低"。 */}
-                {goalSeconds > 0 && (
-                  <span
-                    className="stats-chart-goal"
-                    style={{ bottom: `${Math.round((goalSeconds / chartPeak) * 100)}%` }}
-                    title={`每日目标 ${formatStatDuration(goalSeconds)}`}
-                    aria-hidden
-                  />
-                )}
+                  {goalSeconds > 0 && (
+                    <span
+                      className="stats-chart-goal"
+                      style={{ bottom: `${Math.round((goalSeconds / chartPeak) * 100)}%` }}
+                      title={`每日目标 ${formatStatDuration(goalSeconds)}`}
+                      aria-hidden
+                    />
+                  )}
+                </div>
+                <div className="stats-chart-labels" aria-hidden>
+                  {series.map((entry) => (
+                    <span key={entry.day} className="stats-bar-label">
+                      {entry.label}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="stats-chart-labels" aria-hidden>
-                {series.map((entry) => (
-                  <span key={entry.day} className="stats-bar-label">
-                    {entry.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <p className="library-note">
-              只统计前台真正在读书的时间;累计 {formatStatDuration(stats.totalSeconds)}。
-            </p>
+            )}
+            {/* 口径说明只在有图时出现:空态那行已经说了「没有记录」,再叠一句
+                同色的说明就是两行灰字说同一件事。 */}
+            {weekSeconds > 0 && (
+              <p className="library-note">
+                只统计前台真正在读书的时间;累计 {formatStatDuration(stats.totalSeconds)}。
+              </p>
+            )}
           </section>
 
           {/* ---- 年度热力图 ---- */}

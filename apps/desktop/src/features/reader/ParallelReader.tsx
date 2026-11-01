@@ -252,9 +252,9 @@ export function ParallelReader({
           onClick={() => setLinked((value) => !value)}
         >
           {linked ? (
-            <LinkSimple size={15} weight="regular" aria-hidden />
+            <LinkSimple size={14} weight="regular" aria-hidden />
           ) : (
-            <LinkSimpleBreak size={15} weight="regular" aria-hidden />
+            <LinkSimpleBreak size={14} weight="regular" aria-hidden />
           )}
         </button>
         <button
@@ -269,7 +269,7 @@ export function ParallelReader({
             onExit(cfi === undefined ? keep : { ...keep, cfi })
           }}
         >
-          <X size={15} weight="regular" aria-hidden />
+          <X size={14} weight="regular" aria-hidden />
         </button>
       </div>
     </div>

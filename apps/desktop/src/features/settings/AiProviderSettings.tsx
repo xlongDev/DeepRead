@@ -174,7 +174,7 @@ export function AiProviderForm({
                 onClick={() => void onRemove(provider.id)}
                 title="移除"
               >
-                <X size={12} weight="regular" aria-hidden />
+                <X size={14} weight="regular" aria-hidden />
               </button>
             </div>
           ))}

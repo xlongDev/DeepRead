@@ -453,7 +453,7 @@ export function LearningDrawer({
                           disabled={answer !== undefined}
                           onClick={() => void answerQuestion(questionIndex, optionIndex)}
                         >
-                          {isAnswer && answer !== undefined && <Check size={12} aria-hidden />}
+                          {isAnswer && answer !== undefined && <Check size={14} aria-hidden />}
                           {option}
                         </button>
                       )

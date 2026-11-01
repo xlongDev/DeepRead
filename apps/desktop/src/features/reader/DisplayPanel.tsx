@@ -1,7 +1,9 @@
 /**
- * 显示设置面板:底栏信息开关(进度/字数/时间)、翻页动画档、版式(单页/
- * 双页/滚动)与阅读尺。从 ReaderScreen 拆出的纯展示件;开关的落库与
- * 尺的内核下发都在宿主回调里。
+ * 显示设置(阅读设置的「显示」页):底栏信息开关(进度/字数/时间)、翻页动画
+ * 档、版式(单页/双页/滚动)、阅读尺与屏幕常亮。从 ReaderScreen 拆出的纯
+ * 展示件;开关的落库与尺的内核下发都在宿主回调里。
+ *
+ * 与排版页共用宿主那一层玻璃外壳,本件的根节点是滚动区里的 `.settings-pane`。
  */
 
 import { Segmented } from './Segmented'
@@ -56,9 +58,9 @@ export function DisplayPanel({
   onWakeLockChange,
 }: DisplayPanelProps) {
   return (
-    <section className="reader-settings reader-display" aria-label="显示设置">
+    <div className="settings-pane">
       <div className="settings-group">
-        <span className="settings-group-label">显示</span>
+        <span className="settings-group-label">底栏信息</span>
         <div className="stats-toggles">
           {(
             [
@@ -98,8 +100,8 @@ export function DisplayPanel({
           ))}
         </Segmented>
       </div>
-      <div className="settings-row">
-        <span className="settings-label">方式</span>
+      <div className="settings-group">
+        <span className="settings-group-label">版式</span>
         <Segmented>
           {VIEW_MODE_OPTIONS.filter(
             (option) => option.value !== 'scroll' || scrollModeSupported,
@@ -132,48 +134,48 @@ export function DisplayPanel({
             </span>
           </button>
         </div>
+        {rulerActive && (
+          <div className="settings-stack">
+            <div className="settings-row">
+              <span className="settings-label">聚焦行数</span>
+              <Segmented>
+                {RULER_FOCUS_LINES.map((count) => (
+                  <button
+                    key={count}
+                    type="button"
+                    className={rulerSettings.focusLines === count ? 'is-active' : ''}
+                    onClick={() => updateRuler({ focusLines: count })}
+                  >
+                    {count}
+                  </button>
+                ))}
+              </Segmented>
+            </div>
+            <div className="settings-row">
+              <span className="settings-label">淡化</span>
+              <Segmented>
+                {RULER_DIM_OPTIONS.map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    className={rulerSettings.dimOpacity === option.value ? 'is-active' : ''}
+                    onClick={() => updateRuler({ dimOpacity: option.value })}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </Segmented>
+            </div>
+          </div>
+        )}
+        <p className="ai-privacy">
+          {!rulerSupported
+            ? '阅读尺暂不支持固定排版(PDF / 漫画)与竖排正文。'
+            : '滚轮与 ↑↓ 移动聚焦行,走到页尾自动翻页;当前排版是滚动时,移动后当前行会回到视口中间。分页排版只高亮、不滚动页面。'}
+        </p>
       </div>
-      {rulerActive && (
-        <>
-          <div className="settings-row">
-            <span className="settings-label">聚焦行数</span>
-            <Segmented>
-              {RULER_FOCUS_LINES.map((count) => (
-                <button
-                  key={count}
-                  type="button"
-                  className={rulerSettings.focusLines === count ? 'is-active' : ''}
-                  onClick={() => updateRuler({ focusLines: count })}
-                >
-                  {count}
-                </button>
-              ))}
-            </Segmented>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">淡化</span>
-            <Segmented>
-              {RULER_DIM_OPTIONS.map((option) => (
-                <button
-                  key={option.label}
-                  type="button"
-                  className={rulerSettings.dimOpacity === option.value ? 'is-active' : ''}
-                  onClick={() => updateRuler({ dimOpacity: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </Segmented>
-          </div>
-        </>
-      )}
-      <p className="ai-privacy">
-        {!rulerSupported
-          ? '阅读尺暂不支持固定排版(PDF / 漫画)与竖排正文。'
-          : '滚轮与 ↑↓ 移动聚焦行,走到页尾自动翻页;当前排版是滚动时,移动后当前行会回到视口中间。分页排版只高亮、不滚动页面。'}
-      </p>
-      <div className="settings-row">
-        <span className="settings-label">屏幕常亮</span>
+      <div className="settings-group">
+        <span className="settings-group-label">屏幕常亮</span>
         <div className="stats-toggles">
           <button
             type="button"
@@ -189,10 +191,10 @@ export function DisplayPanel({
             </span>
           </button>
         </div>
+        {!wakeLockSupported && (
+          <p className="ai-privacy">当前环境不支持屏幕常亮(Wake Lock),开关仅在支持的设备上生效。</p>
+        )}
       </div>
-      {!wakeLockSupported && (
-        <p className="ai-privacy">当前环境不支持屏幕常亮(Wake Lock),开关仅在支持的设备上生效。</p>
-      )}
-    </section>
+    </div>
   )
 }

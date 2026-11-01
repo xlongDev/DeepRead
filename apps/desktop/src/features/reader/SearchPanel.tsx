@@ -116,7 +116,9 @@ export function SearchPanel({
         <p className="reader-toc-empty">仅显示前 {MAX_SHOWN_SEARCH_RESULTS} 条,请细化关键词。</p>
       )}
       {searchState === 'idle' && searchResults.length === 0 && (
-        <p className="reader-toc-empty">输入关键词,搜索整本书的正文。</p>
+        /* 输入框是非受控的(宿主也会往里填词),这里读不到「有没有打字」——
+           所以只讲操作,不讲状态:只说「输入关键词」会让人以为已经搜过了。 */
+        <p className="reader-toc-empty">输入关键词,按 Enter 搜索整本书的正文。</p>
       )}
     </nav>
   )

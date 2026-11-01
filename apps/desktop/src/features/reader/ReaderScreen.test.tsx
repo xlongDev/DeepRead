@@ -122,21 +122,40 @@ function respond(command: string): unknown {
   }
 }
 
-/** 顶栏 12 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。 */
+/** 顶栏三组 9 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。
+    频次低、且有别的入口的四个动作(全屏 / 阅读尺 / 学习 / 对照阅读)收在
+    「更多」菜单里 —— 平铺时 12 颗同权图标连成一条,读者得逐个辨认。
+    排版与显示两页合成一个「阅读设置」:两个都叫设置的面板并排,读者分不清
+    哪个装了什么,而它们本来问的是同一件事 —— 这个阅读界面该怎么长。 */
 const TOP_KEYS = [
   '返回书架',
   '在此页添加书签',
-  '阅读背景:点击切换夜间(当前 纸白,在排版设置中可选)',
-  '全屏阅读(F11 / Ctrl+⌘+F)',
-  '排版设置',
-  '显示设置',
-  '阅读尺:聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)',
-  'AI 助手',
-  '朗读 / 听书',
-  '学习(卡片 / 测验 / 错题本)',
   '搜索全书(⌘K)',
   '目录(⌘B)',
+  '阅读背景:点击切换夜间(当前 纸白,在阅读设置中可选)',
+  '阅读设置(排版 / 显示)',
+  'AI 助手',
+  '朗读 / 听书',
+  '更多(全屏 / 阅读尺 / 学习 / 对照阅读)',
 ] as const
+
+const MORE_KEY = '更多(全屏 / 阅读尺 / 学习 / 对照阅读)'
+
+/** 打开顶栏「更多」菜单,返回菜单容器(portal 到 body,不在 header 里)。 */
+function openMoreMenu(): HTMLElement {
+  fireEvent.click(screen.getByTitle(MORE_KEY))
+  const menu = document.querySelector('.action-menu')
+  if (menu === null) throw new Error('「更多」菜单没有打开')
+  return menu as HTMLElement
+}
+
+/** 点「更多」里的某一项。四项目前都是开关型(menuitemcheckbox):全屏/阅读尺
+    有自己的开态,学习/对照阅读则反映「那个面板正开着」。 */
+function clickMoreItem(name: string | RegExp): HTMLElement {
+  const item = within(openMoreMenu()).getByRole('menuitemcheckbox', { name })
+  fireEvent.click(item)
+  return item
+}
 
 function topKeyTitles(): readonly (string | null)[] {
   const header = document.querySelector('.reader-top')
@@ -282,19 +301,17 @@ describe('顶栏 11 键', () => {
    * 可开,那条分支在 ParallelReader 里就没有这个 prop)。不能加进 TOP_KEYS:
    * 那 11 键是单本阅读的契约,多一个键会让所有既有用例跟着动。
    */
-  it('宿主支持对照阅读时多一个「对照阅读」键,选完书交给宿主', async () => {
+  it('宿主支持对照阅读时「更多」里多一项「对照阅读」,选完书交给宿主', async () => {
     const onOpenParallel = vi.fn()
     render(<ReaderScreen book={BOOK} onBack={vi.fn()} onOpenParallel={onOpenParallel} />)
     await waitFor(() => expect(document.querySelector('.reader-opening')).toBeNull())
 
-    expect(topKeyTitles()).toEqual([
-      ...TOP_KEYS.slice(0, -2),
-      '对照阅读(两本书并排)',
-      '搜索全书(⌘K)',
-      '目录(⌘B)',
-    ])
+    // 顶栏本身不变(它收在菜单里),菜单里才多出这一项。
+    expect(topKeyTitles()).toEqual([...TOP_KEYS])
+    const menu = openMoreMenu()
+    expect(within(menu).getByRole('menuitemcheckbox', { name: /对照阅读/ })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByTitle('对照阅读(两本书并排)'))
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /对照阅读/ }))
     const picker = await screen.findByRole('region', { name: '选择对照的书' })
     expect(picker).toBeInTheDocument()
     // 书架上只有这本自己:不该出现在候选里,得说清楚。
@@ -303,22 +320,26 @@ describe('顶栏 11 键', () => {
 })
 
 describe('面板开合', () => {
-  it('排版设置面板可开可关', async () => {
+  it('阅读设置面板可开可关,默认停在排版页', async () => {
     await renderReader()
-    const key = screen.getByTitle('排版设置')
-    expect(screen.queryByLabelText('排版设置')).not.toBeInTheDocument()
+    const key = screen.getByTitle('阅读设置(排版 / 显示)')
+    expect(screen.queryByLabelText('阅读设置')).not.toBeInTheDocument()
     fireEvent.click(key)
-    expect(await screen.findByRole('region', { name: '排版设置' })).toBeInTheDocument()
+    const panel = await screen.findByRole('region', { name: '阅读设置' })
+    // 排版页 = 阅读背景那排色块;显示页的「翻页动画」此刻不在树里。
+    expect(within(panel).getByText('阅读背景')).toBeInTheDocument()
+    expect(within(panel).queryByText('翻页动画')).not.toBeInTheDocument()
     fireEvent.click(key)
     await waitFor(() =>
-      expect(screen.queryByRole('region', { name: '排版设置' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('region', { name: '阅读设置' })).not.toBeInTheDocument(),
     )
   })
 
-  it('显示设置面板列出三个开关', async () => {
+  it('阅读设置的显示页列出底栏三个开关', async () => {
     await renderReader()
-    fireEvent.click(screen.getByTitle('显示设置'))
-    const panel = await screen.findByRole('region', { name: '显示设置' })
+    fireEvent.click(screen.getByTitle('阅读设置(排版 / 显示)'))
+    const panel = await screen.findByRole('region', { name: '阅读设置' })
+    fireEvent.click(within(panel).getByRole('tab', { name: '显示' }))
     const switches = within(panel).getAllByRole('switch')
     expect(switches.map((node) => node.textContent)).toEqual(
       expect.arrayContaining([
@@ -378,21 +399,26 @@ describe('面板开合', () => {
     for (const [key, testId] of [
       ['AI 助手', 'ai'],
       ['朗读 / 听书', 'tts'],
-      ['学习(卡片 / 测验 / 错题本)', 'learning'],
     ] as const) {
       fireEvent.click(screen.getByTitle(key))
       expect(await screen.findByTestId(testId)).toBeInTheDocument()
       fireEvent.click(screen.getByTitle(key))
       await waitFor(() => expect(screen.queryByTestId(testId)).not.toBeInTheDocument())
     }
+
+    // 学习在「更多」菜单里(低频:进去就是另一个场景),两次都从菜单开、关。
+    clickMoreItem(/^学习/)
+    expect(await screen.findByTestId('learning')).toBeInTheDocument()
+    clickMoreItem(/^学习/)
+    await waitFor(() => expect(screen.queryByTestId('learning')).not.toBeInTheDocument())
   })
 })
 
 describe('排版设置:原书排版与自定义', () => {
   /** 打开排版设置面板(顶栏那颗键)。 */
   async function openTypographyPanel(): Promise<HTMLElement> {
-    fireEvent.click(screen.getByTitle('排版设置'))
-    return screen.findByRole('region', { name: '排版设置' })
+    fireEvent.click(screen.getByTitle('阅读设置(排版 / 显示)'))
+    return screen.findByRole('region', { name: '阅读设置' })
   }
 
   /** 面板里某一行的容器:同类按钮(特窄/标准/…)在两行里各有一份,
@@ -627,10 +653,12 @@ describe('键盘事件契约', () => {
 })
 
 describe('阅读尺与版式互不干涉', () => {
-  /** 打开显示设置面板(版式「方式」选择器在里面)。 */
+  /** 打开阅读设置的「显示」页(版式「翻页方式」选择器在里面)。 */
   async function openDisplayPanel(): Promise<HTMLElement> {
-    fireEvent.click(screen.getByTitle('显示设置'))
-    return screen.findByRole('region', { name: '显示设置' })
+    fireEvent.click(screen.getByTitle('阅读设置(排版 / 显示)'))
+    const panel = await screen.findByRole('region', { name: '阅读设置' })
+    fireEvent.click(within(panel).getByRole('tab', { name: '显示' }))
+    return panel
   }
 
   const enableRuler = (): void => {
@@ -644,7 +672,7 @@ describe('阅读尺与版式互不干涉', () => {
     const { adapter } = await renderReader()
     expect(adapter.setLayout).toHaveBeenCalledWith(expect.objectContaining({ flow: 'paginated' }))
 
-    fireEvent.click(screen.getByTitle(/^阅读尺/))
+    clickMoreItem(/阅读尺/)
     await waitFor(() =>
       expect(adapter.setReadingRuler).toHaveBeenCalledWith(
         expect.objectContaining({ focusLines: 1 }),
@@ -654,7 +682,7 @@ describe('阅读尺与版式互不干涉', () => {
       expect.objectContaining({ flow: 'paginated' }),
     )
 
-    fireEvent.click(screen.getByTitle('关闭阅读尺'))
+    clickMoreItem(/阅读尺/)
     await waitFor(() => expect(adapter.setReadingRuler).toHaveBeenLastCalledWith(null))
     expect(adapter.setLayout).toHaveBeenLastCalledWith(
       expect.objectContaining({ flow: 'paginated' }),

@@ -109,7 +109,7 @@ export function LibrarySidebar({
       <div className="lib-sidebar-top" aria-hidden />
       <div className="lib-brand" data-tauri-drag-region>
         <span className="library-mark" aria-hidden>
-          <BookOpenText size={17} weight="fill" />
+          <BookOpenText size={16} weight="fill" />
         </span>
         <span className="library-brand">DeepRead</span>
         {/* web 端没有交通灯,开关按 deepseek 的方式住进品牌行右侧;

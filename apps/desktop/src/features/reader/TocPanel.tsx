@@ -181,7 +181,7 @@ export function TocPanel({
                 onClick={() => onRemoveBookmark(bookmark.id)}
                 title="删除书签"
               >
-                <X size={12} weight="regular" aria-hidden />
+                <X size={14} weight="regular" aria-hidden />
               </button>
             </div>
           ))}
@@ -256,7 +256,7 @@ export function TocPanel({
                     }
                     title="写笔记"
                   >
-                    <PencilSimple size={12} weight="regular" aria-hidden />
+                    <PencilSimple size={14} weight="regular" aria-hidden />
                   </button>
                   <button
                     type="button"
@@ -264,7 +264,7 @@ export function TocPanel({
                     onClick={() => onRemoveAnnotation(record.id)}
                     title="删除划线"
                   >
-                    <Trash size={12} weight="regular" aria-hidden />
+                    <Trash size={14} weight="regular" aria-hidden />
                   </button>
                 </div>
               </div>

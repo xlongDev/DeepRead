@@ -67,8 +67,8 @@ describe('theme tokens', () => {
       'accent',
       'accentSoft',
       'border',
-      'highlight',
       'danger',
+      'dangerSoft',
       'success',
     ] as const satisfies readonly (keyof typeof lightTheme.colors)[]
 
