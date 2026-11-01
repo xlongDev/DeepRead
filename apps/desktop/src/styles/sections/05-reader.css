@@ -1,0 +1,849 @@
+/*
+ * 05-reader.css — 阅读器主体(chrome / 底栏 / 目录 / 滑杆)
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- Reader ---------- */
+
+.reader-scope {
+  /* 只承载阅读主题变量:迷你条/播放器与 .reader 是兄弟节点,
+     变量挂在这层才能同时继承。display:contents 不产生盒。 */
+  display: contents;
+}
+
+.reader {
+  position: fixed;
+  inset: 0;
+  background: var(--reader-bg, var(--color-bg));
+  color: var(--reader-fg, var(--color-text-primary));
+}
+
+/* 阅读画布上的浮层一律用阅读主题派生的磨砂毛玻璃:重模糊 + 轻透,
+   面板文字清晰可读,又保有 Apple 液态玻璃的通透层次。
+   .reader-scope 前缀的那几条:portal 到 body 的浮层(TTS 播放器、下拉菜单)
+   带着变量壳落在 .reader-scope 里,规则要能命中壳内元素。 */
+.reader .reader-top,
+.reader .reader-bottom,
+.reader .reader-toc,
+.reader .reader-settings,
+.reader .selection-toolbar,
+.reader .lookup-card,
+.reader .repair-panel,
+.reader .ai-drawer,
+.reader .dropdown-menu,
+.reader .action-menu,
+.reader-scope .ai-drawer,
+.reader-scope .dropdown-menu,
+.reader-scope .action-menu {
+  background: var(--reader-panel, var(--color-surface-glass));
+  backdrop-filter: var(--glass-blur-heavy);
+  -webkit-backdrop-filter: var(--glass-blur-heavy);
+  border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
+}
+
+/* 面板内的文字/控件令牌整体跟随阅读主题:夜间背景下面板自动变暗色磨砂,
+   文字自动变亮,任何阅读主题下都可读。 */
+.reader .reader-top,
+.reader .reader-bottom,
+.reader .reader-toc,
+.reader .reader-settings,
+.reader .selection-toolbar,
+.reader .lookup-card,
+.reader .repair-panel,
+.reader .ai-drawer,
+.reader .dropdown-menu,
+.reader .action-menu,
+.reader-scope .ai-drawer,
+.reader-scope .dropdown-menu,
+.reader-scope .action-menu {
+  --color-text-primary: var(--reader-fg, var(--color-text-primary));
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--reader-fg, var(--color-text-primary)) 72%,
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--reader-fg, var(--color-text-primary)) 52%,
+    transparent
+  );
+  --color-surface: var(--reader-panel-solid, var(--color-surface));
+  --color-border: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent);
+  /* 表面三级也必须跟着纸走。`--surface-*` 是从 **app** 主题派生的阶,
+     夜间阅读时它仍是浅色,而上面几行已经把文字换成亮色 —— 结果就是
+     白底白字:设置分组卡片在深色纸上是一块发光的白板,里面的说明文字
+     几乎看不见。按纸与墨重新推导:浅纸上略深一档、深纸上略亮一档,
+     两个方向都读得出「这是一块面」,也永远不会和字同色。 */
+  --surface-page: var(--reader-panel-solid, var(--color-surface));
+  --surface-card: color-mix(
+    in srgb,
+    var(--reader-panel-solid, var(--color-surface)) 94%,
+    var(--reader-fg, var(--color-text-primary))
+  );
+  --surface-sunk: color-mix(
+    in srgb,
+    var(--reader-panel-solid, var(--color-surface)) 88%,
+    var(--reader-fg, var(--color-text-primary))
+  );
+  color: var(--reader-fg, var(--color-text-primary));
+}
+
+.reader-host {
+  position: absolute;
+  inset: 0;
+}
+
+.reader-host foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 阅读尺:焦点带 + 蒙版(见 reader-adapter/reading-ruler.ts)。
+   焦点带自己透明,靠 box-shadow 向外铺满纸色蒙版 —— 视觉上等于「其余内容
+   压到 X% 不透明」,但图片/表格/代码块一视同仁,也不碰书页 DOM。
+   层挂在宿主里,所以 overflow:hidden 顺便把溢出的影子裁在阅读区内;
+   pointer-events:none 保证划词、点击、翻页丝毫无损。
+   颜色由脚本算成 rgba(主题纸色, 1 - 不透明度)写进 --reading-ruler-scrim:
+   主题驱动的颜色不过渡,交给 CSS 变量会在切主题时晚半拍。 */
+.reading-ruler {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.reading-ruler-band {
+  position: absolute;
+  /* 横向由脚本给(left + width = 锚点所在的那一栏,双页下是半屏);这里只
+     给初值,免得第一帧画成 0 宽。不能写 right —— 和 width 同时给会打架。 */
+  left: 0;
+  width: 100%;
+  opacity: 0;
+  box-shadow: 0 0 0 100vmax var(--reading-ruler-scrim, transparent);
+  /* 位置**不**过渡:移尺是脚本逐帧重画(reading-ruler 的 #animateTo),带子
+     必须和正文同帧 —— 再叠一层 CSS 过渡,带子就落后正文半拍(实测滑行中
+     最大差 9px,看着是「带子和内容各走各的」)。只有 opacity 是纯淡入。 */
+  transition: opacity 120ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-ruler-band {
+    transition: none;
+  }
+}
+
+/* The kernel's built-in header/footer stay out of the design. */
+.reader-host foliate-view::part(head),
+.reader-host foliate-view::part(foot) {
+  display: none;
+}
+
+/* PDF 滚动模式(fixed-layout scrolled,见 reader-adapter/pdf-scroll.ts):
+   容器铺满宿主,每页按自然宽度 fit,间距与 pageOffsets 的算术互为镜像 ——
+   除第一页外 margin-top = 16px,末尾一块同高 spacer 做留白。改这里必须同步
+   改 pdf-scroll.ts 的 PAGE_GAP,否则滚动上报的页内比例会整体偏移。 */
+.pdf-scroll {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--reader-bg, var(--color-bg));
+}
+
+.pdf-scroll-page {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pdf-scroll-page + .pdf-scroll-page {
+  margin-top: 16px;
+}
+
+.pdf-scroll-spacer {
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.reader-settings {
+  top: 64px;
+  right: max(16px, calc(50% - 320px));
+  /* 300px:四字标签 + 四档分段里每档还有 41px(够放两个汉字)。再窄一档
+     标签就先被挤,胶囊等分后档位也不足两字宽。 */
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  /* 面板加高后必须能滚:顶 64px 起,底给底栏(16px + ~56px)留位,
+     否则简繁转换等下面的行被伸出视口、永远点不到。
+     overflow-x:hidden 顺带收掉:面板里 nowrap 的按钮行(.segmented 多颗)
+     min-width:auto = min-content,只开 overflow-y 会把横向滚动也放出来。 */
+  max-height: calc(100vh - 64px - 88px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 与 .reader-bottom 同为 z-index:40 时,DOM 在后的底栏会盖住面板
+     (设置面板在底部工具条之前渲染)——抬一级,浮层面永远压在底栏上。 */
+  z-index: var(--z-chrome-top);
+  animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 阅读设置 = 一个面板两页(排版 / 显示)。面板本身不再滚:页签钉在顶上,
+   只有内容区滚 —— 和设置弹窗同一条规矩,滚到底时页签还在手里。
+   自撑高度也要收:原先是两个独立面板各自 overflow-y,合并后必须由
+   flex 子项(min-height:0)接住滚动,否则内容把面板顶出 max-height。 */
+.reader-settings.reader-prefs {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* 页签带:一条**滚不走**的横带,内容和它之间没有缝。滚上来的卡片会在它的
+   下边缘被切住 —— 切在一条画出来的横线上读作「滚到头部下面去了」,切在一条
+   透明的缝里则读作「卡片飞出来了」。它自己不刷底色:面板本来就是一块玻璃,
+   再刷一层同料只会多出一道明度台阶。 */
+.reader-prefs-head {
+  flex-shrink: 0;
+  padding: var(--space-12) var(--space-16) var(--space-8);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.reader-prefs-tabs {
+  flex-shrink: 0;
+}
+
+.reader-prefs .settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-height: 0;
+  /* 上下两端都靠渐隐收口:硬切一刀读作「界面坏了」,渐隐读作「还有下文」
+     (与 `.settings-body` 同一套)。**渐隐长度必须等于内边距长度** —— 长了,
+     滚到头的最后一行也会被虚化,于是「读完了」看着像「还没完」。 */
+  padding: var(--space-32) var(--space-16) var(--space-24);
+  overflow-y: auto;
+  overflow-x: hidden;
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 var(--space-32),
+    #000 calc(100% - var(--space-24)),
+    transparent 100%
+  );
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.settings-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+/* 一行「四个字标签 + 四档分段」在 300px 面板里放不下。胶囊只会按内容排:
+   `max-width: 100%` 拦得住盒子,拦不住里面的按钮 —— 实测行宽 236、胶囊右缘
+   903,越过卡片内容右缘 15px,最后一档就压在边线上被面板的 overflow 咬掉。
+   分段控件的宽度不是「几颗字拼起来的」,它占满这一行剩下的宽度,所以档位要
+   **等分**那份宽度,而不是各按字数分。放得下时(单档的「选择 .ifo」)
+   保持原宽,不硬撑成一条通栏按钮。 */
+.settings-row > .segmented {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.settings-row > .segmented > button:not(.chrome-button),
+.settings-group > .segmented:not(.segmented-wrap) > button {
+  flex: 1 1 0;
+  min-width: 0;
+  /* 11px 是按「内容宽」定的;等分后一档可能只有 41px,两字标签 26 + 22 就
+     顶到边。6px 留出余量,蓝色滑块仍然铺满整档。 */
+  padding-inline: var(--space-6);
+}
+
+/* 分段控件自己就是一颗胶囊,不该再吃「组内分割线」的 padding-top ——
+   那 12px 空槽长在胶囊里面,把滑块顶到底部,看着像控件塌了一半。
+   上边线不用管:分割线用的是同一支 1px border,与胶囊自己的边框重合。 */
+.settings-group > .segmented {
+  padding-top: 0;
+}
+
+.segmented {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  /* track 由 ink 混出来,不是由 surface 混出来:surface 在浅色主题下就是
+     纸色本身,82% 混透明后 track 和底几乎同色,滑块(白)便无处落脚。
+     用 ink 的 6% 则永远比纸面深一档,滑块永远比 track 亮一档 —— 这条对
+     十个 app 主题和任意阅读纸色都成立。 */
+  /* 凹槽由 ink 混出,滑块是 accent 实底 —— FlClash 的分段控件就是这样:
+     灰槽 + 蓝胶囊。它不是「一个更灰的按钮」,它是一个开关,开关需要明确的
+     两个位置。 */
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  max-width: 100%;
+}
+
+.segmented button {
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+
+.segmented button:hover:not(:disabled):not(.is-active) {
+  color: var(--color-text-primary);
+}
+
+/* 选中 = 实心 accent + 翻纸色字。这条与 .segmented-animated 的滑块是同一块
+   料:同一个控件家族不该有两副长相 —— 带滑块的那几处用实心蓝,不带滑块的
+   (目录面板里的窄行)却用淡底 + 蓝字,并排出现时读者会当成两种控件。
+   深色主题的 accent 是提亮过的,所以字必须取 --color-on-accent(在白字上
+   只有 2.4:1)。 */
+.segmented button.is-active {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+/* 弹性滑动滑块(Segmented 组件):active 底色由滑块接管,按钮自身透明,
+   点别的档位时滑块以弹簧曲线滑过去。 */
+.segmented-animated {
+  position: relative;
+}
+
+.segmented-animated > .segmented-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-full);
+  /* 滑块是「凹槽里凸起的一块面」,不是一块墨:surface + 一圈 1px 的环 +
+     极轻阴影。选中语义交给文字色(accent),滑块只负责位置。 */
+  background: var(--color-accent);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
+  transition:
+    translate 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
+    width 0.45s cubic-bezier(0.3, 1.4, 0.45, 1),
+    height 0.45s cubic-bezier(0.3, 1.4, 0.45, 1);
+  pointer-events: none;
+}
+
+.segmented-animated > button {
+  /* 滑块是 absolute(定位元素画在非定位兄弟之上),按钮必须自己提一层,
+     文字才不会被动底盖掉。 */
+  position: relative;
+  z-index: 1;
+}
+
+.segmented-animated > button.is-active {
+  background: transparent;
+  box-shadow: none;
+  /* 滑块是蓝的,字就必须跟着翻白 —— 否则 accent 字压在 accent 底上消失。 */
+  color: var(--color-on-accent);
+}
+
+/* 选项较多的分段控件(字体列表):三列等宽网格,不是一排长短不一的胶囊。
+   之前是 `flex-wrap`:字数从 2 到 4,折成三四行,每行宽窄都不一样 —— 八种
+   字体看着像八颗随手撒上去的胶囊。改成网格后每格同宽、行行对齐,名字再长
+   也只影响自己那一格。放在 `.segmented button` / `.segmented-animated` 之后
+   是必须的:选择器权重与它们相同,靠顺序取胜。
+   Segmented 量的是按钮的 offsetLeft/offsetTop/offsetWidth,网格里照常对位;
+   绝对定位的滑块不参与网格布局,不会占掉一格。 */
+.segmented-wrap {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-radius: var(--radius-md);
+}
+
+.segmented-wrap > button {
+  /* 内圆角 = 外圆角 - 内边距。否则格子角比轨道角更圆,四角会露出一小块轨道
+     (胶囊装进圆角矩形就是这个毛病)。 */
+  border-radius: calc(var(--radius-md) - 2px);
+  padding-inline: var(--space-6);
+  /* 自定义字体名可能比格子长:截断交给 CSS。在 JSX 里切字符串 + 拼省略号,
+     既会切在中英混排的奇怪位置,也让「有没有截断」成了逻辑问题。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 与格子同一支圆角:滑块就是被选中的那一格。 */
+.segmented-wrap.segmented-animated > .segmented-thumb {
+  border-radius: calc(var(--radius-md) - 2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmented-animated > .segmented-thumb {
+    transition: none;
+  }
+}
+
+.segmented-value {
+  min-width: 40px;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+/* 分段控件里的步进按钮(字号 −/+)与同排选项同高。`.chrome-button` 是 34px
+   的方形热区,塞进 2px 内边距的胶囊里会把整个控件撑到 40px —— 一列里只有
+   「字号」那行比上下两行胖一圈,读起来像放错了控件。29px 是 `.segmented
+   button` 实测出来的内容高。 */
+.segmented .chrome-button {
+  width: 32px;
+  height: 29px;
+}
+
+.chrome-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* hover 不叠加在选中态上:开着的面板按钮保持 accent 淡底,hover 只属于未按下的。 */
+.chrome-button:hover:not(:disabled):not(.is-active) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* 面板开着的开关按钮:accent 淡底 + accent 图标 —— 与侧栏/页签同一套「选中 =
+   徽记」语言。比 hover 的 12% 深一档(18%),所以「开着」和「正被划过」分得开。 */
+.chrome-button.is-active {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
+}
+
+.reader-top {
+  /* 刘海屏安全区:桌面 env() 恒 0,取 max 即桌面原值。 */
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  /* 组与组之间 8px、组内 2px。同一个间距铺满一条 12 键工具条时,
+     眼睛拿不到任何「这里换了一类事」的信号,于是它读作一堆按钮。 */
+  gap: var(--space-8);
+  padding: 5px;
+  border-radius: var(--radius-full);
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+
+/* 居中不用 left:50% + translateX(-50%):绝对定位收缩盒的「可用宽度」
+   只从 left 量到包含块右缘(半屏模式就是栏宽的一半,统计项全被截断)。
+   left/right 夹住 + fit-content 贴身 + margin-inline:auto 平分剩余空间。
+   ⚠️ max-width 不能省:fit-content 的 stretch-fit 不认 left/right(实测窄栏里
+   解出 454px > 栏宽 384px,右 margin 被顶成负值溢出栏外),得由 max-width
+   按包含块宽度收口,超宽时再靠 flex 子项收缩。 */
+.reader-bottom {
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  /* 与顶栏同高(44px):两条 chrome 是同一个家族,差 4px 就会看出来。
+     高度定死不靠 padding 撑:滑杆 18px、文字 19px,靠 padding 算出来的
+     高度会随统计项有无而跳。 */
+  min-height: 44px;
+  padding: 0 var(--space-16);
+  border-radius: var(--radius-full);
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
+}
+
+/* 第二组读数(字数 / 剩余时间)。组间一条发丝线,和顶栏的三组同一配方:
+   18px 高、前景色 16% —— 比滑杆本身还淡,不会把底栏切成两截。 */
+.reader-stats {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding-left: var(--space-16);
+}
+
+.reader-stats::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: var(--space-6);
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 16%, transparent);
+}
+
+.reader:not(.chrome-visible) .reader-top,
+.reader:not(.chrome-visible) .reader-bottom {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 退场往各自那一侧滑:顶栏本身用 left:50% 居中,所以 -50% 不能丢。
+   这两条原来散在下面,中间还隔着 .chrome-group 的分隔线规则 —— 想知道
+   「隐藏时到底发生什么」得跳着读。 */
+.reader:not(.chrome-visible) .reader-top {
+  transform: translate(-50%, -10px);
+}
+
+.reader:not(.chrome-visible) .reader-bottom {
+  transform: translateY(10px);
+}
+
+/* 顶栏分组:组内紧凑、组间一条发丝线。线用 reader 的前景色派生,所以
+   夜间/羊皮纸主题下它跟着纸的色温走,不会突然冒出半截冷灰。 */
+.chrome-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chrome-group + .chrome-group {
+  position: relative;
+  padding-left: var(--space-8);
+}
+
+/* 线比按钮矮一半:34px 的通高竖线在 44px 的胶囊里读作「隔断墙」,
+   而它只是「这里换了一类事」。18px 是分隔,不是分割。 */
+.chrome-group + .chrome-group::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: var(--space-4);
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 16%, transparent);
+}
+
+.reader-title {
+  max-width: 320px;
+  margin: 0 var(--space-6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* Custom range: the track carries the reading position itself — filled solid
+   accent up to the thumb, a quiet remainder after it. Without the fill the
+   only evidence of progress was a 14px dot, and the track read as decoration.
+   `--fill` is handed in from ReaderBottomBar (CSS cannot read a range's
+   value), so the gradient has to be restated per vendor pseudo-element. */
+.reader-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: min(300px, 38vw);
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+  /* 触摸下压不许缩:滑块本身已有可拖动的位移反馈。 */
+  --fill: 0%;
+}
+
+.reader-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    to right,
+    var(--color-accent) 0 var(--fill),
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent) var(--fill)
+      100%
+  );
+}
+
+/* 拇指用纸色描边而不是白:奶油纸上白圈会浮成一圈光晕。 */
+.reader-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  border: 2px solid var(--reader-bg, var(--color-surface));
+  box-shadow: 0 1px 4px rgba(var(--shadow-color), 0.28);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+
+.reader-slider:hover::-webkit-slider-thumb,
+.reader-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.reader-slider:active::-webkit-slider-thumb {
+  transform: scale(1.35);
+}
+
+/* 底栏读数:同一枚叶子两种墨色。层级靠「墨色 + 字重」而不是字号 ——
+   缩放字号会在 12px 上掉可读性,而页码本来就该比估算值更确定。 */
+.reader-stat {
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-width: 0;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reader-stat.is-strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* 字数:点按切换本章/全书口径。视觉与相邻只读统计一致,只有 hover 亮起来
+   —— 它是个开关,但不是这条栏里的主角。 */
+.reader-stat.is-toggle {
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.reader-stat.is-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.reader-opening,
+.reader-error {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-16);
+  background: var(--reader-bg, var(--color-bg));
+  color: var(--reader-fg, var(--color-text-primary));
+  font-size: var(--font-size-md);
+}
+
+/* Opening state: a shimmering skeleton bar instead of bare text. */
+.reader-opening::after {
+  content: '';
+  width: min(420px, 70vw);
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-text-tertiary) 16%, transparent),
+    color-mix(in srgb, var(--color-text-tertiary) 5%, transparent),
+    color-mix(in srgb, var(--color-text-tertiary) 16%, transparent)
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s var(--ease-in-out) infinite;
+}
+
+/* 错误态只是把上面那组的墨色换成危险色,版式完全共用 —— 所以必须排在它后面,
+   不能并进去(共用的那组还带着 .reader-opening)。 */
+.reader-error {
+  color: var(--color-danger);
+}
+
+/* Transient success pill (rebuild/repair results); failures use .reader-error. */
+.reader-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: var(--z-chrome);
+  max-width: min(420px, 80%);
+  padding: 8px var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-floating);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+.reader-notice.is-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  color: var(--color-danger);
+}
+
+.reader-error-button,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 9px 18px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  /* 实底,不发光。彩色投影让按钮看起来在放射,而不是在纸上。 */
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
+}
+
+.reader-error-button:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+
+/* Floating TOC card. */
+.reader-toc {
+  /* 上下留白对齐全家:顶部对齐 .reader-settings 的 64px 约定(且清开
+     overlay 标题栏的交通灯,灯占 y 15-27),左右与底部走 16px 浮动卡节奏
+     (与 reader-bottom 一致);刘海屏 env() 更大时取更大者。 */
+  top: max(64px, env(safe-area-inset-top));
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  width: min(312px, 84vw);
+  padding: var(--space-16);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  /* 从书页左侧靠上来。以前这份 animation 单独占一块,离这里 500 行 ——
+     打开目录卡的人得在两个地方才能拼出它的全部外观。 */
+  animation: drawer-slide-left var(--duration-base) var(--ease-emphasized);
+}
+
+.reader-toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: var(--font-weight-medium);
+  margin-bottom: var(--space-8);
+}
+
+.toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+  padding: 8px var(--space-16);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+}
+
+.reader-search {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: var(--space-8);
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+}
+
+.reader-search:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.reader-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 6px 10px;
+}
+
+.reader-search-input:focus {
+  outline: none;
+}
+
+/* 区分大小写:搜索框下的一行小开关,贴 reader 面板的次级文字基调。 */
+.reader-search-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 var(--space-8);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 搜索中:进度文字 + 停止按钮,同一行两端对齐。 */
+.reader-search-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.search-result {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.reader-section-label {
+  margin: var(--space-16) 0 var(--space-4);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+}
+
+.bookmark-row {
+  display: flex;
+  align-items: center;
+}
+
+.bookmark-row .toc-item {
+  flex: 1;
+}
+
+.toc-item:hover {
+  background: var(--color-accent-soft);
+}
+
+.reader-toc-empty {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}

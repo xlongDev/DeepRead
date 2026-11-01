@@ -1,0 +1,281 @@
+/*
+ * 01-base.css — 基础 · 动效词汇 · 玻璃配方
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/*
+ * Deepread — production UI layer.
+ * Visual world per DESIGN.md: warm paper, one indigo accent, glass chrome,
+ * Phosphor icons.
+ *
+ * 动效规则(W5 审计后固定下来):
+ * 1. 三层各司其职 —— 结构性(从哪来到哪去)、反馈性(操作生效了)、
+ *    状态性(内容变了)。说不出它在传达什么,就不要加。
+ * 2. 非翻页编排的时长一律走 token(`--duration-*` / `--ease-*`),不写字面量;
+ *    翻页 View Transition 的毫秒数是编排参数,单独留在原处。
+ * 3. `prefers-reduced-motion` 走全局兜底(见 sections/12-a11y-stats.css),
+ *    不维护选择器白名单。
+ */
+
+:root {
+  color-scheme: light;
+  --shadow-color: 20, 18, 14;
+  /* 工具条控件同高。必须是全局变量:它挂在 `.shelf-tools` 上时,笔记页的
+     工具条(没有这层壳)读到的是「变量未定义」,height 退回 auto,于是
+     「仅有笔记」22.8px、「复制为 Markdown」20.8px —— 两个并排的胶囊差 2px。 */
+  --shelf-control: 36px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-body);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 桌面悬浮条的窗口:页面必须全透明 —— 圆角和毛玻璃由胶囊自己画,
+   留一层 body 底色就是「胶囊外面多一圈背景」(用户报的那个)。
+   窗口本身也传 backgroundColor: [0,0,0,0](见 tts/desktop-bar.ts)。 */
+body.tts-bar-body {
+  background: transparent;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+}
+
+/* Themed browser chrome: the parts the design system did not draw. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-tertiary) 38%, transparent);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--radius-full);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-text-tertiary) 60%, transparent);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- Shared motion vocabulary ---------- */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes scale-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes rank-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+}
+
+@keyframes drawer-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Every actionable element gets the same physical press. */
+button {
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out),
+    filter var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 填充型按钮禁用时**不**压透明度:半透明的实心 accent 在浅底上读作「一颗
+   更浅的蓝按钮」,仍然像能点;它上面的白字还会掉到 3:1 以下,看起来像坏了
+   而不是像禁用。换成中性底 + 三级墨色 —— 颜色本身就是「能不能点」的信号,
+   不该和透明度两套信号打架。(书架「复制为 Markdown」空态就踩过这条。) */
+.shelf-import:disabled,
+.btn-primary:disabled,
+.ai-apply:disabled,
+.tts-mini-btn.tts-mini-play:disabled {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-tertiary);
+  box-shadow: none;
+}
+
+/* ---------- Glass chrome (FlClash recipe) ----------
+
+   Translated from FlClash's `LiquidGlassStyle.regular`:
+     tint 62% of the surface · blur + saturate(1.9) · rim, ring, hairline.
+
+   What makes glass read as glass is *not* the blur radius. It is three
+   things, and dropping any one of them turns it into frosted plastic:
+
+     1. A low tint (62%) — you have to be able to see the page move behind it.
+     2. A saturated backdrop — the colour behind should bloom, not grey out.
+     3. An edge: a 1px light rim on the top face, a ring just inside, and a
+        hairline outside. That ring is the whole trick. FlClash draws it in a
+        fragment shader; CSS gets it from three stacked shadows.
+
+   Only chrome wears it. Cards, page bodies and list rows are opaque on
+   purpose — glass on everything is what makes an interface look like it is
+   made of nothing. */
+.reader-top,
+.reader-bottom,
+.reader-toc,
+.reader-settings,
+.selection-toolbar,
+.lookup-card,
+.repair-panel,
+.ai-drawer {
+  position: fixed;
+  /* 划词工具压在一切 chrome 之上:选区时它才是当前任务,抽屉/播放条都得让位。
+     阅读区 iframe 的 z-index 是 auto,所以任何正数都够。 */
+  z-index: var(--z-chrome);
+}
+
+/* 玻璃三件套。`.modal-panel` 只取配方这一半:它是 <dialog>,定位与层级由它
+   自己那块声明(见 `.modal-panel`)。以前它挂在上面的组里,靠 4600 行外的
+   一份同名块把 `fixed`/`z-chrome` 覆盖回 `relative`/`1` —— 能跑,但没人读得出
+   哪个赢。同一个类只留一个定位意图。 */
+.reader-top,
+.reader-bottom,
+.reader-toc,
+.reader-settings,
+.selection-toolbar,
+.lookup-card,
+.repair-panel,
+.ai-drawer,
+.modal-panel {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-edge);
+}
+
+/* Panels that hold running text get the *page* tone, not the card tone —
+   which is what lets the cards inside them read as cards. FlClash's sheets are
+   page-coloured for exactly this reason: a white sheet with white groups is a
+   flat white room.
+
+   Same material, thicker pour. */
+.reader-toc,
+.reader-settings,
+.lookup-card,
+.repair-panel,
+.ai-drawer,
+.modal-panel {
+  --glass-tint: color-mix(in srgb, var(--surface-page) 78%, transparent);
+  --glass-sheen: color-mix(in srgb, var(--surface-page) 66%, #ffffff);
+  background: var(--glass-bg-bar);
+}
+
+/* The reading themes swap the glass tint with the paper, so a cream book does
+   not float under a white slab. */
+.reader .reader-top,
+.reader .reader-bottom,
+.reader .reader-toc,
+.reader .reader-settings,
+.reader .lookup-card,
+.reader .selection-toolbar {
+  /* 兜底值不能省:--reader-bg 只在 .reader 上定义,任何一处漏挂都会让
+     color-mix 变成 invalid-at-computed-value,background 直接退回 transparent
+     —— 工具条会静默消失。 */
+  --glass-tint: color-mix(in srgb, var(--reader-bg, var(--color-surface)) 62%, transparent);
+  --glass-sheen: color-mix(
+    in srgb,
+    var(--reader-bg, var(--color-surface)) 82%,
+    var(--reader-fg, var(--color-text-primary))
+  );
+}

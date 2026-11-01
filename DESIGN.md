@@ -18,6 +18,17 @@ Five scales. A bare value in a component file is a bug, not a preference.
 - **Motion** — `--spring-snappy` (controls, ≈350ms, ~4% overshoot) and `--spring-gentle` (structure, ≈560ms, barely overshoots). Both are sampled damped springs behind `linear()`, with a bezier fallback.
 - **Icon** — not a CSS token (Phosphor takes `size` as a numeric prop). Exactly three: **14** inline/chip, **16** standard control, **20** prominent.
 
+## Stylesheets
+
+`apps/desktop/src/styles/global.css` is an **order manifest, not a style file**. It holds nothing but `@import` lines; the rules live in `styles/sections/` (12 files, 300–1300 lines each).
+
+- **The import order _is_ the cascade.** `sections/` was cut at the existing section headers and nothing was moved. Do not "tidy" the order: several selectors win by source order alone (`.segmented-wrap > button` must stay after `.segmented button`, or its padding and radius get eaten). Section boundaries are contract, not decoration.
+- **Append where you live.** A new rule goes into the section whose domain matches. A genuinely new domain gets a new file _and_ a new line in the manifest, in the position it must win from — never appended at the bottom for convenience.
+- `12-a11y-stats.css` is last on purpose: the `prefers-reduced-motion` override must outrank every choreography it collapses.
+- Splits are verified by build, not by eye: the bundled CSS must stay **byte-identical** to the pre-split bundle (`cmp` on `dist/assets/*.css`). A refactor that changes a byte of output has changed behaviour.
+- **Nesting: adopt, don't migrate.** New rules may use native CSS nesting (Vite 8 inlines it, Chromium/WebKit both support it). The existing ~8k lines stay flat — a bulk rewrite is nine thousand lines of risk with zero visual payoff.
+- **Same selector in two sections is allowed for exactly three reasons**, and the audit found seven instances, all of them these: the glass **thicker pour** (`background: --glass-bg` → `--glass-bg-bar` on panels holding running text), **z-index raise** (`--z-chrome` → `--z-panel` so a floating panel outranks the bars), and a **state recolour** that cannot join the shared block (`.reader-error`, whose group also carries `.reader-opening`). Anything else is a bug: rename or scope it.
+
 ## Surfaces
 
 Three rungs, derived from the theme — never hand-picked per theme:
@@ -102,7 +113,7 @@ Press is `scale(0.97)`, always. Centred elements move with `translate`/`scale`, 
 
 Every duration and easing is a token. The only exceptions are the page-turn View Transition choreography numbers (fixed ms — they are staging, not UI tempo).
 
-`prefers-reduced-motion` is handled by **one global override** at the end of `global.css`, not a selector allowlist.
+`prefers-reduced-motion` is handled by **one global override** at the end of `sections/12-a11y-stats.css` (the last section, so it outranks everything it collapses), not a selector allowlist.
 
 ## Rules
 

@@ -1,0 +1,1264 @@
+/*
+ * 06-annotations.css — 墨条 · 高亮批注 · 词典 · 修复 · 抽屉 · AI · 人物图
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- 划词工具「墨条」(InkBar) ----------
+   几何(贴边/翻转/夹取)在 selection-place.ts,这里只负责长相和入场。
+   视觉语言与其它 chrome 同族:玻璃底 + 发丝边 + 透明图标钮 + hover 染
+   accent + 全局 press(见 .chrome-button / .reader-top)。两条带:
+   动作带(图标钮一行)与墨带(内嵌托盘,左样式右颜色)。 */
+
+.selection-toolbar {
+  position: fixed;
+  z-index: var(--z-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  animation: toolbar-enter var(--duration-base) var(--ease-emphasized);
+}
+
+/* 动作带:全宽铺开 justify-between;阅读区比九个图标还窄时才换行。 */
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1px;
+  padding: 0 1px;
+}
+
+/* 墨带:一层内嵌表面,把「选墨」和「动作」分开 —— 比一条分隔线更整体。
+   两端对齐(样式在左、颜色在右);发丝线绝对居中,把两群之间的留白对半分,
+   读起来是「两边一种选择」,而不是右边秃了一块。 */
+.selection-ink {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+.selection-ink-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 形状与颜色之间的发丝线:竖直、低调,跟着阅读主题走,夹在两群正中间。 */
+.selection-ink-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+}
+
+/* ---- 动作带图标钮:.chrome-button 的配方,小一号 ---- */
+.sel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.sel-icon:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* 记笔记展开中:唯一需要「按住」状态的图标钮。 */
+.sel-icon.is-on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* 复制成功的对勾:accent 一亮,和 hover 同一套色。 */
+.sel-icon-accent {
+  color: var(--color-accent);
+}
+
+/* 关闭钮比别的钮退一级,不抢动作。 */
+.sel-icon-quiet {
+  color: var(--color-text-tertiary);
+}
+
+/* 删除只在编辑模式出现,hover 才染危险色 —— 平时不红着吓人。 */
+.sel-icon-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+/* ---- 墨带:样式钮 ---- */
+.sel-style {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.sel-style:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+/* 选中的样式是一枚实心chip:在托盘上浮起来,一眼看到当前墨。 */
+.sel-style.is-on {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-soft);
+}
+
+/* 样式预览:一抹底色 / 一条直线 / 一道波浪,都用当前墨的颜色画 —— 色板
+   预览的是「这个组合」,不只是形状。 */
+.sel-swatch-wash {
+  display: block;
+  width: 18px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.sel-swatch-line {
+  display: block;
+  width: 18px;
+  border-top: 2px solid;
+}
+
+.sel-swatch-wave {
+  display: block;
+  width: 18px;
+  height: 6px;
+}
+
+/* ---- 墨带:色点 ---- */
+.sel-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sel-dot-core {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--radius-full);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.sel-dot:hover:not(:disabled) .sel-dot-core {
+  transform: scale(1.2);
+}
+
+/* 选中:外环是墨自己的颜色(currentColor 由组件按 hex 注入),内圈留一圈
+   面板底色把环「咬」出来 —— 五颗色点里哪颗在用,不用猜。 */
+.sel-dot.is-on {
+  box-shadow:
+    0 0 0 1.5px var(--color-surface),
+    0 0 0 3px currentColor;
+}
+
+.sel-dot.is-on .sel-dot-core {
+  transform: scale(1.1);
+}
+
+/* ---- 就地笔记 ---- */
+.selection-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: 2px;
+}
+
+.selection-note-input {
+  min-height: 56px;
+}
+
+.selection-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 划词工具条里的「保存 / 清空」是**按钮**(有底色、有热区),笔记列表里的
+   「编辑 / 删除」是**文字链**(无底色、行内)。两者曾经共用 `.note-action`,
+   后定义的那块把前者挤出可点区域之外,又把后者撑成一颗带内边距的按钮 ——
+   同一份样式同时输给两种意图,谁排后面谁赢。名字分开,意图就分开了。 */
+.selection-note-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.selection-note-action:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.selection-note-action.is-danger {
+  color: var(--color-text-tertiary);
+}
+
+.selection-note-action.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+.selection-note-hint {
+  margin-left: auto;
+  padding-right: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+}
+
+/* ---- 入场:从面板将落的那一侧滑入(data-placement 由 layout effect 写) ---- */
+.selection-toolbar[data-placement='above'] {
+  animation-name: toolbar-enter-above;
+}
+
+@keyframes toolbar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+@keyframes toolbar-enter-above {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+}
+
+/* ---------- Highlights & annotation notes ---------- */
+
+.highlight-swatch {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.selection-toolbar .highlight-swatch {
+  margin: 6px;
+}
+
+.highlight-swatch:hover {
+  transform: scale(1.12);
+}
+
+.highlight-swatch.is-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+
+.highlight-palette {
+  display: flex;
+  gap: var(--space-8);
+  margin: var(--space-8) 0;
+}
+
+.note-editor-float {
+  top: 60px;
+  right: 12px;
+  left: auto;
+}
+
+.note-editor-quote {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.note-input {
+  width: 100%;
+  padding: var(--space-8);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  resize: vertical;
+}
+
+.note-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.note-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  margin-top: var(--space-8);
+}
+
+.note-editor-actions .btn {
+  padding: 6px var(--space-16);
+  font-size: var(--font-size-sm);
+}
+
+/* 目录 / 批注:两页之间的切换,与设置弹窗、阅读设置页签同一块料 ——
+   灰轨道 + 实心 accent 胶囊。原来这里是 accent 淡底 + accent 字,那是
+   「浮层正开着」的徽记,不是「我选中了哪个」;同一个界面里两种页签长相,
+   读者会把它们读成两种不同的控件。 */
+.reader-toc-tabs {
+  display: flex;
+  gap: var(--space-2);
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 7%, transparent);
+}
+
+.reader-toc-tabs button {
+  padding: 5px var(--space-14);
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.reader-toc-tabs button:hover:not(.is-active) {
+  color: var(--color-text-primary);
+}
+
+.reader-toc-tabs button.is-active {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.annotation-scope {
+  margin-bottom: var(--space-8);
+}
+
+.annotation-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: 2px 0;
+}
+
+.annotation-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-top: 12px;
+  border-radius: var(--radius-full);
+}
+
+.annotation-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.annotation-item {
+  display: block;
+  width: 100%;
+  padding: 8px var(--space-8);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.annotation-item:hover {
+  background: var(--color-accent-soft);
+}
+
+.annotation-excerpt {
+  display: block;
+}
+
+.annotation-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+}
+
+.annotation-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.translate-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  max-height: 420px;
+}
+
+.translate-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  color: var(--color-text-primary);
+  overflow-y: auto;
+}
+
+.translate-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+}
+
+.translate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* 成本诚实:这译文是谁出的、用的哪个模型。 */
+.translate-provider {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- Dictionary lookup card ---------- */
+
+.lookup-card {
+  z-index: var(--z-panel);
+  width: min(320px, 80vw);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  animation: scale-pop var(--duration-fast) var(--ease-emphasized);
+}
+
+.lookup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+  font-size: var(--font-size-md);
+}
+
+.lookup-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* 脚注弹层:内核渲染好的二级视图滚进来。阅读主题(纸色/墨色/夜间)由
+   适配器在 render 时下发给二级视图,外壳走 reader 变量保持同族。 */
+.footnote-popup {
+  position: fixed;
+  top: 72px;
+  right: 24px;
+  bottom: 96px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  width: min(380px, calc(100vw - 48px));
+  padding: var(--space-16);
+  border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--reader-panel-solid, var(--color-surface));
+  color: var(--reader-fg, var(--color-text-primary));
+  box-shadow: var(--shadow-floating);
+  animation: fade-in var(--duration-base) var(--ease-out);
+}
+
+.footnote-popup-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 10%, transparent);
+}
+
+/* 内核二级视图是自定义元素,默认 inline:必须撑满弹层正文区。 */
+.footnote-popup-body foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.lookup-entry {
+  margin-bottom: var(--space-8);
+}
+
+.lookup-dict {
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.lookup-def {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.lookup-def :first-child {
+  margin-top: 0;
+}
+
+/* ---------- Repair review panel ---------- */
+
+.repair-panel {
+  z-index: var(--z-panel);
+  right: 16px;
+  top: 64px;
+  width: min(360px, 84vw);
+  max-height: min(480px, 80vh);
+  overflow-y: auto;
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  animation: drawer-in var(--duration-base) var(--ease-emphasized);
+}
+
+.repair-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: var(--space-8) 0;
+  cursor: pointer;
+}
+
+.repair-item input {
+  margin-top: 3px;
+  accent-color: var(--color-accent);
+}
+
+.repair-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-sm);
+  min-width: 0;
+}
+
+.repair-rule {
+  color: var(--color-text-tertiary);
+}
+
+.repair-before {
+  color: var(--color-text-tertiary);
+  text-decoration-color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+
+.repair-after {
+  color: var(--color-success);
+  overflow-wrap: anywhere;
+}
+
+.repair-row {
+  margin-top: var(--space-8);
+}
+
+/* ---------- Drawers (AI / Learning / TTS / Sync) ---------- */
+
+/* 抽屉基座(TTS / 学习 / 同步共用):flex 列 + 内边距。AI 聊天抽屉在
+   .ai-chat 里改成三段 grid —— 它的头与输入区不参与滚动。 */
+.ai-drawer {
+  z-index: var(--z-panel);
+  top: 64px;
+  right: 16px;
+  width: min(400px, calc(100vw - 32px));
+  height: min(560px, calc(100dvh - 88px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  animation: drawer-in var(--duration-base) var(--ease-emphasized);
+}
+
+/* AI 助手:头 / 滚动体 / 输入区 三段固定,中间只有中间那段滚动 ——
+   头部与输入区永远不会被内容推走,长回答也不再把它俩顶出面板。 */
+.ai-chat {
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 96px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* 头部:图标 + 两行标题(服务/模型是第二行)+ 服务下拉 + 关闭。 */
+.ai-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-16) var(--space-16) 10px;
+  min-width: 0;
+}
+
+.ai-head-icon {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.ai-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: var(--line-height-tight);
+}
+
+.ai-head-text strong {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.ai-head-sub {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* 服务下拉在标题行里必须能被压窄(名字可长可短),否则整行推出去。 */
+.ai-head .dropdown-head {
+  min-width: 0;
+  max-width: 108px;
+}
+
+.ai-head .dropdown-trigger {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-head .dropdown-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-icon-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.ai-icon-btn:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-primary);
+}
+
+/* 滚动体:横向永不滚动 —— 抽屉里的溢出一律在组件内部收口(见 .ai-chip)。 */
+.ai-drawer-body {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 var(--space-16) var(--space-8);
+}
+
+.ai-drawer-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 上下文范围:三格等宽,长文案自己省略,不撑破面板。 */
+.ai-scope {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+.ai-scope button {
+  min-width: 0;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  padding: 6px 4px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-scope button:hover:not(:disabled):not(.is-active) {
+  color: var(--color-text-primary);
+}
+
+.ai-scope button.is-active {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.ai-scope button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 全书 RAG 的索引状态:一行文字 + 一颗幽灵按钮。 */
+.ai-index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 本书洞察:折叠标题 —— 一行小字 + 徽标 + 箭头。 */
+.ai-insights-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ai-insights-title {
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.ai-badge {
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-none);
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-chevron {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.ai-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.ai-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  min-width: 0;
+}
+
+/* 工具卡里的说明文案比面板正文小一号,别盖过芯片。 */
+.ai-tools .ai-privacy {
+  font-size: var(--font-size-2xs);
+}
+
+.ai-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 奇数颗芯片时最后一颗横跨整行 —— 半格空着比硬塞更像故意。 */
+.ai-chip-grid > .ai-chip:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.ai-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ai-chip-row-label {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 一颗芯片:min-width:0 + 省略号 —— 抽屉里的溢出一律停在这里。 */
+.ai-chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  padding: 7px 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.ai-chip:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  color: var(--color-accent);
+}
+
+.ai-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-chip.is-done {
+  background: var(--color-accent-soft);
+  border-color: transparent;
+  color: var(--color-accent);
+}
+
+.ai-chip-ghost {
+  flex: 0 1 auto;
+  padding: 5px 9px;
+  font-size: var(--font-size-2xs);
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-text-secondary);
+}
+
+.ai-setup-hint {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-sm);
+}
+
+/* 结果卡:每份洞察一张,标题行说明这是什么。 */
+.ai-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  min-width: 0;
+}
+
+.ai-result-label {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  letter-spacing: 0.04em;
+  color: var(--color-text-tertiary);
+}
+
+.ai-apply {
+  align-self: flex-start;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--font-size-2xs);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.ai-apply:hover {
+  filter: brightness(1.06);
+}
+
+.ai-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+  flex: 1;
+  padding: var(--space-4) 0;
+}
+
+/* 空态:一句标题 + 一句人话,不摆一坨占位文案。 */
+.ai-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: auto 0;
+  padding: 18px 2px;
+}
+
+.ai-empty-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.ai-empty-hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-body);
+  color: var(--color-text-tertiary);
+}
+
+.ai-msg {
+  max-width: 88%;
+  padding: 9px 14px;
+  border-radius: 16px;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+.ai-msg-user {
+  align-self: flex-end;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-bottom-right-radius: 6px;
+}
+
+.ai-msg-assistant {
+  align-self: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-bottom-left-radius: 6px;
+}
+
+.ai-error {
+  margin: 0;
+  padding: var(--space-4) 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+/* 输入区:胶囊输入框 + 圆形发送键。 */
+.ai-composer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+  padding: 10px var(--space-16) var(--space-16);
+  border-top: 1px solid var(--color-border);
+}
+
+.ai-composer .ai-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  border-radius: var(--radius-full);
+  padding: 9px 14px;
+}
+
+.ai-send {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  cursor: pointer;
+}
+
+.ai-send:disabled {
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.ai-send.is-stop {
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  color: var(--color-text-primary);
+}
+
+.ai-input,
+.field-input {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 9px 12px;
+  width: 100%;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.ai-input:focus,
+.field-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.ai-input::placeholder,
+.field-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.ai-privacy {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-body);
+}
+
+/* ---------- AI citations ---------- */
+
+.ai-msg-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 88%;
+}
+
+.ai-msg-wrap-user {
+  align-self: flex-end;
+}
+
+.ai-msg-wrap-assistant {
+  align-self: flex-start;
+}
+
+.ai-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ai-citation {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 1px 8px;
+}
+
+/* 可跳转的引用 chip(带 onJumpToCitation 时渲染成 button):字体与 span 态
+   一致,hover 染 accent 提示「可点」。 */
+button.ai-citation {
+  cursor: pointer;
+  font-family: inherit;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+button.ai-citation:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* 选区问答的「写入批注笔记」:低调的文字钮,写入后转对勾态并禁用。 */
+.ai-note-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.ai-note-save:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.ai-note-save:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+/* ---------- AI insights ---------- */
+
+.ai-insight-overview {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.ai-insight-outline {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.ai-insight-outline strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+/* ---------- Character graph overlay ---------- */
+
+.graph-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-chrome);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-16);
+  background: var(--color-bg);
+  animation: fade-in var(--duration-base) var(--ease-out);
+}
+
+.graph-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+}
+
+.graph-head strong {
+  font-weight: var(--font-weight-medium);
+}
+
+.graph-hint {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.graph-svg {
+  flex: 1;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-svg:active {
+  cursor: grabbing;
+}
+
+.graph-dangling {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* Preset chips: standalone wrap instead of a cramped segmented pill.
+   这里把 `.segmented` 的壳整块改掉(边框/底色/内边距归零),所以 wrap 必须在
+   这一块里声明 —— 上一版的 wrap 写在文件中段另一条同名规则里,删掉那条时
+   芯片会挤成一行溢出。 */
+.ai-presets {
+  border: none;
+  background: transparent;
+  padding: 0;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-presets button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.ai-presets button:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}

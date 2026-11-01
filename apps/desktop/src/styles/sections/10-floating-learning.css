@@ -1,0 +1,748 @@
+/*
+ * 10-floating-learning.css — 悬浮胶囊 · 迷你播放条 · 学习抽屉
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- 悬浮胶囊(共用基座) ---------- */
+/* 两个使用方共用这套基座:应用内的迷你播放条(阅读器里悬浮的信息胶囊,
+   定位与内部布局收在下面 .tts-mini-float 作用域)与桌面悬浮条窗口
+   (MiniBarWindow,.tts-bar-host 负责摆正)。基座只放两边都一样的玻璃
+   pill 与颜色 —— 单一使用方的布局手术不放基类上(参照 .ai-drawer 的教训)。 */
+
+.tts-mini {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px 4px 6px;
+  border-radius: var(--radius-full);
+  background: var(--reader-panel, var(--color-surface-glass));
+  backdrop-filter: var(--glass-blur-heavy);
+  -webkit-backdrop-filter: var(--glass-blur-heavy);
+  border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
+  box-shadow: var(--shadow-floating);
+  color: var(--reader-fg, var(--color-text-primary));
+  overflow: hidden;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .tts-mini {
+    background: var(--color-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* 桌面悬浮条的窗口(第二个 webview):窗口本身就是胶囊,页面只负责把它
+   摆正 —— 回流内静态居中,铺满窗口。 */
+.tts-bar-host {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.tts-bar-host .tts-mini {
+  width: 100%;
+}
+
+/* 控制发送失败(权限/IPC 出错):亮一盏小灯 4 秒,别让用户对着一个
+   假装点了没反应的按钮发呆。title 里是具体错误。 */
+.tts-mini-alert {
+  position: absolute;
+  top: -6px;
+  right: 10px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: var(--color-danger);
+  color: var(--color-on-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  animation: scale-pop var(--duration-fast) var(--ease-emphasized);
+}
+
+/* 首帧之前:什么都没有(窗口是透明的,别留一块底色)。 */
+.tts-bar-boot {
+  display: none;
+}
+
+/* ---------- 应用内的迷你播放条(信息胶囊) ---------- */
+/* 阅读器里悬浮的信息胶囊:盖在底栏上方、不打断阅读(激活时底栏让位,见
+   文末 .reader.tts-mini-active 规则),书籍排版零改动(无收缩、无重排)。
+   与桌面悬浮条共用 .tts-mini 基座,定位与内部布局是这一使用方专属的,
+   全部收在本作用域里。 */
+.tts-mini-float {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  /* 居中走 translate 独立属性:scale-pop 等动画写在 transform 上,两套
+     属性互不覆盖 —— 入场动画期间胶囊不会跳回「左缘贴中线」。 */
+  translate: -50% 0;
+  z-index: 12;
+  gap: 6px;
+  padding: 8px 10px;
+  max-width: min(620px, calc(100vw - 32px));
+  animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 完整播放器 → 迷你条(或反向):旧形态退场,新形态靠自身的 scale-pop 接棒。
+   keyframe 里的 translate 必须带上 -50%:它整体覆盖基础值,漏写这一半,
+   退场动画期间胶囊会跳回「左缘贴中线」。 */
+.tts-mini-float.is-leaving {
+  animation: tts-mini-out 190ms var(--ease-out) both;
+}
+
+@keyframes tts-mini-out {
+  to {
+    opacity: 0;
+    translate: -50% 14px;
+    scale: 0.92;
+  }
+}
+
+/* 内部布局:封面在左,右列「书名 + 进度/波形/错误」两行 —— 比桌面悬浮条
+   (封面与文字横排)信息密度更高的一版,留给阅读器内。 */
+.tts-mini-float .tts-mini-open {
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 6px 2px 2px;
+}
+
+.tts-mini-float .tts-mini-cover {
+  width: 30px;
+  height: 40px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+}
+
+.tts-mini-float .tts-mini-title {
+  max-width: 300px;
+}
+
+.tts-mini-float .tts-mini-error {
+  color: var(--color-text-tertiary);
+  max-width: 300px;
+}
+
+/* 走带按钮:30px 幽灵圆,播放/暂停是唯一的强调位(大一号实心圆)。 */
+.tts-mini-float .tts-mini-btn {
+  width: 30px;
+  height: 30px;
+  opacity: 1;
+}
+
+.tts-mini-float .tts-mini-btn:hover:not(:disabled) {
+  background: transparent;
+  filter: brightness(1.08);
+}
+
+/* 播放键的强调底色不能被上面的通用 hover 透明掉。 */
+.tts-mini-float .tts-mini-btn.tts-mini-play:hover:not(:disabled) {
+  background: var(--color-accent);
+}
+
+.tts-mini-float .tts-mini-btn.tts-mini-play {
+  width: 38px;
+  height: 38px;
+  margin: 0;
+  box-shadow: none;
+}
+
+.tts-mini-float .tts-mini-btn:disabled {
+  opacity: 0.35;
+  background: transparent;
+}
+
+/* 进度条:3px 发丝;合成中换成三根呼吸的声波(与完整播放器同一语言)。 */
+.tts-mini-progress {
+  display: block;
+  width: 100%;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 15%, transparent);
+  overflow: hidden;
+}
+
+.tts-mini-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+.tts-mini-wave {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 12px;
+  padding: 1px 0;
+}
+
+.tts-mini-wave span {
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  animation: tts-mini-bounce 0.9s ease-in-out infinite;
+}
+
+.tts-mini-wave span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.tts-mini-wave span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes tts-mini-bounce {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+/* 迷你条激活时隐藏阅读底栏,避免堆叠。 */
+.reader.tts-mini-active .reader-bottom {
+  display: none;
+}
+
+/* 左半边(封面 + 两行文字)整体是「展开播放器」的按钮。 */
+.tts-mini-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0 4px 0 0;
+  cursor: pointer;
+  text-align: left;
+  /* color: inherit 是夜间模式的命门:button 的 UA 样式不继承颜色,
+     迷你条整层设了 --reader-fg 也到不了 span。 */
+  color: inherit;
+}
+
+.tts-mini-cover {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.18);
+}
+
+.tts-mini-cover.tts-cover-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-family: var(--font-serif);
+  font-size: var(--font-size-md);
+}
+
+.tts-mini-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.tts-mini-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-2xl);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-mini-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-2xl);
+  color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 60%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.tts-mini-section {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 130px;
+}
+
+.tts-mini-clock {
+  flex-shrink: 0;
+}
+
+.tts-mini-dot {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+/* 出错行:悬浮条上的错误不弹 toast,替掉章节/时钟那一行(参照播放器惯例)。 */
+.tts-mini-error {
+  font-size: var(--font-size-2xs);
+  color: var(--color-danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+/* 走带按钮:28px 幽灵圆,播放键是唯一的强调位。 */
+.tts-mini-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--reader-fg, var(--color-text-primary));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.82;
+}
+
+.tts-mini-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 10%, transparent);
+}
+
+.tts-mini-btn.tts-mini-play {
+  width: 32px;
+  height: 32px;
+  margin: 0 2px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  opacity: 1;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+
+.tts-mini-btn.tts-mini-play:hover:not(:disabled) {
+  background: var(--color-accent);
+  filter: brightness(1.06);
+}
+
+.tts-mini-btn:disabled {
+  opacity: 0.3;
+  background: transparent;
+}
+
+/* 走带与「回到阅读 / 停止」之间的一道细线:两个功能区不混成一排。 */
+.tts-mini-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent);
+}
+
+/* 发丝进度:贴胶囊底边,只在中途出现(贴边时时钟已经在说这件事)。 */
+.tts-mini-rail {
+  position: absolute;
+  inset-inline: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tts-mini-rail-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  background: var(--color-accent);
+  transition: transform 240ms linear;
+}
+
+/* ---------- Learning (复习/生成/错题本) ---------- */
+
+.learning-tabs {
+  align-self: flex-start;
+}
+
+.review-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.review-progress {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.card-front {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  line-height: var(--line-height-body);
+}
+
+.card-back {
+  margin: 0;
+  padding: var(--space-16);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+.card-source {
+  display: block;
+  margin-top: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.grade-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+.grade-row button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.grade-row button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.grade-row button small {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.grade-row button.is-again {
+  color: var(--color-danger);
+}
+
+.quiz-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-16);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.quiz-question {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+.quiz-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quiz-option {
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.quiz-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+.quiz-option:disabled {
+  cursor: default;
+}
+
+.quiz-option.is-correct {
+  border-color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+.quiz-option.is-wrong {
+  border-color: color-mix(in srgb, var(--color-danger) 50%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 7%, transparent);
+  color: var(--color-danger);
+}
+
+.quiz-explanation {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.mistake-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.mistake-front {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mistake-front:hover {
+  color: var(--color-accent);
+}
+
+.mistake-actions {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.mistake-actions button {
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.mistake-actions button:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
+}
+
+/* ---------- Custom dropdown (排序 / 声音 / 模型) ---------- */
+
+.dropdown {
+  position: relative;
+  min-width: 0;
+}
+
+.dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.dropdown-trigger:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+.dropdown-trigger.is-open {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.dropdown-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-trigger svg {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.dropdown-trigger.is-open svg {
+  transform: rotate(180deg);
+}
+
+/* 位置与 z-index 由组件内联给出(portal 到 body + fixed):容器带
+   overflow/backdrop-filter 时会裁掉或收编 absolute/fixed 的菜单。
+   min-width 同样内联(至少与触发器同宽),这里只保留下限。 */
+.action-menu {
+  min-width: 208px;
+  max-width: min(300px, 80vw);
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-4);
+  /* 与 .dropdown-menu 同一块玻璃:都是「临时浮起、背后还有东西」的层。
+     分成两个类是因为语义不同(执行动作 vs 选一个值),材质没理由不同。 */
+  --glass-tint: color-mix(in srgb, var(--surface-page) 72%, transparent);
+  border-radius: var(--radius-bar);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-edge);
+  animation: scale-pop var(--duration-fast) var(--spring-snappy);
+}
+
+.action-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  min-height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-6) var(--space-8);
+  cursor: pointer;
+  text-align: left;
+}
+
+.action-option:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+.action-option:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* 开关型动作(全屏 / 阅读尺)开着时整行走 accent —— 和顶栏那颗 is-active
+   是同一句话,只是这里带文字,可以更明确。 */
+.action-option.is-active {
+  color: var(--color-accent);
+}
+
+.action-option-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.action-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-option-hint {
+  flex-shrink: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.action-menu-sep {
+  height: 1px;
+  margin: var(--space-4) var(--space-6);
+  background: var(--color-border);
+}
+
+.dropdown-menu {
+  min-width: 200px;
+  max-width: min(320px, 80vw);
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  /* 浮层走玻璃配方(与 .modal-panel 同一块料):菜单是临时浮起的东西,
+     它背后的一切都还在,该透出来。 */
+  --glass-tint: color-mix(in srgb, var(--surface-page) 72%, transparent);
+  border-radius: var(--radius-bar);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-edge);
+  animation: scale-pop var(--duration-fast) var(--spring-snappy);
+}
+
+.dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  width: 100%;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dropdown-option:hover {
+  background: var(--color-accent-soft);
+}
+
+.dropdown-option.is-active {
+  color: var(--color-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.dropdown-option-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dropdown-option-label > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-hint {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.dropdown-head .dropdown-trigger {
+  padding: 5px 10px;
+  font-size: var(--font-size-xs);
+  max-width: 200px;
+}
+
+.dropdown-head {
+  min-width: 0;
+}

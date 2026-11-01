@@ -1,0 +1,427 @@
+/*
+ * 08-dialogs.css — 设置弹窗 · TXT 章节规则 · 同步抽屉
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- Modal system (settings) ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(20, 18, 14, 0.32);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 11vh var(--space-16) var(--space-24);
+  animation: fade-in var(--duration-fast) var(--ease-out);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .modal-overlay {
+    background: rgba(20, 18, 14, 0.5);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.modal-panel {
+  position: relative;
+  /* 面板在上层,遮罩按钮只铺在下层。 */
+  z-index: 1;
+  width: min(460px, 100%);
+  max-height: min(78dvh, 720px);
+  /* 面板自己是「三明治」:标题、页签、页脚固定,只有 .settings-body 滚。
+     原来滚动条挂在整块面板上,一滚就把标题和「完成」一起推出去 —— 用户在
+     长一点的设置页里根本看不见「完成」,读作「按钮被裁了」。 */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-24);
+  /* 弹窗是 sheet,不是卡片:28px 是 FlClash alert 那一档(它用 34)。
+     16px 的大窗口读作「放大的卡片」,而这里是一整块浮起的面板。 */
+  border-radius: var(--radius-sheet);
+  animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 原生 <dialog> 自带边框/内边距/居中,这里只保留语义,外观交给 tokens。 */
+dialog.modal-panel {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  /* 背景与阴影继承 .modal-panel 的浮动面板配方。这里曾经是同一套液态玻璃的
+     第二份拷贝 —— 两处配方各自演化,改一处漏一处。遮罩已经把背景虚化了,
+     面板自己再模糊一次是重复付费。 */
+}
+
+/* 点击遮罩关闭:用铺满的按钮,键盘也能到达。 */
+.modal-dismiss {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.modal-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+/* 分区标题在卡片**外面** —— 这是分组列表的关键。标题在卡内,卡片就变成
+   「带标题的盒子」;标题在外,卡片才是「这一组东西」。FlClash 的每个设置页
+   都是这个结构,也是 iOS 分组列表的结构。 */
+.modal-section-label {
+  margin: 0 0 0 var(--space-4);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
+/* 一组设置 = 一张卡。行与行之间是发丝线,不是间隙:分开的是「这一组的第几项」,
+   不是「几个互不相干的东西」。 */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+.settings-group > * + * {
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--color-border);
+}
+
+.modal-actions {
+  display: flex;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: var(--radius-full);
+  /* 次按钮是「卡片里的一块凹陷」,所以取 sunk 而不是 surface —— surface 在
+     白色分组卡上就是白加白,按钮会消失。 */
+  background: var(--surface-sunk);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border) 70%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: 8px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  color: var(--color-accent);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+.btn.is-danger,
+.segmented button.is-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  color: var(--color-danger);
+}
+
+/* Theme swatches: each previews its own world in miniature. */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: var(--space-8);
+}
+
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  padding: var(--space-6);
+  cursor: pointer;
+  text-align: center;
+  /* 没有这一行,hover 位移就是硬跳:卡片瞬间上移 2px,读作「抖」。 */
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.theme-swatch:hover {
+  color: var(--color-text-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft);
+}
+
+.theme-swatch.is-active {
+  border-color: var(--color-accent);
+  /* 3px 的柔光环在九张卡并排时太吵;2px 足够说「就是这张」。 */
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+
+.theme-swatch-color {
+  position: relative;
+  width: 100%;
+  height: 52px;
+  /* 三条横杠几乎等长、居中对齐 —— 那是线框图,不是页面。改成一段真的
+     「文字块」:首行短(标题)、正文两行、间距交给 flex。于是每个 swatch
+     读起来是「这个主题下的一页字」,而不是「一个色卡」。 */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+/* Mini page preview drawn from the theme's own colors (set inline). */
+.theme-swatch-line {
+  height: 2px;
+  border-radius: 1px;
+}
+
+.theme-swatch-line:nth-child(1) {
+  width: 44%;
+  margin-bottom: 2px;
+}
+
+.theme-swatch-line:nth-child(2) {
+  width: 86%;
+}
+
+.theme-swatch-line:nth-child(3) {
+  width: 68%;
+}
+
+/* 强调色小圆点已从模板里移除(十二个主题的强调色几乎同色,点不传达信息,
+   反而和选中边框抢读法)。这条样式一并删掉,免得下次有人照着复原。 */
+
+/* ---------- Chapter rules (TXT, spec §15) ---------- */
+
+.chapter-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+}
+
+.chapter-rule-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 64px auto auto;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.chapter-rule-row .ai-input {
+  min-width: 0;
+}
+
+.chapter-rule-priority {
+  width: 64px;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chapter-rule-enabled {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.chapter-rule-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+.chapter-rule-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.chapter-rule-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.chapter-rule-candidate code {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.chapter-rule-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-4);
+}
+
+.chapter-rule-stat {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.chapter-rule-sample {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
+
+.chapter-rule-sample p {
+  margin: 0 0 2px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.chapter-rule-sample p.is-hit {
+  color: var(--color-text-primary);
+}
+
+.chapter-rule-claim {
+  color: var(--color-accent);
+}
+
+/* ---------- Sync drawer (WebDAV) ---------- */
+
+.sync-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.sync-status strong {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+/* 自动同步开关行:静态文本行 + 原生 checkbox(去原生控件偏好只限主行动,
+   开关这类二值偏好用系统控件最诚实)。 */
+.sync-auto-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 10px var(--space-16);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sync-report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--color-border);
+}
+
+.conflict-item {
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 5%, transparent);
+}
+
+.conflict-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}

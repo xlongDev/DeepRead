@@ -1,0 +1,952 @@
+/*
+ * 12-a11y-stats.css — reduced-motion · 触屏 · 统计 · 对照阅读
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- Reduced motion: collapse every choreography ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  /* 全局兜底,不维护逐选择器白名单 —— 白名单一定会漏:每加一个带动画的
+     控件都得记得回来登记,而漏掉的那次没人会发现。
+     0.01ms 而不是 0:某些实现下 duration 为 0 时 animationend/transitionend
+     不再派发,靠这些事件收尾的逻辑会卡住。delay 一并归零,不让用户等。 */
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 装饰性的高光扫过直接不要:它没有信息量,瞬间闪一下反而更烦。 */
+  .book-cover::after {
+    display: none;
+  }
+}
+
+/* ---------- Touch / coarse pointers ----------
+   触屏没有 hover:凡是靠 hover 才出现的控件都必须常显,命中区也要撑到 40px
+   (iOS/Android 出包已在跑,手指精度和鼠标不是一回事)。 */
+
+@media (hover: none), (pointer: coarse) {
+  /* hover 态在触屏上会"粘住",改成按下的反馈。 */
+  .book-cover:hover {
+    transform: none;
+    box-shadow: var(--shadow-cover);
+  }
+
+  .book-cover:active {
+    transform: scale(0.982);
+  }
+
+  /* 封面玻璃按钮:触屏没有 hover,常显并放大命中区。 */
+  .book-quick {
+    opacity: 1;
+    transform: none;
+  }
+
+  .book-quick-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .card-action-icon {
+    opacity: 1;
+    transform: none;
+    width: 36px;
+    height: 36px;
+  }
+
+  .book-row-actions {
+    opacity: 1;
+  }
+
+  .chrome-button {
+    width: 42px;
+    height: 42px;
+  }
+
+  .toc-item {
+    padding: 12px var(--space-16);
+  }
+
+  .dropdown-option {
+    min-height: 44px;
+  }
+
+  .shelf-view-toggle button,
+  .shelf-manage,
+  .shelf-import,
+  .shelf-sort-dir,
+  .dropdown-trigger {
+    min-height: 40px;
+  }
+
+  .shelf-sort-dir {
+    width: 40px;
+  }
+
+  .selection-toolbar button,
+  .tts-mini-btn,
+  /* 胶囊按钮的尺寸收在 .tts-mini-float 作用域里(特异性更高),触屏放大
+     要在同一作用域内重申一遍才压得住。 */
+  .tts-mini-float .tts-mini-btn,
+  .tts-mini-float .tts-mini-btn.tts-mini-play {
+    width: 42px;
+    height: 42px;
+  }
+
+  /* 触摸时色点要够大才点得准 —— 28px 是这道工具栏里最小的可点面积。 */
+  .highlight-swatch {
+    width: 28px;
+    height: 28px;
+  }
+
+  .reader-slider {
+    height: 28px;
+  }
+}
+
+/* ---------- Reading stats ---------- */
+
+/* 累计指标:一行数据条,不再四张白卡片 —— 指标是页脚的注脚,不是主角。
+   上下通栏 hairline + 列间竖细分隔,密度和资产负债表一样诚实。 */
+.stats-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stats-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-16) var(--space-8);
+}
+
+.stats-tile + .stats-tile {
+  border-left: 1px solid var(--color-border);
+}
+
+.stats-tile-value {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.stats-tile-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+@media (max-width: 640px) {
+  /* 窄屏四列挤成两行两列,分隔线跟着重排(右列也要左边线)。 */
+  .stats-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-tile:nth-child(odd) + .stats-tile {
+    border-left: 0;
+  }
+
+  .stats-tile:nth-child(3) {
+    border-top: 1px solid var(--color-border);
+  }
+}
+
+/* ---- 柱状图:绘图区 + 标签行 ----
+   两层分开,目标线才按绘图区高度定位,与柱高同一把尺。列数固定 7
+   (dailySeries(…, 7)),不写 auto-fit。 */
+.stats-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-chart-plot {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+  height: 110px;
+}
+
+.stats-chart-labels {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stats-bar {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.stats-bar-track {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  overflow: hidden;
+}
+
+.stats-bar-fill {
+  width: 100%;
+  /* 3px 是「读到一点点」的可视下限,不是「零」的形状:零值柱给 0,由
+     `.is-zero` 抹掉这一截。曾经零值日也画这 3px,于是「一天没读」和
+     「读了两分钟」在图上长得一样 —— 图表在这儿说了句假话。 */
+  min-height: 3px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    180deg,
+    var(--color-accent),
+    color-mix(in srgb, var(--color-accent) 55%, transparent)
+  );
+  transition: height var(--duration-base) var(--ease-emphasized);
+  /* 进场时长起来(React 侧给每根柱子错开 40ms):数据是"刚到"的,一排
+     瞬间弹满的柱子读不出先后。生长用 scaleY 而不是 height —— height 是
+     布局动画,每帧都 reflow;scale 走合成器,才守得住"动画只做
+     transform/opacity"这条自家规矩。 */
+  transform-origin: bottom;
+  animation: bar-grow var(--duration-slow) var(--ease-emphasized) backwards;
+}
+
+.stats-bar-fill.is-zero {
+  min-height: 0;
+}
+
+.stats-bar-label {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+/* ---- 今日目标 hero ----
+   目标与它的进度同屏:左边环(或今日时长),右边数字摘要 + 调整入口。
+   没有每日目标时不画环 —— 0% 的环会把「没定目标」演成「今天完全没读」。 */
+.stats-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stats-head-sub {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 目标总览:今日 / 每周 / 年度,一张卡三层 ----
+   目标与它的进度是同一件事,分居三张卡只会层层嵌套(卡片叠卡片是
+   layout 的偷懒)。一张卡内部用 hairline 分层:今日是焦点(环 + 数字),
+   每周与年度是次级行(一行搞定,不再大卡包小卡)。 */
+.stats-overview {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
+.stats-overview-today {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-24);
+  padding: var(--space-24);
+}
+
+/* 次级行:hairline 之上,名称 / 可视化 / 数值 / 状态 / 动作一行排开。 */
+.stats-overview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-16) var(--space-24);
+  border-top: 1px solid var(--color-border);
+}
+
+.stats-overview-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 88px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.stats-overview-viz {
+  display: flex;
+  flex: 1;
+  min-width: 140px;
+  align-items: center;
+}
+
+.stats-overview-value {
+  flex-shrink: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.stats-overview-note {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.stats-overview-row .btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 6px 14px;
+}
+
+/* 行内编辑器在行内展开:占满整行,不挤仄右侧的按钮。 */
+.stats-overview-row .goal-editor,
+.stats-hero-side .goal-editor {
+  flex-basis: 100%;
+}
+
+.stats-hero-ring {
+  flex-shrink: 0;
+}
+
+/* 没设目标时的环位:今日时长当主角,「设定每日目标」是页面上的主动作。 */
+.stats-hero-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 120px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-full);
+  gap: 2px;
+}
+
+.stats-hero-empty-value {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.stats-hero-empty-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.stats-hero-side {
+  display: flex;
+  flex: 1;
+  min-width: 200px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-8);
+}
+
+.stats-hero-line {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+/* ---- 次级行内的每周圆点 / 年度进度条(总览卡复用)---- */
+/* 最近 7 天,一天一格:读过的日子点亮,顺序从旧到新。 */
+.goal-week-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.goal-week-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.goal-week-dot.is-read {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+/* 年度进度条:与柱状图同一把色尺。 */
+/* 年度进度条:总览行的 viz 列是 flex 容器,条要显式吃满才不会被
+   收缩成一小截(曾经就是这样:flex item 默认 shrink-to-fit)。 */
+.goal-year-bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-text-tertiary) 16%, transparent);
+  overflow: hidden;
+}
+
+.goal-year-fill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    var(--color-accent),
+    color-mix(in srgb, var(--color-accent) 55%, transparent)
+  );
+  transition: width var(--duration-slow) var(--ease-emphasized);
+}
+
+/* ---- 目标行内编辑器:预设芯片 + 自定义 + 清除 ---- */
+.goal-editor {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--color-border);
+  animation: fade-up var(--duration-fast) var(--ease-out);
+}
+
+.goal-editor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.goal-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.goal-chip:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.goal-chip.is-active {
+  /* 目标芯片是「挑一个标签」,不是「切一页」:方形、可多选、并排还带别的
+     芯片,给它实心 accent 会让这一排读成一组主按钮。所以这里用淡底 + accent
+     字 —— 页签/分段控件才是实心块。 */
+  border-color: transparent;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.goal-chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.goal-editor-custom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.goal-editor-custom input {
+  width: 88px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.goal-editor-unit {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* ---- 柱状图目标线 ----
+   虚线横在每日目标的高度上 —— 柱头越过它就是达标。峰值把目标秒数算进去,
+   线就永远在画布内;位置按绘图区(.stats-chart-plot)算,与柱高同一把尺。 */
+.stats-chart-goal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--color-accent) 60%, transparent);
+  pointer-events: none;
+}
+
+/* ---- 年度热力图 ----
+   列 = 周(周一起),格 = 一天;色尺有每日目标时按目标(点亮 = 当天达标)。 */
+.stats-heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.stats-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 520px;
+}
+
+.stats-heatmap-months,
+.stats-heatmap-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+}
+
+.stats-heatmap-months {
+  height: 14px;
+  line-height: 14px;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 一列只有 ~16px 宽(列 = 周,一年 53 列),「12 月」摆进去就折成两行 ——
+   折完这一行从 14px 涨到 35px,压在第一行格子上。标签只在换月那一列出现,
+   左右邻列本来就是空的:允许它溢出到右边,比允许它折行好。 */
+.stats-heatmap-months > * {
+  white-space: nowrap;
+}
+
+.stats-heatmap-grid {
+  grid-template-rows: repeat(7, 1fr);
+}
+
+/* 色尺五档。轨迹格(level 0)是「有这一天、没读」:太淡在浅色主题里会
+   整片消失(曾经 14% 就几乎看不见),22% 是两个主题都刚好的底。 */
+.stats-heat-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text-tertiary) 22%, transparent);
+}
+
+.stats-heat-cell.level-1 {
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+}
+
+.stats-heat-cell.level-2 {
+  background: color-mix(in srgb, var(--color-accent) 46%, transparent);
+}
+
+.stats-heat-cell.level-3 {
+  background: color-mix(in srgb, var(--color-accent) 68%, transparent);
+}
+
+.stats-heat-cell.level-4 {
+  background: var(--color-accent);
+}
+
+/* 未来与补位格不出盒:图里只有"已经有或本该有数据"的日子。 */
+.stats-heat-cell.is-future,
+.stats-heat-cell.is-pad {
+  background: transparent;
+}
+
+.stats-heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-8);
+  font-size: var(--font-size-xs);
+}
+
+.stats-heatmap-legend .stats-heat-cell {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+/* ---- 每日目标环 ---- */
+.stats-goal-ring-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.stats-goal-ring {
+  width: 100%;
+  height: 100%;
+}
+
+.stats-goal-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-border) 70%, transparent);
+  stroke-width: 10;
+}
+
+.stats-goal-fill {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--duration-slow) var(--ease-emphasized);
+}
+
+.stats-goal-percent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 长列表渲染优化(B1.2)----
+ * 目录树、书内搜索结果、TTS 句子列表、笔记卡片都是可达几百上千条的滚动
+ * 列表。content-visibility: auto 让视口外的条目跳过布局与绘制,首帧与滚动
+ * 都只付出可见部分的开销;contain-intrinsic-size 的 auto 前缀会记住条目
+ * 实际渲染过的尺寸,首估尺寸(无 auto 的那个值)只需近似,滚动条不跳。
+ * 零新依赖 —— 不引虚拟化库,不与 ADR-0001 冲突;实测不够再走 react-window 评估。 */
+
+.toc-item,
+.search-result {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 38px;
+}
+
+.tts-sentence-list li {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
+}
+
+.note-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
+/* ---------- Reader:对照阅读(双栏并排) ----------
+   一个窗口里两个完整的阅读器。栏内的一切几何都由 `.reader-embedded` 自己声明
+   (它知道自己是"半屏"),`.parallel-cell` 只管网格占位 —— 组件不该依赖祖先
+   选择器才能站对位置。 */
+
+.reader-parallel {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  /* --split 由 React 写在行内;拖动期间直接改这个变量,内核的 ResizeObserver
+     跟着重排,但 React 不必每帧重渲染两棵阅读器树。 */
+  grid-template-columns: var(--split, 50%) 1fr;
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.parallel-cell {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 嵌入态的 .reader:不再是整窗,而是这一栏。 */
+.reader-embedded {
+  position: absolute;
+  inset: 0;
+}
+
+/* 两栏交界的发丝缝。画在左栏自己的 ::after 上而不是分隔条上 —— 只有栏内才
+   继承得到 --reader-fg,缝的颜色得跟着书页主题走(夜间主题下必须是亮线,
+   不然白纸上一条白线等于没有)。 */
+.parallel-cell:first-child .reader-embedded::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 1px;
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 20%, transparent);
+  pointer-events: none;
+}
+
+/* 栏内的 chrome 一律改绝对定位:fixed 会按视口摆,两栏的顶栏会叠到窗口中央。 */
+.reader-embedded .reader-top,
+.reader-embedded .reader-bottom,
+.reader-embedded .reader-toc,
+.reader-embedded .reader-settings,
+.reader-embedded .reader-pick,
+.reader-embedded .ai-drawer,
+.reader-embedded .page-flip {
+  position: absolute;
+}
+
+/* 半屏放不下整窗的那套尺寸:书名、进度条、面板全部按栏宽收。 */
+.reader-embedded .reader-top {
+  top: 12px;
+}
+
+/* 底栏的居中不能再用 left:50% + translateX(-50%):绝对定位的收缩盒
+   「可用宽度」只从 left 算到包含块右缘 —— 半屏里正好是栏宽的一半,
+   统计项(字数/时间/页码)全被 ellipsis 截断(实测 640px 的栏里底栏只有
+   318px,"约剩 1 分钟" 变成 "约利 1…")。改成 left/right 夹住 + fit-content
+   贴身 + margin-inline:auto 居中:可用宽度变成整栏,内容照常全显,
+   真正放不下时(分隔条拖到很窄)才优雅收缩。 */
+.reader-embedded .reader-bottom {
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  max-width: calc(100% - 24px);
+  gap: var(--space-8);
+  padding: 0 var(--space-12);
+}
+
+/* 半屏里发丝线两侧不用留整条 16px:栏本来就窄,统计项要先保住字。 */
+.reader-embedded .reader-stats {
+  gap: var(--space-8);
+  padding-left: var(--space-12);
+}
+
+.reader-embedded .reader-title {
+  max-width: 130px;
+}
+
+/* 定宽而不是 min(180px, 34%):百分比在 fit-content 收缩盒里会循环解析
+   (34% 解到底栏自己的宽度),把整条压得比内容还小,统计项差 2px 都被
+   ellipsis。窄栏时靠 flex-shrink + min-width:0 收缩,宽栏定宽 180px。 */
+.reader-embedded .reader-slider {
+  width: 180px;
+  min-width: 0;
+}
+
+.reader-embedded .reader-toc {
+  top: 8px;
+  left: 8px;
+  bottom: 8px;
+  width: min(272px, calc(100% - 16px));
+}
+
+.reader-embedded .reader-settings,
+.reader-embedded .reader-pick {
+  top: 60px;
+  right: 12px;
+  /* 半屏里定宽 300px 会探出栏外:按栏宽收。 */
+  width: min(300px, calc(100% - 24px));
+  max-height: calc(100% - 132px);
+}
+
+.reader-embedded .ai-drawer {
+  top: 60px;
+  right: 12px;
+  width: min(360px, calc(100% - 24px));
+  height: min(520px, calc(100% - 88px));
+}
+
+/* 非活动栏没有 chrome。
+   两套顶栏 = 20 个按钮挤在半个窗口里,而且没法回答「方向键翻的是哪一本」。
+   翻页钮一起收:它同时也是活动栏的指示器 —— 读者随时能看到 ‹ › 在哪一栏,
+   点一下对面那栏就换过去。 */
+.parallel-cell:not([data-active='true']) .reader-top,
+.parallel-cell:not([data-active='true']) .reader-bottom,
+.parallel-cell:not([data-active='true']) .reader-toc,
+.parallel-cell:not([data-active='true']) .reader-settings,
+.parallel-cell:not([data-active='true']) .reader-pick,
+.parallel-cell:not([data-active='true']) .ai-drawer,
+.parallel-cell:not([data-active='true']) .page-flip {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 贴分隔条的两颗翻页钮往里收 32px。芯片原本中心距缝 24px、外缘只差 9px
+   就压上骑在缝上的控件胶囊(34px 宽);内缩后芯片外缘距缝 40px,与胶囊
+   外缘(17px)之间留 23px 呼吸位。只收贴缝的那两颗 —— 左右两栏的外侧钮
+   仍然贴着窗口缘,和单本阅读的手感一致。拖动分隔条时缝与两栏一起动,
+   间距恒定,不存在「拖到某处又碰上」的临界点。 */
+.parallel-cell:first-child .page-flip-right {
+  right: 32px;
+}
+
+.parallel-cell:nth-child(2) .page-flip-left {
+  left: 32px;
+}
+
+/* 分隔条:15px 的透明抓取带,压在两栏交界上。
+   用 <button> 而不是 div+role=separator:它是一个可操作控件(拖动 / 方向键 /
+   双击复位),只有按钮这类交互元素才既拿得到键盘焦点、又过得了无障碍检查
+   (hr 与 role=separator 都会被判成非交互,tabeIndex 直接被拦)。 */
+.parallel-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--split, 50%);
+  width: 15px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  translate: -50% 0;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+  background: transparent;
+  appearance: none;
+}
+
+/* 全局 button:active 有 scale(.97):拖动时抓取带一缩,缝会跟着抖。
+   翻页钮同一个坑,同一种解法。 */
+button.parallel-divider:active:not(:disabled) {
+  transform: none;
+}
+
+.parallel-divider:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -3px;
+  border-radius: var(--radius-full);
+}
+
+/* 并排模式唯一的一组控件,骑在分隔条中段。
+   常驻低透明度 + 悬停浮现,与翻页钮同一种存在感:它不是装饰,是出口,
+   必须一直在场(顶栏会自己收起来,这里不能)。 */
+.parallel-controls {
+  position: absolute;
+  top: 50%;
+  left: var(--split, 50%);
+  translate: -50% -50%;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-glass);
+  /* 比 --glass-blur 的基础档(20px)更重的一档,配 28px;
+     复合配方定义在 design-system tokens.css 的 Blur 区。 */
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  box-shadow: var(--shadow-soft);
+  opacity: 0.34;
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+
+.parallel-controls:hover,
+.parallel-controls:focus-within,
+.parallel-divider:hover ~ .parallel-controls {
+  opacity: 1;
+}
+
+.parallel-control {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.parallel-control:hover,
+.parallel-control:focus-visible {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.parallel-control.is-on {
+  color: var(--color-accent);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .parallel-controls {
+    background: var(--color-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ---------- Reader:对照阅读的第二本书选择器 ---------- */
+
+/* 位置与玻璃沿用 .reader-settings(同一个右上角),只把宽度放宽一档:
+   书名 + 格式 + 作者一行放不下 276px。 */
+.reader-pick {
+  width: min(312px, calc(100% - 24px));
+}
+
+.reader-pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.reader-pick-search {
+  margin-bottom: 0;
+}
+
+.reader-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reader-pick-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reader-pick-row:hover,
+.reader-pick-row:focus-visible {
+  background: var(--color-accent-soft);
+}
+
+.reader-pick-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reader-pick-meta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,673 @@
+/*
+ * 09-tts.css — TTS 语音播放器
+ *
+ * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
+ * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
+ * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ */
+/* ---------- TTS 语音播放器(Readest 风格) ---------- */
+
+/* 完整播放器:更大的抽屉、居中的句子卡。 */
+.tts-drawer {
+  top: 64px;
+  right: 16px;
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 88px));
+  gap: var(--space-16);
+  /* 底部卡的定时下拉向上弹,不能被抽屉裁剪。 */
+  overflow: visible;
+}
+
+/* 收起为迷你条:向右下沉退场,迷你条随后 scale-pop 接棒。 */
+.tts-drawer.is-leaving {
+  animation: tts-drawer-out 190ms var(--ease-out) both;
+}
+
+@keyframes tts-drawer-out {
+  to {
+    opacity: 0;
+    transform: translateX(24px) translateY(24px) scale(0.96);
+  }
+}
+
+.tts-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+}
+
+.tts-cover {
+  width: 52px;
+  height: 70px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  object-fit: cover;
+  box-shadow: var(--shadow-soft);
+  flex-shrink: 0;
+}
+
+.tts-cover-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-family: var(--font-serif);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-medium);
+}
+
+.tts-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tts-title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-section {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 收起键已经并入 .chrome-button(与关闭键同尺寸、同底色);旧的
+   .tts-minimize 只留在历史里,模板再没有引用它。 */
+
+/* 朗读句子列表:音乐播放器歌词页——当前句大字高亮,前后句弱化,
+   点击任意句跳转,切句自动滚居中。 */
+.tts-sentences {
+  position: relative;
+  flex: 1;
+  /* 抽屉高度封顶 640、窗口更矮时还要缩:歌词板是唯一可按压的那块,
+     给它 0 的下限,让设置区先保住,而不是让底部开关被裁出去。 */
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-16);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 4%, transparent);
+  scroll-behavior: smooth;
+}
+
+.tts-sentence-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tts-sentence-item {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-loose);
+  text-align: left;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition:
+    color var(--duration-base) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-emphasized);
+}
+
+.tts-sentence-item:hover {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 5%, transparent);
+}
+
+/* 已读句:更弱。 */
+.tts-sentence-item.is-past {
+  color: color-mix(in srgb, var(--color-text-tertiary) 55%, transparent);
+}
+
+/* 当前句:大字高亮,轻微放大。 */
+.tts-sentence-item.is-current {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  transform: scale(1.01);
+}
+
+/* 待机:这块板没内容时仍占抽屉里最大的一片面积,所以它得说点什么。
+   图标 + 一句动作 + 一句备选路径,居中。 */
+.tts-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  height: 100%;
+  padding: var(--space-16);
+  text-align: center;
+}
+
+.tts-idle-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 6%, transparent);
+  color: var(--color-text-tertiary);
+}
+
+.tts-idle-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.tts-idle-hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 播放控制 / 可调项之间的发丝线。抽屉靠 gap 做节奏,所以线本身不加外边距,
+   两侧的 16px 间隙就是分节留白。 */
+.tts-divider {
+  height: 0;
+  /* 抽屉靠 gap 16px 做节奏:线自身占的 1px 之外,两侧各留 12px 就够 → 把
+     默认的 16px 间隙吃掉 4px,分节留白不虚。 */
+  margin: -4px 0;
+  border: none;
+  border-top: 1px solid
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 10%, transparent);
+}
+
+/* 分段控件的组标题(与设置面板的 group label 同一档墨色)。 */
+.tts-setting-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* 标签与分段同行:标签贴左,控件贴右 —— 控件宽度由内容决定,不争满宽
+   (上面那排引擎是主选择,这排是次级粒度)。 */
+.tts-highlight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+/* 整章合成中:五根声波从中心向两侧呼吸,呼应「语音」主题。 */
+.tts-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 140px;
+}
+
+.tts-loading-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+}
+
+.tts-loading-wave span {
+  width: 3px;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  transform-origin: center;
+  animation: tts-wave 1s var(--ease-in-out) infinite;
+}
+
+.tts-loading-wave span:nth-child(1) {
+  height: 30%;
+  animation-delay: 0ms;
+}
+.tts-loading-wave span:nth-child(2) {
+  height: 60%;
+  animation-delay: 120ms;
+}
+.tts-loading-wave span:nth-child(3) {
+  height: 90%;
+  animation-delay: 240ms;
+}
+.tts-loading-wave span:nth-child(4) {
+  height: 60%;
+  animation-delay: 360ms;
+}
+.tts-loading-wave span:nth-child(5) {
+  height: 30%;
+  animation-delay: 480ms;
+}
+
+@keyframes tts-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.tts-loading-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  animation: fade-in 1.2s var(--ease-out) backwards;
+}
+
+/* 「切音色中」的悬浮提示(`.tts-switching` / `-dots` / `@keyframes spin`)曾经
+   存在,但音色现在走的是语音列表里的 `is-active` 即时反馈,那段 DOM 没再被
+   渲染过 —— 样式一并删掉,不留一份没人会看到的动画。 */
+
+/* 进度:时间 + 拖动条。 */
+.tts-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.tts-clock {
+  min-width: 38px;
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.tts-seek {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tts-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-text-tertiary) 30%, transparent);
+}
+
+.tts-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+
+.tts-seek:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.tts-seek:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 传输控制:居中一行,主按钮最大。 */
+.tts-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-24);
+}
+
+.tts-play {
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow:
+    0 2px 6px color-mix(in srgb, var(--color-accent) 40%, transparent),
+    0 10px 28px color-mix(in srgb, var(--color-accent) 32%, transparent);
+}
+
+.tts-play:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: scale(1.03);
+}
+
+.tts-play:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.tts-skip {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.tts-skip:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+/* 底部信息卡:语速/语音/定时,循环点击切换。 */
+.tts-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-8);
+}
+
+.tts-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 3%, transparent);
+  color: var(--color-text-primary);
+  padding: 9px 4px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.tts-card:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+.tts-card-value {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-card-label {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 连读下一章开关行。左右不留内边距:「连读下一章」与上面的「正文高亮」
+   组标题左对齐,行内 10px 缩进会让两行错开一格。 */
+.tts-auto-next {
+  padding: 4px 0;
+}
+
+/* 定时关闭下拉卡:与三卡等高的按钮形态。 */
+.tts-card-dropdown {
+  position: relative;
+}
+
+.tts-card-dropdown .dropdown-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+}
+
+.tts-card-dropdown .dropdown-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 3%, transparent);
+  color: var(--color-text-primary);
+  padding: 9px 4px;
+}
+
+.tts-card-dropdown .dropdown-trigger:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+}
+
+.tts-card-dropdown .dropdown-trigger > span:first-child {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+/* 三张卡对读者是同一件事(点一下改一项),中间那张(语音)不是下拉,所以
+   这里把两颗下拉的箭头收掉 —— 竖排卡片里箭头会被挤到标签下方,一张有、
+   一张没有,读起来像两种控件。 */
+.tts-card-dropdown .dropdown-trigger > svg {
+  display: none;
+}
+
+/* 引擎切换。 */
+.tts-engine-row {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 3%, transparent);
+}
+
+/* TTS 正文高亮:组标题 + 档位三档 + 6 套预设色点 + 自定义色。 */
+.tts-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.tts-highlight-mode {
+  /* 复用 segmented 形态;字号稍小让一行塞下,宽度按内容。 */
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+}
+
+.tts-highlight-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 预设色点:未选中是细描边圆点,选中加一圈实底戒指。 */
+.tts-color-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 18%, transparent);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    transform var(--duration-fast) var(--ease-spring),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.tts-color-chip:hover {
+  transform: scale(1.08);
+  border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 30%, transparent);
+}
+
+.tts-color-chip.is-active {
+  border-color: var(--reader-fg, var(--color-text-primary));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-surface) 70%, transparent),
+    var(--shadow-soft);
+}
+
+.tts-color-custom {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  border: 1.5px dashed
+    color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 25%, transparent);
+  color: var(--reader-fg, var(--color-text-primary));
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.tts-color-custom:hover {
+  border-color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 50%, transparent);
+}
+
+.tts-color-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented-button {
+  flex: 1;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 6px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented-button:hover:not(:disabled):not(.is-active) {
+  color: var(--color-text-primary);
+}
+
+.segmented-button.is-active {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+/* 语音选择页。 */
+.tts-voices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-height: 0;
+  flex: 1;
+}
+
+.tts-voices-sub {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.tts-voice-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.tts-voice-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tts-voice-item:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+.tts-voice-item.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+/* 角色配音行:左名字(带出现段数),右音色选择器。 */
+.tts-role-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.tts-role-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.tts-role-count {
+  margin-left: 6px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.tts-role-input {
+  width: 128px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+}
+
+.tts-voice-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-voice-locale {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
