@@ -3,29 +3,30 @@
  *
  * 这个文件只负责**顺序**,内容全在 `sections/` 下。
  *
- * ⚠️ @import 的次序就是层叠次序,不要为了「整齐」重排:
- *    本仓有多处同名选择器靠源码先后取胜(例如 `.segmented-wrap > button`
- *    必须排在 `.segmented button` 之后,否则 padding/圆角被覆盖;
- *    见 DESIGN.md「一个类一个意图」)。分片边界一律落在原有分区头上,
- *    没有移动过任何一条规则。
+ * 所有分片进同一个 `legacy` 层。这不是偷懒:W1 曾给 12 个分片各分一层,
+ * 结果踩了 CSS 的硬规则 —— 层顺序优先于选择器特异性,于是后层的
+ * `.sliding-indicator` 压过了前层更具体的 `.lib-sidebar-nav .sliding-indicator`,
+ * 连同 `.btn-primary:disabled`、hover/选中态一共 227 处被静默翻转。
+ * 同层内,特异性与源码次序照旧生效,这才是这批 8k 行 CSS 写时的契约。
  *
- * 新增一块样式:先找到领域相符的分片追加;若都不合适,在下面按序插入新行
- * 并在 sections/ 建同名文件 —— 位置本身就是契约。
+ * tokens.css 由 main.tsx 单独引入,刻意不进任何 layer:自定义属性也参与
+ * 层叠,unlayered 的变量定义要能压过 layer 内的同名声明(深色主题的
+ * color-scheme 修复依赖这一点)。
  *
- * 设计契约(DESIGN.md)对应的落地顺序:
- *   tokens.css(变量)→ 01-base(基础/动效/玻璃)→ 各领域分片 → 12-a11y-stats
- *   (reduced-motion 与触屏兜底,必须最后)。
+ * 新增规则:找到领域相符的分片追加;新分片在下面按序插入一行,
+ * 位置即契约。新写的、需要明确压过 legacy 的样式才另开 layer。
  */
+@layer legacy;
 
-@import './sections/01-base.css';
-@import './sections/02-library.css';
-@import './sections/03-library-overlays.css';
-@import './sections/04-notes.css';
-@import './sections/05-reader.css';
-@import './sections/06-annotations.css';
-@import './sections/07-shelf-controls.css';
-@import './sections/08-dialogs.css';
-@import './sections/09-tts.css';
-@import './sections/10-floating-learning.css';
-@import './sections/11-reader-menus-settings.css';
-@import './sections/12-a11y-stats.css';
+@import './sections/01-base.css' layer(legacy);
+@import './sections/02-library.css' layer(legacy);
+@import './sections/03-library-overlays.css' layer(legacy);
+@import './sections/04-notes.css' layer(legacy);
+@import './sections/05-reader.css' layer(legacy);
+@import './sections/06-annotations.css' layer(legacy);
+@import './sections/07-shelf-controls.css' layer(legacy);
+@import './sections/08-dialogs.css' layer(legacy);
+@import './sections/09-tts.css' layer(legacy);
+@import './sections/10-floating-learning.css' layer(legacy);
+@import './sections/11-reader-menus-settings.css' layer(legacy);
+@import './sections/12-a11y-stats.css' layer(legacy);

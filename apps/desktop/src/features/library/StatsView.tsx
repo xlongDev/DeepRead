@@ -56,6 +56,9 @@ export interface StatsViewProps {
   readonly goalsBusy: boolean
   readonly topBooks: readonly BookReadingStat[]
   readonly onOpenBook: (bookHash: string) => void
+  /** 加载失败的原因;非 null 时整页显示错误,不把失败伪装成「零阅读」。 */
+  readonly error: string | null
+  readonly onRetry: () => void
 }
 
 /* ---------- 目标行内编辑器 ----------
@@ -163,6 +166,8 @@ export function StatsView({
   goalsBusy,
   topBooks,
   onOpenBook,
+  error,
+  onRetry,
 }: StatsViewProps) {
   /** 行内编辑器只开一个:同时展开三个只会互相抢注意力。 */
   const [editing, setEditing] = useState<'daily' | 'weekly' | 'yearly' | null>(null)
@@ -179,6 +184,25 @@ export function StatsView({
   const readDays = daysWithReading(stats?.days ?? [], 7)
 
   const heat = yearHeatmap(stats?.days ?? [])
+  /** 整年一格都没亮时不画格子:一片 level-0 的空槽读作没加载完的骨架。 */
+  const yearHasReading = heat.some((column) =>
+    column.some((cell) => cell.inYear && cell.seconds > 0),
+  )
+  /** 热力图是纯视觉格子,读屏一个数也拿不到。按月汇总而不是逐日 365 行:
+      一行一个月,既读得完也不把 DOM 撑大;口径直接取 stats.days。 */
+  const monthlySummary = Array.from({ length: 12 }, (_, index) => ({
+    month: index + 1,
+    days: 0,
+    seconds: 0,
+  }))
+  for (const entry of stats?.days ?? []) {
+    if (!entry.day.startsWith(`${year}-`)) continue
+    const row = monthlySummary[Number(entry.day.slice(5, 7)) - 1]
+    if (row === undefined || entry.seconds <= 0) continue
+    row.days += 1
+    row.seconds += entry.seconds
+  }
+
   // 热力图色尺:有每日目标就按目标(格子点亮 = 当天达标,与柱状图同一把尺),
   // 没有就按年度峰值。
   const heatReference =
@@ -203,7 +227,14 @@ export function StatsView({
         )}
       </header>
 
-      {stats === null ? (
+      {error !== null ? (
+        <div className="stats-load-error" role="alert">
+          <p className="library-error">统计读取失败:{error}</p>
+          <button type="button" className="btn" onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      ) : stats === null ? (
         <p className="library-note">统计加载中…</p>
       ) : (
         <>
@@ -454,6 +485,27 @@ export function StatsView({
                 </div>
               </div>
             )}
+            {/* 图表的等价数据:柱子只有 title,读屏读不到数值。视觉隐藏但留在
+                可访问树里,一行一天,与上面七根柱一一对应。 */}
+            {weekSeconds > 0 && (
+              <table className="visually-hidden" aria-label="最近 7 天每日阅读时长">
+                <caption>最近 7 天每日阅读时长</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">日期</th>
+                    <th scope="col">时长</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {series.map((entry) => (
+                    <tr key={entry.day}>
+                      <th scope="row">{entry.day}</th>
+                      <td>{entry.seconds > 0 ? formatStatDuration(entry.seconds) : '没读'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             {/* 口径说明只在有图时出现:空态那行已经说了「没有记录」,再叠一句
                 同色的说明就是两行灰字说同一件事。 */}
             {weekSeconds > 0 && (
@@ -466,58 +518,87 @@ export function StatsView({
           {/* ---- 年度热力图 ---- */}
           <section className="modal-section" aria-label="年度阅读热力图">
             <p className="modal-section-label">{year} 年</p>
-            <div className="stats-heatmap-scroll">
-              <div className="stats-heatmap">
-                <div className="stats-heatmap-months" aria-hidden>
-                  {heat.map((column, index) => {
-                    const firstInYear = column.find((cell) => cell.inYear)
-                    if (firstInYear === undefined) return <span key={`pad-${index}`} />
-                    const month = Number(firstInYear.day.slice(5, 7))
-                    const previous =
-                      index > 0 ? heat[index - 1]?.find((cell) => cell.inYear) : undefined
-                    const previousMonth =
-                      previous === undefined ? 0 : Number(previous.day.slice(5, 7))
-                    return (
-                      <span key={firstInYear.day}>
-                        {month !== previousMonth ? `${month} 月` : ''}
-                      </span>
-                    )
-                  })}
+            {yearHasReading ? (
+              <>
+                <div className="stats-heatmap-scroll">
+                  <div className="stats-heatmap">
+                    <div className="stats-heatmap-months" aria-hidden>
+                      {heat.map((column, index) => {
+                        const firstInYear = column.find((cell) => cell.inYear)
+                        if (firstInYear === undefined) return <span key={`pad-${index}`} />
+                        const month = Number(firstInYear.day.slice(5, 7))
+                        const previous =
+                          index > 0 ? heat[index - 1]?.find((cell) => cell.inYear) : undefined
+                        const previousMonth =
+                          previous === undefined ? 0 : Number(previous.day.slice(5, 7))
+                        return (
+                          <span key={firstInYear.day}>
+                            {month !== previousMonth ? `${month} 月` : ''}
+                          </span>
+                        )
+                      })}
+                    </div>
+                    <div className="stats-heatmap-grid">
+                      {heat.map((column) =>
+                        column.map((cell) => {
+                          const level =
+                            cell.future || !cell.inYear ? 0 : heatLevel(cell.seconds, heatReference)
+                          return (
+                            <span
+                              key={cell.day}
+                              className={`stats-heat-cell level-${level}${
+                                cell.future ? ' is-future' : ''
+                              }${cell.inYear ? '' : ' is-pad'}`}
+                              title={
+                                cell.inYear && !cell.future
+                                  ? `${cell.day} · ${
+                                      cell.seconds > 0 ? formatStatDuration(cell.seconds) : '没读'
+                                    }`
+                                  : undefined
+                              }
+                            />
+                          )
+                        }),
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="stats-heatmap-grid">
-                  {heat.map((column) =>
-                    column.map((cell) => {
-                      const level =
-                        cell.future || !cell.inYear ? 0 : heatLevel(cell.seconds, heatReference)
-                      return (
-                        <span
-                          key={cell.day}
-                          className={`stats-heat-cell level-${level}${
-                            cell.future ? ' is-future' : ''
-                          }${cell.inYear ? '' : ' is-pad'}`}
-                          title={
-                            cell.inYear && !cell.future
-                              ? `${cell.day} · ${
-                                  cell.seconds > 0 ? formatStatDuration(cell.seconds) : '没读'
-                                }`
-                              : undefined
-                          }
-                        />
-                      )
-                    }),
-                  )}
+                <div className="stats-heatmap-legend">
+                  <span className="library-note">少</span>
+                  <span className="stats-heat-cell level-0" aria-hidden />
+                  <span className="stats-heat-cell level-1" aria-hidden />
+                  <span className="stats-heat-cell level-2" aria-hidden />
+                  <span className="stats-heat-cell level-3" aria-hidden />
+                  <span className="stats-heat-cell level-4" aria-hidden />
+                  <span className="library-note">多</span>
                 </div>
-              </div>
-            </div>
-            <div className="stats-heatmap-legend">
-              <span className="library-note">少</span>
-              <span className="stats-heat-cell level-0" aria-hidden />
-              <span className="stats-heat-cell level-1" aria-hidden />
-              <span className="stats-heat-cell level-2" aria-hidden />
-              <span className="stats-heat-cell level-3" aria-hidden />
-              <span className="stats-heat-cell level-4" aria-hidden />
-              <span className="library-note">多</span>
-            </div>
+                {/* 年度热力图的等价数据:365 个色块只有 title,按月汇总成 12 行,
+                    读屏能拿到「几月读了多少天、多久」。 */}
+                <table className="visually-hidden" aria-label={`${year} 年每月阅读时长`}>
+                  <caption>{year} 年每月阅读时长</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">月份</th>
+                      <th scope="col">阅读天数</th>
+                      <th scope="col">时长</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlySummary.map((row) => (
+                      <tr key={row.month}>
+                        <th scope="row">
+                          {year} 年 {row.month} 月
+                        </th>
+                        <td>{row.days}</td>
+                        <td>{row.seconds > 0 ? formatStatDuration(row.seconds) : '没读'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <p className="library-note">{year} 年还没有阅读记录;读过之后这里会一天一格亮起来。</p>
+            )}
           </section>
 
           {/* ---- 累计指标 ---- */}

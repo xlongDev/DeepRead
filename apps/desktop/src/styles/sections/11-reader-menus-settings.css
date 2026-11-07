@@ -1,9 +1,9 @@
 /*
  * 11-reader-menus-settings.css — 翻页键 · 阅读设置面板 · 设置页签
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Reader: page-flip buttons + turn animations ---------- */
 
@@ -179,13 +179,28 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   color: var(--color-text-tertiary);
 }
 
-.reader-theme-row {
+/* 9 张纸按「浅色 / 暖色 / 夜间」三组展示。每组自己铺满一行、组内等分,
+   所以 2 张和 4 张的组都整齐;组标签是三级墨色,不与色块抢对比度。 */
+.reader-theme-groups {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-8);
+}
+
+.reader-theme-group-label {
+  display: block;
+  margin-bottom: var(--space-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+}
+
+.reader-theme-row {
+  display: flex;
   gap: var(--space-4);
 }
 
 .reader-theme-swatch {
+  flex: 1 1 0;
+  min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
@@ -263,7 +278,8 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   width: 14px;
   height: 14px;
   border-radius: var(--radius-full);
-  background: #ffffff;
+  /* 滑块坐在实心 accent 轨道上:深色主题把 accent 提亮后必须用墨色滑块。 */
+  background: var(--color-on-accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   transition: transform var(--duration-base) var(--ease-spring);
 }

@@ -102,8 +102,9 @@ export function LibrarySidebar({
   sidebarOpen,
 }: LibrarySidebarProps) {
   const web = !isTauriRuntime()
+  const rail = !sidebarOpen
   return (
-    <aside className="lib-sidebar" aria-label="主导航">
+    <aside className={`lib-sidebar${rail ? ' is-rail' : ''}`} aria-label="主导航">
       {/* 顶部留一条与交通灯等高的空档:交通灯是原生控件,浮在这一块上,
           品牌因此落在它下面。拖窗口由 .window-drag 统一负责(侧栏收起时也在)。 */}
       <div className="lib-sidebar-top" aria-hidden />
@@ -114,14 +115,16 @@ export function LibrarySidebar({
         <span className="library-brand">DeepRead</span>
         {/* web 端没有交通灯,开关按 deepseek 的方式住进品牌行右侧;
             桌面端它钉在交通灯旁,由 LibraryScreen 渲染,这里不出现。 */}
-        {web && (
+        {/* rail 态品牌行整行隐藏,这里再渲染一颗按钮只会留下一个看不见的
+            同名 aria-label;展开由左上角浮钮负责。 */}
+        {web && sidebarOpen && (
           <button
             type="button"
             className="sidebar-toggle is-web-inline"
             onClick={onToggleSidebar}
-            aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+            aria-label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
             aria-expanded={sidebarOpen}
-            title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+            title={sidebarOpen ? '收起侧栏' : '展开侧栏'}
           >
             <SidebarToggleIcon expanded={sidebarOpen} />
           </button>
@@ -134,41 +137,51 @@ export function LibrarySidebar({
         ariaLabel="视图"
         activeSelector="button.is-active"
       >
+        {/* rail 态把文字 display:none 会让它一并退出可访问树,所以这里补
+            aria-label + title:图标按钮不能没有名字。展开态不设,读屏照旧
+            连计数一起读(「书架 35」)。 */}
         <button
           type="button"
           className={`lib-sidebar-item${view === 'shelf' ? ' is-active' : ''}`}
           aria-current={view === 'shelf' ? 'page' : undefined}
+          aria-label={rail ? '书架' : undefined}
+          title={rail ? '书架' : undefined}
           onClick={() => onView('shelf')}
         >
           <BookOpenText size={16} weight="regular" aria-hidden />
-          书架
+          <span className="lib-sidebar-text">书架</span>
           <span className="lib-sidebar-count">{shelfCount}</span>
         </button>
         <button
           type="button"
           className={`lib-sidebar-item${view === 'notes' ? ' is-active' : ''}`}
           aria-current={view === 'notes' ? 'page' : undefined}
+          aria-label={rail ? '笔记' : undefined}
+          title={rail ? '笔记' : undefined}
           onClick={() => onView('notes')}
         >
           <NoteBlank size={16} weight="regular" aria-hidden />
-          笔记
+          <span className="lib-sidebar-text">笔记</span>
           {notesCount !== null && <span className="lib-sidebar-count">{notesCount}</span>}
         </button>
         <button
           type="button"
           className={`lib-sidebar-item${view === 'stats' ? ' is-active' : ''}`}
           aria-current={view === 'stats' ? 'page' : undefined}
+          aria-label={rail ? '统计' : undefined}
+          title={rail ? '统计' : undefined}
           onClick={() => onView('stats')}
         >
           <ChartLineUp size={16} weight="regular" aria-hidden />
-          统计
+          <span className="lib-sidebar-text">统计</span>
         </button>
       </SlidingIndicator>
 
       <p className="lib-sidebar-label">我的分组</p>
+      {/* 筛选是状态,不是位置:整页只留一处灰底 + accent 竖条(见 is-filter 规则)。 */}
       <SlidingIndicator
         activeKey={smartFilter}
-        className="lib-sidebar-nav"
+        className="lib-sidebar-nav is-filter"
         activeSelector="button.is-active"
       >
         {SMART_FILTERS.map((filter) => (
@@ -217,54 +230,73 @@ export function LibrarySidebar({
         </>
       )}
 
-      {/* 今日阅读目标卡:细进度条 + 两个数,贴着底部操作区,像书签一样"在那儿"。
+      {/* 目标卡 + 底部操作区合成一块沉底:目标卡才会正好贴在发丝线上方,
+          而不是留在分组下面、和底部按钮之间空一大截。窄窗口下 CSS 让这个
+          容器 display:contents,子元素回到侧栏的横排里。 */}
+      <div className="lib-sidebar-bottom">
+        {/* 今日阅读目标卡:细进度条 + 两个数,贴着底部操作区,像书签一样"在那儿"。
           统计没取到就整块不渲染;没设目标时退回一行字。点它进统计页 ——
           目标的主居所在那儿,这张卡是它的常驻入口。 */}
-      {todaySeconds !== null &&
-        (dailyMinutes > 0 ? (
-          <button
-            type="button"
-            className="lib-sidebar-goal"
-            onClick={() => onView('stats')}
-            title="查看阅读统计"
-          >
-            {(() => {
-              const card = goalCard(todaySeconds, dailyMinutes)
-              return (
-                <>
-                  <span className="lib-goal-head">
-                    <span className="lib-goal-today">{card.today}</span>
-                    {card.target !== null && <span className="lib-goal-target">{card.target}</span>}
-                  </span>
-                  {card.pct !== null && (
-                    <span className="lib-goal-track" aria-hidden>
-                      <span className="lib-goal-fill" style={{ width: `${card.pct * 100}%` }} />
+        {todaySeconds !== null &&
+          (dailyMinutes > 0 ? (
+            <button
+              type="button"
+              className="lib-sidebar-goal"
+              onClick={() => onView('stats')}
+              title="查看阅读统计"
+            >
+              {(() => {
+                const card = goalCard(todaySeconds, dailyMinutes)
+                return (
+                  <>
+                    <span className="lib-goal-head">
+                      <span className="lib-goal-today">{card.today}</span>
+                      {card.target !== null && (
+                        <span className="lib-goal-target">{card.target}</span>
+                      )}
                     </span>
-                  )}
-                </>
-              )
-            })()}
-          </button>
-        ) : (
+                    {card.pct !== null && (
+                      <span className="lib-goal-track" aria-hidden>
+                        <span className="lib-goal-fill" style={{ width: `${card.pct * 100}%` }} />
+                      </span>
+                    )}
+                  </>
+                )
+              })()}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="lib-sidebar-goal is-plain"
+              onClick={() => onView('stats')}
+              title="查看阅读统计"
+            >
+              {goalCard(todaySeconds, dailyMinutes).today}
+            </button>
+          ))}
+
+        <div className="lib-sidebar-foot">
           <button
             type="button"
-            className="lib-sidebar-goal is-plain"
-            onClick={() => onView('stats')}
-            title="查看阅读统计"
+            className="lib-sidebar-item"
+            aria-label={rail ? '云同步' : undefined}
+            title={rail ? '云同步' : undefined}
+            onClick={onOpenSync}
           >
-            {goalCard(todaySeconds, dailyMinutes).today}
+            <Cloud size={16} weight="regular" aria-hidden />
+            <span className="lib-sidebar-text">云同步</span>
           </button>
-        ))}
-
-      <div className="lib-sidebar-foot">
-        <button type="button" className="lib-sidebar-item" onClick={onOpenSync}>
-          <Cloud size={16} weight="regular" aria-hidden />
-          云同步
-        </button>
-        <button type="button" className="lib-sidebar-item" onClick={onOpenSettings}>
-          <Gear size={16} weight="regular" aria-hidden />
-          设置
-        </button>
+          <button
+            type="button"
+            className="lib-sidebar-item"
+            aria-label={rail ? '设置' : undefined}
+            title={rail ? '设置' : undefined}
+            onClick={onOpenSettings}
+          >
+            <Gear size={16} weight="regular" aria-hidden />
+            <span className="lib-sidebar-text">设置</span>
+          </button>
+        </div>
       </div>
     </aside>
   )

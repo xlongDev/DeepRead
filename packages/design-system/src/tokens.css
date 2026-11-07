@@ -4,43 +4,56 @@
  */
 
 :root {
-  /* Color — light */
-  --color-bg: #eeece7;
-  --color-surface: #ffffff;
-  --color-surface-glass: rgba(255, 255, 255, 0.85);
-  --color-text-primary: #1d1b17;
-  --color-text-secondary: #6f6a61;
-  --color-text-tertiary: #9c968b;
-  --color-accent: #3d6deb;
-  --color-accent-soft: rgba(61, 109, 235, 0.12);
-  /* 彩底(accent/danger 及其混合)上的文字与图标。 */
-  --color-on-accent: #ffffff;
-  --color-border: rgba(29, 27, 23, 0.1);
-  --color-danger: #c4453d;
-  /* 危险态淡底:`.book-info-tag.is-removable:hover` 一直在引用它,但它从来
-     没被定义过 —— 那个 hover 只是静默地什么都没发生。 */
-  --color-danger-soft: rgba(196, 69, 61, 0.12);
-  --color-success: #2f8a5b;
+  /* Color — Structured Quiet (v2.2). A warm neutral paper ground and ONE
+     accent. OKLCH keeps lightness perceptually uniform: presets change only
+     hue/chroma (--accent-h / --accent-c) while each world supplies its own
+     lightness (--accent-l). A custom sRGB hex overrides --color-accent itself
+     from JS; soft / hover / on-accent derivations all read that one variable. */
+  --ink-hue: 80;
+  /* :root 的默认值必须等于 ACCENT_DEFAULT(品牌蓝):JS 写入 data-accent 之前
+     的第一帧不该闪一下旧墨青。改默认时这里和 accents.ts 一起改。 */
+  --accent-h: 271;
+  --accent-c: 0.14;
+  --accent-l: 0.48;
+  --color-bg: oklch(0.952 0.008 var(--ink-hue));
+  --color-surface: oklch(0.995 0.002 var(--ink-hue));
+  --color-surface-glass: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  --color-text-primary: oklch(0.24 0.014 var(--ink-hue));
+  --color-text-secondary: oklch(0.5 0.012 var(--ink-hue));
+  --color-text-tertiary: oklch(0.555 0.01 var(--ink-hue));
+  --color-accent: oklch(var(--accent-l) var(--accent-c) var(--accent-h));
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  /* 彩底(accent/danger 及其混合)上的文字与图标;深色主题翻墨色。 */
+  --color-on-accent: oklch(0.99 0 0);
+  --color-border: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  --color-danger: oklch(0.55 0.15 25);
+  --color-danger-soft: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  --color-success: oklch(0.55 0.1 155);
 
-  /* ---------- Surface ladder (FlClash: page → card → well) ----------
-     Everything that used to reach for `--color-surface` now picks a rung.
-     Two rules make the whole app read as one material:
+  /* Generated covers are physical objects with a fixed light palette, not UI
+     surfaces: their ink must NOT flip with the app theme (a white monogram on
+     a pale cover is invisible). Everything drawn on a cover derives from these
+     two constants instead of carrying its own rgba(). */
+  --cover-ink: #1d1b17;
+  --cover-fg: #ffffff;
+
+  /* ---------- Surface ladder ----------
+     Three rungs carry the whole hierarchy. Chrome wears glass; page and card
+     stay opaque and are separated by a real lightness step.
 
        page  — the desk. Never a component; only what components sit on.
        card  — anything you can point at (book, section, dialog body).
        sunk  — a hole *inside* a card (track, input, progress rail, code).
 
-     Derived, not hand-picked: the 11 app themes only set --color-bg and
-     --color-surface, and every rung follows. Before this, cards and page
-     were the same two hexes in every theme, so depth had to be faked with
-     shadow — which is why everything looked slightly muddy. */
+     The small lightness gap between page and card is what makes a flat card
+     legible. Flatten it and every card has to fake depth with a shadow. */
   --surface-page: var(--color-bg);
   --surface-card: var(--color-surface);
-  --surface-sunk: color-mix(in srgb, var(--color-surface) 42%, var(--color-bg));
+  --surface-sunk: color-mix(in srgb, var(--color-surface) 88%, var(--color-bg));
 
-  /* ---------- Glass (chrome only) ----------
-     The FlClash recipe, translated: a *low* tint over a *saturated* backdrop,
-     with the edge carrying all the depth.
+  /* ---------- Glass ----------
+     Chrome bars and floating panels wear it; page and card bodies do not.
+     The three ingredients must all stay, or the result is frosted plastic:
 
        tint   62% of the surface — you can still see the page move behind it
        filter blur + saturate(1.9): blur alone gives frosted plastic;
@@ -135,13 +148,13 @@
        card    16   · everything you can point at
        bar     20   · floating toolbars, docks
        sheet   28   · dialogs, drawers, popovers */
-  --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 20px;
-  --radius-4xl: 28px;
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-4xl: 18px;
   --radius-full: 9999px;
 
   --radius-control: var(--radius-md);
@@ -254,29 +267,6 @@
   }
 }
 
-:root[data-theme='dark'] {
-  --color-bg: #131210;
-  --color-surface: #1d1b18;
-  --color-surface-glass: rgba(29, 27, 24, 0.88);
-  --color-text-primary: #ece9e3;
-  --color-text-secondary: #a39d92;
-  --color-text-tertiary: #6f6a61;
-  --color-accent: #6e93f6;
-  --color-accent-soft: rgba(110, 147, 246, 0.16);
-  /* 彩底(accent/danger 及其混合)上的文字与图标;夜间同样是白。 */
-  --color-on-accent: #ffffff;
-  --color-border: rgba(236, 233, 227, 0.12);
-  --color-danger: #e0706a;
-  --color-danger-soft: rgba(224, 112, 106, 0.16);
-  --color-success: #5cb886;
-
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.5);
-  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 72px rgba(0, 0, 0, 0.6);
-  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
-  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
-}
-
 /* Reduced-motion support is part of the token system, not an afterthought. */
 @media (prefers-reduced-motion: reduce) {
   :root {
@@ -286,51 +276,38 @@
   }
 }
 
-/* ---------- App shell themes (spec §10) ----------
-   Applied via <html data-app-theme="…">. Pure White is the default (:root). */
-[data-app-theme='warm-paper'] {
-  --color-bg: #ebe2cf;
-  --color-surface: #faf6ec;
-  --color-surface-glass: rgba(250, 246, 236, 0.9);
-  --color-text-primary: #2b2620;
-  --color-text-secondary: #6b6255;
-  --color-text-tertiary: #988e7e;
-  --color-border: rgba(43, 38, 32, 0.12);
+/* 用户显式选择「减少动效」时的第二条路径(组件级规则见 12-a11y-stats.css)。
+   不合并成单一 data-motion 信号源,是为了让系统偏好继续由浏览器原生处理:
+   不需要 JS 解析 / 监听 matchMedia,也没有首屏属性未写入时的动画空窗。 */
+:root[data-motion='reduce'] {
+  --duration-fast: 0ms;
+  --duration-base: 0ms;
+  --duration-slow: 0ms;
 }
 
-[data-app-theme='ivory'] {
-  --color-bg: #f0ebde;
-  --color-surface: #fcf9f1;
-  --color-surface-glass: rgba(252, 249, 241, 0.9);
-  --color-text-primary: #33302a;
-  --color-text-secondary: #6e6a5f;
-  --color-text-tertiary: #9b968a;
-}
-
-[data-app-theme='soft-gray'] {
-  --color-bg: #e4e4e5;
-  --color-surface: #f7f7f7;
-  --color-surface-glass: rgba(247, 247, 247, 0.9);
-  --color-text-primary: #222222;
-  --color-text-secondary: #666666;
-  --color-text-tertiary: #999999;
-}
-
+/* ---------- App shell themes (v2: three worlds) ----------
+   Applied via <html data-app-theme="…">. `pure-white` is the :root default.
+   Legacy ids from the 12-theme era are mapped at read time in LibraryScreen,
+   so an old localStorage value never lands on a selector that no longer
+   exists. Themes only move lightness along the same OKLCH axes; they never
+   introduce a second palette. */
 [data-app-theme='dark'] {
   color-scheme: dark;
-  /* 玻璃边缘的落地阴影在深色底上必须压成纯黑,否则会发灰光。 */
   --shadow-color: 0, 0, 0;
-  --color-bg: #131210;
-  --color-surface: #1d1b18;
-  --color-surface-glass: rgba(29, 27, 24, 0.88);
-  --color-text-primary: #ece9e3;
-  --color-text-secondary: #a39d92;
-  --color-text-tertiary: #6f6a61;
-  --color-accent: #6e93f6;
-  --color-accent-soft: rgba(110, 147, 246, 0.16);
-  /* accent 在深色里被提亮:白字压上去只有 2.4:1,翻成深墨反而 ~6:1。 */
-  --color-on-accent: #14161c;
-  --color-border: rgba(236, 233, 227, 0.12);
+  --color-bg: oklch(0.2 0.008 var(--ink-hue));
+  --color-surface: oklch(0.245 0.008 var(--ink-hue));
+  --color-surface-glass: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  --color-text-primary: oklch(0.96 0.004 var(--ink-hue));
+  --color-text-secondary: oklch(0.72 0.01 var(--ink-hue));
+  --color-text-tertiary: oklch(0.635 0.01 var(--ink-hue));
+  --accent-l: 0.72;
+  --accent-c: 0.065;
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  /* 提亮的 accent 上白字只有 2.4:1,翻成墨色。 */
+  --color-on-accent: oklch(0.2 0.008 var(--ink-hue));
+  --color-border: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
+  --color-danger: oklch(0.68 0.14 25);
+  --color-success: oklch(0.7 0.11 155);
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.5);
   --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 72px rgba(0, 0, 0, 0.6);
@@ -338,155 +315,103 @@
   --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
 }
 
-/* 松林:暗色绿调。夜读护眼,与暖黑的「深色」分属两个世界 ——
-   底色偏冷绿,accent 仍是靛蓝家族的亮变体(蓝绿相邻,在绿底上更跳)。 */
-[data-app-theme='pine'] {
-  color-scheme: dark;
-  /* 玻璃边缘的落地阴影在深色底上必须压成纯黑,否则会发灰光。 */
-  --shadow-color: 0, 0, 0;
-  --color-bg: #0f1512;
-  --color-surface: #17201b;
-  --color-surface-glass: rgba(23, 32, 27, 0.88);
-  --color-text-primary: #e8eee9;
-  --color-text-secondary: #a6b5aa;
-  --color-text-tertiary: #6b7b71;
-  --color-accent: #8aa5f0;
-  --color-accent-soft: rgba(138, 165, 240, 0.16);
-  /* accent 在深色里被提亮:白字压上去只有 2.4:1,翻成深墨反而 ~6:1。 */
-  --color-on-accent: #14161c;
-  --color-border: rgba(232, 238, 233, 0.12);
-  --color-danger: #e0706a;
-  --color-success: #5cb886;
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.5);
-  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 72px rgba(0, 0, 0, 0.6);
-  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
-  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
-}
-
+/* 纯黑:OLED 上页面与卡片靠明度分家,不靠边框;accent 再提一档才压得住黑底。 */
 [data-app-theme='oled'] {
   color-scheme: dark;
-  /* 玻璃边缘的落地阴影在深色底上必须压成纯黑,否则会发灰光。 */
   --shadow-color: 0, 0, 0;
-  --color-bg: #000000;
-  --color-surface: #0d0d0d;
-  --color-surface-glass: rgba(13, 13, 13, 0.9);
-  --color-text-primary: #e8e5df;
-  --color-text-secondary: #9b968c;
-  --color-text-tertiary: #66625a;
-  --color-accent: #7d9ef7;
-  --color-accent-soft: rgba(125, 158, 247, 0.18);
-  /* accent 在深色里被提亮:白字压上去只有 2.4:1,翻成深墨反而 ~6:1。 */
-  --color-on-accent: #14161c;
-  --color-border: rgba(232, 229, 223, 0.14);
+  --color-bg: oklch(0 0 0);
+  --color-surface: oklch(0.13 0.004 var(--ink-hue));
+  --color-surface-glass: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  --color-text-primary: oklch(0.97 0.004 var(--ink-hue));
+  --color-text-secondary: oklch(0.74 0.01 var(--ink-hue));
+  --color-text-tertiary: oklch(0.6 0.01 var(--ink-hue));
+  --accent-l: 0.76;
+  --accent-c: 0.065;
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  --color-on-accent: oklch(0.13 0.004 var(--ink-hue));
+  --color-border: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
+  --color-danger: oklch(0.7 0.14 25);
+  --color-success: oklch(0.72 0.11 155);
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.8);
   --shadow-elevated: 0 2px 8px rgba(0, 0, 0, 0.9);
+  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.9);
+  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.8), 0 10px 28px rgba(0, 0, 0, 0.6);
+  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.8), 0 20px 44px rgba(0, 0, 0, 0.7);
 }
 
-[data-app-theme='liquid-glass'] {
-  --color-bg: #d8dfe8;
-  --color-surface: rgba(255, 255, 255, 0.9);
-  --color-surface-glass: rgba(255, 255, 255, 0.82);
-  --color-text-primary: #1c2430;
-  --color-text-secondary: #4d5866;
-  --color-text-tertiary: #7d8794;
-  --color-border: rgba(28, 36, 48, 0.14);
-  --blur-glass: 32px;
-  --blur-glass-heavy: 48px;
+/* ---------- Accent presets (hue + chroma only) ---------- */
+/* 预设只改色相/彩度;明度仍由上面的主题块给,所以五个预设在暖纸 / 石墨 /
+   纯黑下都自动拿到正确对比度。JS 写 data-accent 选预设,自定义色则内联
+   --color-accent + --color-on-accent(内联优先级更高,这里不必留口子)。 */
+/* 品牌蓝:桌面 logo 的色相,彩度按克制阶梯收过一档(见 accents.ts)。 */
+[data-accent='brand'] {
+  --accent-h: 271;
+  --accent-c: 0.14;
 }
 
-/* 晨雾:浅色冷灰蓝。暖纸系(纯白/暖纸/象牙)全是暖底,浅灰又太素,
-   它补的是「中性的冷纸」—— 白天久盯不暖得发闷,也不像液态玻璃那样蓝。 */
-[data-app-theme='mist'] {
-  --color-bg: #e5eaf0;
-  --color-surface: #ffffff;
-  --color-surface-glass: rgba(255, 255, 255, 0.85);
-  --color-text-primary: #1e2732;
-  --color-text-secondary: #4f5c6b;
-  --color-text-tertiary: #82909f;
-  --color-accent: #3d6deb;
-  --color-accent-soft: rgba(61, 109, 235, 0.12);
-  --color-border: rgba(30, 39, 50, 0.12);
-  --color-danger: #c4453d;
-  --color-success: #2f8a5b;
-  --shadow-soft: 0 1px 2px rgba(22, 30, 40, 0.05), 0 8px 24px rgba(22, 30, 40, 0.07);
-  --shadow-elevated: 0 2px 6px rgba(22, 30, 40, 0.07), 0 16px 48px rgba(22, 30, 40, 0.11);
-  --shadow-floating: 0 4px 12px rgba(22, 30, 40, 0.09), 0 24px 72px rgba(22, 30, 40, 0.17);
-  --shadow-cover: 0 1px 2px rgba(22, 30, 40, 0.1), 0 10px 28px rgba(22, 30, 40, 0.16);
-  --shadow-cover-hover: 0 2px 6px rgba(22, 30, 40, 0.1), 0 20px 44px rgba(22, 30, 40, 0.22);
+[data-accent='teal'] {
+  --accent-h: 210;
+  --accent-c: 0.055;
 }
 
-/* 石墨:Apple 系统深灰(#1c1c1e ↔ #2c2c2e 的二元节奏)。现有的暖黑「深色」
-   偏棕、松林偏绿、OLED 纯黑没有层次 —— 它补的是**中性**那一档:外壳与
-   书架都是无彩灰,accent 用 Apple 深底蓝 #0a84ff,语义色走 Apple 系统色
-   (红 #ff453a / 绿 #30d158)。 */
-[data-app-theme='graphite'] {
-  color-scheme: dark;
-  /* 玻璃边缘的落地阴影在深色底上必须压成纯黑,否则会发灰光。 */
-  --shadow-color: 0, 0, 0;
-  --color-bg: #1c1c1e;
-  --color-surface: #2c2c2e;
-  --color-surface-glass: rgba(44, 44, 46, 0.88);
-  --color-text-primary: #f5f5f7;
-  --color-text-secondary: #a1a1a6;
-  --color-text-tertiary: #6e6e73;
-  --color-accent: #0a84ff;
-  --color-accent-soft: rgba(10, 132, 255, 0.18);
-  --color-border: rgba(245, 245, 247, 0.12);
-  --color-danger: #ff453a;
-  --color-success: #30d158;
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 48px rgba(0, 0, 0, 0.5);
-  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.5), 0 24px 72px rgba(0, 0, 0, 0.6);
-  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
-  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
+[data-accent='terra'] {
+  --accent-h: 45;
+  --accent-c: 0.085;
 }
 
-/* 午夜:深底靛蓝(#0b1220)。冷夜蓝那类冷调只在阅读纸上有,外壳一直没有;
-   蓝黑比中性灰更有夜晚感,又比松林的绿更"桌面"。accent 提亮到 #7aa2ff
-   (靛蓝在蓝底上要靠明度分家,不能靠色相)。 */
-[data-app-theme='midnight'] {
-  color-scheme: dark;
-  /* 玻璃边缘的落地阴影在深色底上必须压成纯黑,否则会发灰光。 */
-  --shadow-color: 0, 0, 0;
-  --color-bg: #0b1220;
-  --color-surface: #151f31;
-  --color-surface-glass: rgba(21, 31, 49, 0.88);
-  --color-text-primary: #eef2fa;
-  --color-text-secondary: #9fb0c9;
-  --color-text-tertiary: #6b7c96;
-  --color-accent: #7aa2ff;
-  --color-accent-soft: rgba(122, 162, 255, 0.18);
-  /* accent 在深色里被提亮:白字压上去只有 2.4:1,翻成深墨反而 ~6:1。 */
-  --color-on-accent: #14161c;
-  --color-border: rgba(238, 242, 250, 0.12);
-  --color-danger: #ff6b63;
-  --color-success: #4ecf8b;
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.5), 0 16px 48px rgba(0, 0, 0, 0.55);
-  --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.55), 0 24px 72px rgba(0, 0, 0, 0.65);
-  --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.5);
-  --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.6);
+[data-accent='forest'] {
+  --accent-h: 165;
+  --accent-c: 0.06;
 }
 
-/* 沙丘:低饱和灰米色(#e9e4dc 底 / #f5f2ec 面)。浅色区已有纯白、暖纸(黄)、
-   象牙(奶油)、浅灰(无彩)、晨雾(冷蓝),缺的是**带一点土调的暖灰**:比暖纸
-   少黄、比浅灰多暖,白天长读不刺眼。文本 #2b2823(不用纯黑)。 */
-[data-app-theme='sand'] {
-  --color-bg: #e2dcd2;
-  --color-surface: #f5f2ec;
-  --color-surface-glass: rgba(245, 242, 236, 0.88);
-  --color-text-primary: #2b2823;
-  --color-text-secondary: #6b655b;
-  --color-text-tertiary: #9a9387;
-  --color-accent: #0a6ccd;
-  --color-accent-soft: rgba(10, 108, 205, 0.12);
-  --color-border: rgba(43, 40, 35, 0.12);
-  --color-danger: #c4453d;
-  --color-success: #2f8a5b;
-  --shadow-soft: 0 1px 2px rgba(60, 52, 42, 0.05), 0 8px 24px rgba(60, 52, 42, 0.07);
-  --shadow-elevated: 0 2px 6px rgba(60, 52, 42, 0.07), 0 16px 48px rgba(60, 52, 42, 0.11);
-  --shadow-floating: 0 4px 12px rgba(60, 52, 42, 0.09), 0 24px 72px rgba(60, 52, 42, 0.17);
-  --shadow-cover: 0 1px 2px rgba(60, 52, 42, 0.1), 0 10px 28px rgba(60, 52, 42, 0.16);
-  --shadow-cover-hover: 0 2px 6px rgba(60, 52, 42, 0.1), 0 20px 44px rgba(60, 52, 42, 0.22);
+[data-accent='ink'] {
+  --accent-h: 255;
+  --accent-c: 0.07;
+}
+
+[data-accent='plum'] {
+  --accent-h: 320;
+  --accent-c: 0.06;
+}
+
+/* ---------- W4: contrast preferences & forced colours (token overrides) ----------
+   必须留在 unlayered:legacy 层里的 :root 压不过这里(层顺序优先于特异性)。
+   常规档的三级墨色已按 WCAG AA 4.5:1 校准,见 w37 对比度审计。 */
+@media (prefers-contrast: more) {
+  /* 从当前主题的 secondary + primary 混合,浅色自动更深、深色自动更亮:
+     不写死两套 L,也不引入第二个 [data-app-theme] 选择器 —— 目录测试要求
+     每个主题 id 在 CSS 里只出现一次(重名块会静默漂移)。 */
+  :root {
+    --color-text-tertiary: color-mix(
+      in srgb,
+      var(--color-text-secondary) 70%,
+      var(--color-text-primary)
+    );
+    --color-border: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --color-border: CanvasText;
+    --color-accent: Highlight;
+    --color-on-accent: HighlightText;
+    --color-accent-soft: transparent;
+  }
+}
+
+/* ---------- W4: reduced transparency (token overrides) ----------
+   必须放在主题块之后:--color-surface-glass 在基础 :root 与 [data-app-theme]
+   各定义一次,同为 (0,1,0) 时源次序决定胜负。玻璃三件套里,低透明度偏好只
+   换掉「半透明底 + 模糊」两件;三层边缘改成一根实发丝线,层次仍靠它,不靠
+   透过内容去看。硬写的 backdrop-filter 由 12-a11y-stats.css 通配清零。 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-bg: var(--color-surface);
+    --glass-bg-bar: var(--color-surface);
+    --glass-blur: none;
+    --glass-blur-heavy: none;
+    --glass-edge: 0 0 0 1px var(--color-border), 0 10px 28px -10px rgba(var(--shadow-color), 0.28);
+    --color-surface-glass: var(--color-surface);
+  }
 }

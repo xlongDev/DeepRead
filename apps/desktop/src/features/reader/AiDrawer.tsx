@@ -51,6 +51,7 @@ import {
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import { newTaskId } from '../../lib/ai-chat'
+import { useDrawerFocus } from '../../lib/modal-dialog'
 import { useAiProviders } from '../settings/AiProviderSettings'
 import { GraphView } from './GraphView'
 import { DropdownMenu } from '../../components/DropdownMenu'
@@ -195,6 +196,8 @@ export function AiDrawer({
   )
   const taskIdRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  useDrawerFocus(panelRef)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -684,7 +687,7 @@ export function AiDrawer({
   ).length
 
   return (
-    <aside className="ai-drawer ai-chat" aria-label="AI 助手">
+    <aside ref={panelRef} className="ai-drawer ai-chat" aria-label="AI 助手">
       <header className="ai-head">
         <span className="ai-head-icon" aria-hidden>
           <Sparkle size={14} weight="fill" />

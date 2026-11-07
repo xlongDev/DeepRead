@@ -32,6 +32,7 @@ import {
   BULK_CONFIRM,
   coverPalette,
   FAVORITE_TAG,
+  formatBytes,
   pickContinueReading,
   isFavorite,
   SUGGESTED_TAGS,
@@ -43,6 +44,13 @@ import {
   type SortKey,
   type ViewMode,
 } from './shelf-view'
+
+/** 书的客观属性:格式 + 大小。文件已丢失(unknown)时不编造格式。 */
+function bookTech(book: ShelfBook): string | null {
+  return book.format === 'unknown'
+    ? null
+    : `${book.format.toUpperCase()} · ${formatBytes(book.size)}`
+}
 
 export interface ShelfViewProps {
   readonly books: readonly ShelfBook[]
@@ -143,6 +151,9 @@ export function ShelfView({
    */
   /** 上次在读的那本:横条浮现的依据(与排序无关)。 */
   const continueBook = pickContinueReading(books)
+  /** 焦点卡已经把这本呈现过一次,书架不再画第二遍。总本数不变,只是置顶。 */
+  const shelfBooks =
+    continueBook === null ? books : books.filter((book) => book.hash !== continueBook.hash)
   const [menuHash, setMenuHash] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   /** 「打标签」浮层锚在哪张卡片上。与操作菜单分开:入口不同,别互相顶开。 */
@@ -386,8 +397,8 @@ export function ShelfView({
       </div>
 
       {books.length > 0 && continueBook !== null && (
-        /* 打开 app 的理由就是这一张卡:大封面 + 大标题 + 进度线,它该是书架的
-           第一眼,而不是一行可有可无的白条。 */
+        /* 首屏焦点:书名与进度先出现,进度写成文字而不是装饰条。
+           位置与工具退到命令栏,这里只留「回到书里」这一件事。 */
         <button
           type="button"
           className="continue-reading"
@@ -422,134 +433,261 @@ export function ShelfView({
             )
           })()}
           <span className="continue-reading-main">
-            <span className="continue-reading-eyebrow">继续阅读</span>
             <span className="continue-reading-title">{shelfTitle(continueBook)}</span>
             {continueBook.author !== null && (
               <span className="continue-reading-author">{continueBook.author}</span>
             )}
             {continueBook.progress !== null && (
-              <span className="continue-reading-progress">
-                <span className="continue-reading-track" aria-hidden>
-                  <span
-                    className="continue-reading-fill"
-                    style={{ width: `${continueBook.progress * 100}%` }}
-                  />
-                </span>
-                <span className="continue-reading-pct">
-                  读到 {Math.round(continueBook.progress * 100)}%
-                </span>
+              /* 刚导入/刚打开的书是 0%:说「接着上次继续」是在对用户撒谎。
+                 副行只报事实,动作由右侧 CTA 承担,两处不再重复同一个意图。 */
+              <span className="continue-reading-pct">
+                {continueBook.progress > 0
+                  ? `读到 ${Math.round(continueBook.progress * 100)}%`
+                  : '最近打开 · 尚未开始'}
               </span>
             )}
           </span>
           <span className="continue-reading-go" aria-hidden>
             <BookOpen size={16} weight="regular" />
+            {(continueBook.progress ?? 0) > 0 ? '继续阅读' : '开始阅读'}
           </span>
         </button>
       )}
 
-      {books.length === 0 ? (
-        <p className="shelf-none">没有匹配“{emptyHint}”的书。</p>
-      ) : view === 'grid' ? (
-        /* `key={view}` 不是装饰:网格和列表都是 <ul>,React 会按"同类型元素"复用
+      {/* 容器查询的容器:列数按内容区宽度回落,不是视口宽度。分屏 / 并排阅读
+          时视口不动但书架变窄,固定 8 列才不会挤成一排邮票。只包列表,让
+          查询值等于书架真实可用宽度。 */}
+      <div className="shelf-viewport">
+        {books.length === 0 ? (
+          <p className="shelf-none">没有匹配“{emptyHint}”的书。</p>
+        ) : view === 'grid' ? (
+          /* `key={view}` 不是装饰:网格和列表都是 <ul>,React 会按"同类型元素"复用
            同一个 DOM 节点,只改 className —— li 的 key 也一样,于是整棵子树原地
            复用、从不重新挂载,CSS 入场动画自然一次都不播(用户看到的"布局切换
            没有动画")。换 key 强制重建,li 重新挂载,动画才会播。 */
-        <ul
-          key={view}
-          className={`shelf-grid${columns === 'auto' ? '' : ' is-fixed'}`}
-          style={
-            columns === 'auto' ? undefined : ({ '--shelf-cols': columns } as React.CSSProperties)
-          }
-          aria-label="书架"
-        >
-          {books.map((book, index) => {
-            const palette = coverPalette(book.hash)
-            const title = shelfTitle(book)
-            const progress = book.progress
-            const coverUrl = covers.get(book.hash) ?? null
-            const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
-            const isSelected = selected.has(book.hash)
-            return (
-              <li
-                key={book.hash}
-                className={`book-card${isSelected ? ' is-selected' : ''}`}
-                style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
-              >
-                <div className="book-cover-shell">
+          <ul
+            key={view}
+            className={`shelf-grid${columns === 'auto' ? '' : ' is-fixed'}`}
+            style={
+              columns === 'auto' ? undefined : ({ '--shelf-cols': columns } as React.CSSProperties)
+            }
+            aria-label="书架"
+          >
+            {shelfBooks.map((book, index) => {
+              const palette = coverPalette(book.hash)
+              const title = shelfTitle(book)
+              const progress = book.progress
+              const coverUrl = covers.get(book.hash) ?? null
+              const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
+              const isSelected = selected.has(book.hash)
+              return (
+                <li
+                  key={book.hash}
+                  className={`book-card${isSelected ? ' is-selected' : ''}`}
+                  style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
+                >
+                  <div className="book-cover-shell">
+                    <button
+                      type="button"
+                      className="book-cover"
+                      onContextMenu={(event) => {
+                        if (selecting) return
+                        event.preventDefault()
+                        openMenu(book.hash)
+                      }}
+                      onKeyDown={menuKeyHandler(book.hash)}
+                      style={
+                        showCover
+                          ? undefined
+                          : {
+                              background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
+                            }
+                      }
+                      onClick={
+                        selecting
+                          ? () => onToggleSelected(book.hash)
+                          : book.format === 'unknown'
+                            ? undefined
+                            : () => onOpenBook(book)
+                      }
+                      aria-pressed={selecting ? isSelected : undefined}
+                      title={
+                        selecting
+                          ? isSelected
+                            ? '取消选择'
+                            : '选择这本书'
+                          : book.format === 'unknown'
+                            ? '重新导入同一文件即可恢复此书的进度与批注'
+                            : `打开《${title}》`
+                      }
+                    >
+                      {book.format === 'unknown' ? (
+                        <span className="book-cover-missing">待重新导入</span>
+                      ) : showCover ? (
+                        <img
+                          src={coverUrl!}
+                          alt=""
+                          className="book-cover-img"
+                          loading="lazy"
+                          onError={() => markCoverBroken(book.hash)}
+                        />
+                      ) : (
+                        <>
+                          <span className="book-cover-char">{title.charAt(0)}</span>
+                          <span className="book-cover-title">{title}</span>
+                        </>
+                      )}
+                      {/* 进度压在封面底边上、轨道半透明:它是这本书的一部分,
+                        不该在封面下面另起一行。 */}
+                      {progress !== null && progress > 0 && (
+                        <span className="book-cover-progress" aria-hidden>
+                          <span
+                            className="book-progress-fill"
+                            style={{ width: `${progress * 100}%` }}
+                          />
+                        </span>
+                      )}
+                      {selecting && (
+                        <span className="book-select" aria-hidden>
+                          {isSelected && <Check size={14} weight="bold" />}
+                        </span>
+                      )}
+                    </button>
+                    {!selecting && (
+                      /* 封面上的两颗玻璃按钮:星标是最高频动作,其余全在 ⋯ 菜单
+                       (右键/Shift+F10 同一个菜单)。封面上不贴格式徽章 —— 格式
+                       对「选哪本读」没有决策价值,却让每张封面都顶着一块 UI。 */
+                      <div className="book-quick">
+                        <button
+                          type="button"
+                          className={`book-quick-btn${isFavorite(book) ? ' is-on' : ''}`}
+                          aria-pressed={isFavorite(book)}
+                          aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
+                          onClick={() => onToggleFavorite(book)}
+                        >
+                          <Star
+                            size={14}
+                            weight={isFavorite(book) ? 'fill' : 'regular'}
+                            aria-hidden
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          className="book-quick-btn"
+                          aria-haspopup="menu"
+                          aria-expanded={menuHash === book.hash}
+                          aria-label={`更多操作 ${title}`}
+                          onClick={() =>
+                            menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
+                          }
+                        >
+                          <DotsThree size={14} weight="bold" aria-hidden />
+                        </button>
+                      </div>
+                    )}
+                    {tagHash === book.hash && (
+                      <TagPopover
+                        label={`《${title}》的标签`}
+                        tags={book.tags}
+                        onChange={(next) => onSetTags(book, next)}
+                        onClose={() => setTagHash(null)}
+                      />
+                    )}
+                    {renderMenu(book, 'is-card')}
+                  </div>
+                  <div className="book-meta">
+                    <ScrollingText text={title} className="book-meta-title" />
+                    {/* 作者与格式/大小各占一行:书的客观属性要查得到,但用三级
+                      墨色压在书名之下,进度仍在封面底边,标签仍归侧栏筛选。 */}
+                    {book.author !== null && (
+                      <ScrollingText text={book.author} className="book-meta-author" />
+                    )}
+                    {book.format === 'unknown' ? (
+                      <span className="book-meta-author">重新导入同一文件即可恢复</span>
+                    ) : (
+                      <span className="book-meta-tech">{bookTech(book)}</span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <ul key={view} className="shelf-list" aria-label="书架">
+            {shelfBooks.map((book, index) => {
+              const title = shelfTitle(book)
+              const progress = book.progress
+              const coverUrl = covers.get(book.hash) ?? null
+              const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
+              const palette = coverPalette(book.hash)
+              const isSelected = selected.has(book.hash)
+              return (
+                <li
+                  key={book.hash}
+                  className={`book-row${isSelected ? ' is-selected' : ''}`}
+                  style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
+                >
                   <button
                     type="button"
-                    className="book-cover"
+                    className="book-row-open"
                     onContextMenu={(event) => {
                       if (selecting) return
                       event.preventDefault()
                       openMenu(book.hash)
                     }}
                     onKeyDown={menuKeyHandler(book.hash)}
-                    style={
-                      showCover
-                        ? undefined
-                        : {
-                            background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
-                          }
-                    }
-                    onClick={
-                      selecting
-                        ? () => onToggleSelected(book.hash)
-                        : book.format === 'unknown'
-                          ? undefined
-                          : () => onOpenBook(book)
-                    }
+                    onClick={() => (selecting ? onToggleSelected(book.hash) : onOpenBook(book))}
                     aria-pressed={selecting ? isSelected : undefined}
-                    title={
-                      selecting
-                        ? isSelected
-                          ? '取消选择'
-                          : '选择这本书'
-                        : book.format === 'unknown'
-                          ? '重新导入同一文件即可恢复此书的进度与批注'
-                          : `打开《${title}》`
-                    }
                   >
-                    {book.format === 'unknown' ? (
-                      <span className="book-cover-missing">待重新导入</span>
-                    ) : showCover ? (
-                      <img
-                        src={coverUrl!}
-                        alt=""
-                        className="book-cover-img"
-                        loading="lazy"
-                        onError={() => markCoverBroken(book.hash)}
-                      />
-                    ) : (
-                      <>
-                        <span className="book-cover-char">{title.charAt(0)}</span>
-                        <span className="book-cover-title">{title}</span>
-                      </>
-                    )}
-                    {/* 进度压在封面底边上、轨道半透明:它是这本书的一部分,
-                        不该在封面下面另起一行。 */}
-                    {progress !== null && progress > 0 && (
-                      <span className="book-cover-progress" aria-hidden>
-                        <span
-                          className="book-progress-fill"
-                          style={{ width: `${progress * 100}%` }}
-                        />
+                    {selecting && (
+                      <span
+                        className={`book-select is-inline${isSelected ? ' is-checked' : ''}`}
+                        aria-hidden
+                      >
+                        {isSelected && <Check size={14} weight="bold" />}
                       </span>
                     )}
-                    {selecting && (
-                      <span className="book-select" aria-hidden>
-                        {isSelected && <Check size={14} weight="bold" />}
+                    <span
+                      className="book-row-cover"
+                      style={
+                        showCover
+                          ? { backgroundImage: `url(${coverUrl})`, backgroundSize: 'cover' }
+                          : {
+                              background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
+                            }
+                      }
+                    >
+                      {!showCover && <span className="book-cover-char">{title.charAt(0)}</span>}
+                    </span>
+                    <span className="book-row-main">
+                      <span className="book-row-title">{title}</span>
+                      <span className="book-row-sub">
+                        {book.format === 'unknown'
+                          ? '重新导入同一文件即可恢复'
+                          : [book.author, bookTech(book)]
+                              .filter((part) => part !== null && part !== '')
+                              .join(' · ')}
+                      </span>
+                    </span>
+                    {progress !== null && progress > 0 && (
+                      <span className="book-row-progress">
+                        <span className="book-row-track" aria-hidden>
+                          <span
+                            className="book-progress-fill"
+                            style={{ width: `${progress * 100}%` }}
+                          />
+                        </span>
+                        <span className="book-row-pct">{Math.round(progress * 100)}%</span>
                       </span>
                     )}
                   </button>
                   {!selecting && (
-                    /* 封面上的两颗玻璃按钮:星标是最高频动作,其余全在 ⋯ 菜单
-                       (右键/Shift+F10 同一个菜单)。封面上不贴格式徽章 —— 格式
-                       对「选哪本读」没有决策价值,却让每张封面都顶着一块 UI。 */
-                    <div className="book-quick">
+                    /* 行尾只留星标与 ⋯:打标签/导出/编辑/移除全在菜单里,
+                     与网格卡片同一套动作,行高放不下也不该塞。 */
+                    <div className="book-row-actions">
                       <button
                         type="button"
-                        className={`book-quick-btn${isFavorite(book) ? ' is-on' : ''}`}
+                        className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
                         aria-pressed={isFavorite(book)}
                         aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
                         onClick={() => onToggleFavorite(book)}
@@ -562,7 +700,7 @@ export function ShelfView({
                       </button>
                       <button
                         type="button"
-                        className="book-quick-btn"
+                        className="card-action-icon"
                         aria-haspopup="menu"
                         aria-expanded={menuHash === book.hash}
                         aria-label={`更多操作 ${title}`}
@@ -570,10 +708,11 @@ export function ShelfView({
                           menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
                         }
                       >
-                        <DotsThree size={14} weight="bold" aria-hidden />
+                        <DotsThree size={16} weight="bold" aria-hidden />
                       </button>
                     </div>
                   )}
+                  {renderMenu(book, 'is-row')}
                   {tagHash === book.hash && (
                     <TagPopover
                       label={`《${title}》的标签`}
@@ -582,129 +721,12 @@ export function ShelfView({
                       onClose={() => setTagHash(null)}
                     />
                   )}
-                  {renderMenu(book, 'is-card')}
-                </div>
-                <div className="book-meta">
-                  <ScrollingText text={title} className="book-meta-title" />
-                  {/* 作者单独一行。卡片只说「这是什么书」:进度在封面底边,
-                      格式与大小属于详情弹窗,标签在侧栏筛选 —— 卡片不放日志。 */}
-                  {book.author !== null && (
-                    <ScrollingText text={book.author} className="book-meta-author" />
-                  )}
-                  {book.format === 'unknown' && (
-                    <span className="book-meta-author">重新导入同一文件即可恢复</span>
-                  )}
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      ) : (
-        <ul key={view} className="shelf-list" aria-label="书架">
-          {books.map((book, index) => {
-            const title = shelfTitle(book)
-            const progress = book.progress
-            const coverUrl = covers.get(book.hash) ?? null
-            const showCover = coverUrl !== null && !brokenCovers.has(book.hash)
-            const palette = coverPalette(book.hash)
-            const isSelected = selected.has(book.hash)
-            return (
-              <li
-                key={book.hash}
-                className={`book-row${isSelected ? ' is-selected' : ''}`}
-                style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
-              >
-                <button
-                  type="button"
-                  className="book-row-open"
-                  onContextMenu={(event) => {
-                    if (selecting) return
-                    event.preventDefault()
-                    openMenu(book.hash)
-                  }}
-                  onKeyDown={menuKeyHandler(book.hash)}
-                  onClick={() => (selecting ? onToggleSelected(book.hash) : onOpenBook(book))}
-                  aria-pressed={selecting ? isSelected : undefined}
-                >
-                  {selecting && (
-                    <span
-                      className={`book-select is-inline${isSelected ? ' is-checked' : ''}`}
-                      aria-hidden
-                    >
-                      {isSelected && <Check size={14} weight="bold" />}
-                    </span>
-                  )}
-                  <span
-                    className="book-row-cover"
-                    style={
-                      showCover
-                        ? { backgroundImage: `url(${coverUrl})`, backgroundSize: 'cover' }
-                        : {
-                            background: `linear-gradient(160deg, ${palette[0]}, ${palette[1]})`,
-                          }
-                    }
-                  >
-                    {!showCover && <span className="book-cover-char">{title.charAt(0)}</span>}
-                  </span>
-                  <span className="book-row-main">
-                    <span className="book-row-title">{title}</span>
-                    <span className="book-row-sub">
-                      {book.format === 'unknown' ? '重新导入同一文件即可恢复' : (book.author ?? '')}
-                    </span>
-                  </span>
-                  {progress !== null && progress > 0 && (
-                    <span className="book-row-progress">
-                      <span className="book-row-track" aria-hidden>
-                        <span
-                          className="book-progress-fill"
-                          style={{ width: `${progress * 100}%` }}
-                        />
-                      </span>
-                      <span className="book-row-pct">{Math.round(progress * 100)}%</span>
-                    </span>
-                  )}
-                </button>
-                {!selecting && (
-                  /* 行尾只留星标与 ⋯:打标签/导出/编辑/移除全在菜单里,
-                     与网格卡片同一套动作,行高放不下也不该塞。 */
-                  <div className="book-row-actions">
-                    <button
-                      type="button"
-                      className={`card-action-icon${isFavorite(book) ? ' is-on' : ''}`}
-                      aria-pressed={isFavorite(book)}
-                      aria-label={isFavorite(book) ? `取消收藏 ${title}` : `收藏 ${title}`}
-                      onClick={() => onToggleFavorite(book)}
-                    >
-                      <Star size={14} weight={isFavorite(book) ? 'fill' : 'regular'} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      className="card-action-icon"
-                      aria-haspopup="menu"
-                      aria-expanded={menuHash === book.hash}
-                      aria-label={`更多操作 ${title}`}
-                      onClick={() =>
-                        menuHash === book.hash ? setMenuHash(null) : openMenu(book.hash)
-                      }
-                    >
-                      <DotsThree size={16} weight="bold" aria-hidden />
-                    </button>
-                  </div>
-                )}
-                {renderMenu(book, 'is-row')}
-                {tagHash === book.hash && (
-                  <TagPopover
-                    label={`《${title}》的标签`}
-                    tags={book.tags}
-                    onChange={(next) => onSetTags(book, next)}
-                    onClose={() => setTagHash(null)}
-                  />
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
 
       {/* 工具条常驻、靠 `is-hidden` 收起:进出两个方向都由 CSS 过渡完成,
           比"条件渲染 + 定时器卸载"少一个状态,也不会在卸载瞬间把书往上跳一下。 */}

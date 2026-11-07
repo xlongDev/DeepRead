@@ -1,9 +1,9 @@
 /*
  * 05-reader.css — 阅读器主体(chrome / 底栏 / 目录 / 滑杆)
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Reader ---------- */
 
@@ -20,8 +20,7 @@
   color: var(--reader-fg, var(--color-text-primary));
 }
 
-/* 阅读画布上的浮层一律用阅读主题派生的磨砂毛玻璃:重模糊 + 轻透,
-   面板文字清晰可读,又保有 Apple 液态玻璃的通透层次。
+/* 阅读画布上的 chrome 与浮层一律用阅读主题派生的磨砂玻璃,文字保持清晰。
    .reader-scope 前缀的那几条:portal 到 body 的浮层(TTS 播放器、下拉菜单)
    带着变量壳落在 .reader-scope 里,规则要能命中壳内元素。 */
 .reader .reader-top,
@@ -443,8 +442,19 @@
 .reader-top {
   /* 刘海屏安全区:桌面 env() 恒 0,取 max 即桌面原值。 */
   top: max(14px, env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
+  /* 与 .reader-bottom 同一条坑:left:50% + translateX(-50%) 的收缩盒
+     「可用宽度」只从 left 量到包含块右缘,半屏/并排时 12 键工具条会横向
+     溢出栏外。left/right 夹住 + fit-content + max-width 收口,由
+     margin-inline:auto 平分余量居中。 */
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin-inline: auto;
+  /* 按钮是 flex-shrink:0 的固定热区,窄栏里内容会比盒子宽。先让它在盒内
+     横向可滚,别把按钮画到栏外;W3 按宽度把低频项收进 ⋯ 后即可删掉这条。 */
+  overflow-x: auto;
+  scrollbar-width: none;
   display: flex;
   align-items: center;
   /* 组与组之间 8px、组内 2px。同一个间距铺满一条 12 键工具条时,
@@ -511,11 +521,12 @@
   pointer-events: none;
 }
 
-/* 退场往各自那一侧滑:顶栏本身用 left:50% 居中,所以 -50% 不能丢。
+/* 退场往各自那一侧滑:两条 chrome 现在都由 margin-inline:auto 居中,
+   隐藏只需纵向位移,不再需要补偿 translateX(-50%)。
    这两条原来散在下面,中间还隔着 .chrome-group 的分隔线规则 —— 想知道
    「隐藏时到底发生什么」得跳着读。 */
 .reader:not(.chrome-visible) .reader-top {
-  transform: translate(-50%, -10px);
+  transform: translateY(-10px);
 }
 
 .reader:not(.chrome-visible) .reader-bottom {

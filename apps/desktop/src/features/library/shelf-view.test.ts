@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   columnsFromStorage,
   coverPalette,
+  densityFromStorage,
   formatBytes,
   formatStatDuration,
   isFavorite,
@@ -169,6 +170,24 @@ describe('每行书本数(columnsFromStorage)', () => {
     expect(columnsFromStorage()).toBe('auto')
     localStorage.setItem('deepread.shelf.columns', '两个')
     expect(columnsFromStorage()).toBe('auto')
+  })
+})
+
+describe('书架密度(densityFromStorage)', () => {
+  it('没存过回落标准档', () => {
+    localStorage.removeItem('deepread.shelf.density')
+    expect(densityFromStorage()).toBe('standard')
+  })
+
+  it('只认两档显式值,standard 与脏值都回落标准', () => {
+    for (const value of ['comfortable', 'compact']) {
+      localStorage.setItem('deepread.shelf.density', value)
+      expect(densityFromStorage()).toBe(value)
+    }
+    localStorage.setItem('deepread.shelf.density', 'standard')
+    expect(densityFromStorage()).toBe('standard')
+    localStorage.setItem('deepread.shelf.density', 'ultra')
+    expect(densityFromStorage()).toBe('standard')
   })
 })
 

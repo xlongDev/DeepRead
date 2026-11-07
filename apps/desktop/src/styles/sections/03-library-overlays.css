@@ -1,9 +1,9 @@
 /*
  * 03-library-overlays.css — 书籍信息 / 统计 / 批量 · 空态 · 侧栏
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Book info dialog ---------- */
 
@@ -664,44 +664,46 @@
   font-size: var(--font-size-xs);
 }
 
-/* 继续阅读 hero 卡:书架在排序之外永远浮现「上次在读的那本」。
-   打开 app 的理由就是这一张卡 —— 大封面 + 大标题 + 一条进度线,
-   它是第一眼,不是一行白条。整卡可点;右上角的圆钮是"进去读"的落点。 */
+/* 首屏焦点是一张安静的卡:页面与卡片之间的明度差就是层次,只加一条发丝线,
+   不再叠阴影。书名比页面标题大,但不做文字墙 —— 长中文书名最多两行、26em 收口。
+   整卡可点,右侧唯一的实心 CTA 沿用胶囊形状,和导航/工具条同一种语言。 */
 .continue-reading {
   display: flex;
   align-items: center;
   gap: var(--space-24);
   width: 100%;
-  padding: 20px 22px;
-  margin: 0;
+  padding: var(--space-20) var(--space-24);
+  margin: 0 0 var(--space-32);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
   color: var(--color-text-primary);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  box-shadow: var(--shadow-soft);
-  transition:
-    box-shadow var(--duration-base) var(--ease-out),
-    transform var(--duration-base) var(--ease-out);
+  transition: border-color var(--duration-fast) var(--ease-out);
 }
 
 .continue-reading:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-elevated);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
 }
 
+.continue-reading:hover .continue-reading-go {
+  background: color-mix(in srgb, var(--color-accent) 86%, var(--color-text-primary));
+}
+
+/* 书是物件,不是界面表面:2px 硬边 + 1px 描边,保留唯一一层物理阴影。 */
 .continue-reading-cover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 92px;
-  height: 123px;
+  width: 120px;
+  height: 164px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
   box-shadow: var(--shadow-cover);
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--cover-fg);
 }
 
 .continue-reading-cover-img {
@@ -710,34 +712,30 @@
 }
 
 .continue-reading-char {
-  font-family: var(--font-serif);
-  font-size: 40px;
-  font-weight: var(--font-weight-medium);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--leading-none);
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 .continue-reading-main {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-6);
   min-width: 0;
   flex: 1;
 }
 
-.continue-reading-eyebrow {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
 .continue-reading-title {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.015em;
-  line-height: var(--line-height-tight);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 26em;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: var(--leading-2xl);
 }
 
 .continue-reading-author {
@@ -745,72 +743,43 @@
   color: var(--color-text-secondary);
 }
 
-.continue-reading-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 9px;
-}
-
-.continue-reading-track {
-  flex: 1;
-  max-width: 340px;
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: var(--color-border);
-  overflow: hidden;
-}
-
-.continue-reading-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--color-accent);
-}
-
+/* 进度是文字,不是装饰条:一行 tabular 数字就够了。 */
 .continue-reading-pct {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  margin-top: var(--space-8);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .continue-reading-go {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
+  gap: var(--space-8);
   flex-shrink: 0;
-  border: 1px solid var(--color-border);
+  padding: var(--space-10) var(--space-16);
   border-radius: var(--radius-full);
-  color: var(--color-text-secondary);
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out);
-}
-
-.continue-reading:hover .continue-reading-go {
-  background: var(--color-text-primary);
-  border-color: var(--color-text-primary);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 @media (max-width: 720px) {
-  /* 窄窗口里 hero 收成一排小卡:封面 64px,字号回落,右侧圆钮让位。 */
   .continue-reading {
     gap: var(--space-16);
     padding: var(--space-16);
+    margin-bottom: var(--space-24);
   }
 
   .continue-reading-cover {
-    width: 64px;
-    height: 86px;
+    width: 72px;
+    height: 98px;
   }
 
   .continue-reading-title {
-    font-size: var(--font-size-md);
+    font-size: var(--font-size-lg);
   }
 
   .continue-reading-go {
@@ -924,10 +893,56 @@
   transition: opacity var(--duration-fast) var(--ease-out);
 }
 
-/* 收起时只是淡出:宽度由 grid 收,内容不该跟着被压扁。 */
-.library.is-sidebar-hidden .lib-sidebar {
-  opacity: 0;
-  pointer-events: none;
+/* 收起时**不淡出**:侧栏变成 64px 图标 rail,导航与选中竖条仍在。旧版把
+   整块 opacity:0,等于把「我在哪个视图」一起删掉;宽度已经由 grid 收好,
+   内容不该再跟着消失。rail 的排布只在宽窗口生效(见下方 @media)。 */
+
+/* ---------- Context rail (collapsed sidebar) ---------- */
+/* 860px 以下侧栏本来就横排常显(04-notes.css),那里没有「收起」这回事,
+   所以 rail 规则整个限定在宽窗口,不去和横排布局抢。 */
+@media (min-width: 861px) {
+  .lib-sidebar.is-rail {
+    padding-inline: var(--space-8);
+    align-items: stretch;
+  }
+
+  /* web 收起后展开钮浮在左上角 (14,24);那边没有交通灯空档(40px 的
+     .lib-sidebar-top 被 is-web 隐藏),不给 rail 补回这段留白,浮钮就会
+     压在第一颗导航图标上。桌面端空档本来就还在,不需要。 */
+  .library.is-web .lib-sidebar.is-rail {
+    padding-top: 48px;
+  }
+
+  /* 品牌行(含 web 端内嵌开关)、分组、标签、目标卡在 rail 里没有意义。
+     文字用 display:none 会退出可访问树,rail 态按钮已在 JSX 补 aria-label。 */
+  .lib-sidebar.is-rail .lib-brand,
+  .lib-sidebar.is-rail .lib-sidebar-text,
+  .lib-sidebar.is-rail .lib-sidebar-count,
+  .lib-sidebar.is-rail .lib-sidebar-label,
+  .lib-sidebar.is-rail .lib-sidebar-nav.is-filter,
+  .lib-sidebar.is-rail .lib-sidebar-tags,
+  .lib-sidebar.is-rail .lib-sidebar-goal,
+  .lib-sidebar.is-rail .lib-sidebar-clear {
+    display: none;
+  }
+
+  .lib-sidebar.is-rail .lib-sidebar-item {
+    justify-content: center;
+    gap: 0;
+    width: 48px;
+    padding: 0;
+    margin-inline: auto;
+    /* 图标是 rail 里唯一的识别信号:展开态有文字分担,这里再用三级/次级
+       墨色,深色主题下底部两颗会淡到看不见。 */
+    color: var(--color-text-primary);
+  }
+
+  /* foot 展开态用了负 margin 抵消侧栏内边距,rail 里会把图标推出边界。 */
+  .lib-sidebar.is-rail .lib-sidebar-foot {
+    margin-right: 0;
+    margin-left: 0;
+    padding: var(--space-16) 0 0;
+  }
 }
 
 .lib-sidebar-nav,
@@ -949,6 +964,13 @@
     height var(--duration-fast) var(--ease-out);
 }
 
+/* 「我的分组」是筛选状态,不是第二个「我在哪」。两组都画灰底 + 竖条时,侧栏
+   会同时出现两处选中,读者分不清哪个是视图、哪个是筛选。这里不画滑块,
+   选中仍由下面的墨色 + 字重 + accent 计数表达。 */
+.lib-sidebar-nav.is-filter .sliding-indicator {
+  display: none;
+}
+
 /* 滑块既然是实心 accent,被它盖住的文字就必须翻纸色 —— 否则 accent 字压在
    accent 底上等于消失。用 :has 限定,只有真画了滑块的容器才受影响;侧栏
    那处滑块被改成中性灰,它的文字规则特异性更高,不受这条干扰。 */
@@ -958,21 +980,9 @@
   color: var(--color-on-accent);
 }
 
-/* 当前项的记号:3×16 的 accent 短竖条,贴在选中胶囊左缘外侧 6px。
-   曾经写 `left: calc(var(--space-16) * -1)`(导航还没有内边距时留下的算式),
-   于是它跑到窗口最左边,与选中行隔了整整 16px —— 既不像这一行的记号,也
-   不像窗口的导轨,只像一条渲染毛刺。 */
-.lib-sidebar-nav .sliding-indicator::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: calc(var(--space-6) * -1);
-  width: 3px;
-  height: 16px;
-  margin-top: -8px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-}
+/* 选中行**只**靠中性灰底 + 墨色字 + 字重说话,不画 accent 竖条:那根彩条在
+   强调色可换之后会变成第二套信号,也把侧栏左缘切碎。2026-11-06 按用户要求
+   移除,别再加回来。 */
 
 .lib-sidebar-item {
   display: flex;
@@ -1162,10 +1172,17 @@
   transition: width var(--duration-slow) var(--ease-emphasized);
 }
 
+/* 目标卡与底部操作区同属一块:由容器统一沉底,目标卡就正好落在发丝线上方。
+   rail 里目标卡 display:none,容器仍把 foot 推到底;窄窗口下容器 display:contents,
+   两个子元素各自回到侧栏横排(见 04-notes.css)。 */
+.lib-sidebar-bottom {
+  margin-top: auto;
+}
+
 .lib-sidebar-foot {
   display: grid;
   gap: 2px;
-  margin-top: auto;
+  margin-top: 0;
   margin-right: calc(var(--space-8) * -1);
   margin-left: calc(var(--space-16) * -1);
   padding: var(--space-16) var(--space-8) 0 var(--space-16);

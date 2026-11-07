@@ -26,6 +26,7 @@ import {
   PAGE_MARGIN_INLINE_OPTIONS,
   PARAGRAPH_MARGIN_OPTIONS,
   READER_THEMES,
+  READER_THEME_GROUPS,
   TEXT_INDENT_OPTIONS,
   WRITING_MODE_OPTIONS,
   ZH_CONVERT_OPTIONS,
@@ -78,21 +79,33 @@ export function SettingsPanel({
       {/* 主题:与正文同屏,换档立刻看得见。 */}
       <div className="settings-group">
         <span className="settings-group-label">阅读背景</span>
-        <div className="reader-theme-row">
-          {READER_THEMES.map((option, index) => (
-            <button
-              key={option.label}
-              type="button"
-              className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
-              style={{
-                background: option.theme.background,
-                color: option.theme.foreground,
-              }}
-              onClick={() => onThemeChange(index)}
-              aria-pressed={themeIndex === index}
-            >
-              {option.label}
-            </button>
+        {/* 按纸性分组,但按钮回传的仍是 READER_THEMES 的原下标 —— 那个数字
+            是持久化值,分组只改展示顺序,不能动它。 */}
+        <div className="reader-theme-groups">
+          {READER_THEME_GROUPS.map((group) => (
+            <div className="reader-theme-group" key={group.label}>
+              <span className="reader-theme-group-label">{group.label}</span>
+              <div className="reader-theme-row">
+                {group.indices.map((index) => {
+                  const option = READER_THEMES[index]!
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      className={`reader-theme-swatch${themeIndex === index ? ' is-active' : ''}`}
+                      style={{
+                        background: option.theme.background,
+                        color: option.theme.foreground,
+                      }}
+                      onClick={() => onThemeChange(index)}
+                      aria-pressed={themeIndex === index}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           ))}
         </div>
       </div>

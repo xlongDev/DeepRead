@@ -1,9 +1,9 @@
 /*
  * 07-shelf-controls.css — 书架视图切换 / 排序 / 列表 / 搜索命中
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Shelf view toggle / sort / list view ---------- */
 
@@ -106,7 +106,8 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /* 与网格共用密度变量:紧凑档连列表行距一起收,不在两种视图间跳手感。 */
+  gap: var(--shelf-row-gap, var(--space-6));
 }
 
 /* 与 .book-card 同一套逐条入场 —— 列表行也因 `key={view}` 而重新挂载。 */

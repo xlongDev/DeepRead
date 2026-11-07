@@ -145,19 +145,9 @@ export function toggleFavoriteTag(tags: readonly string[]): readonly string[] {
     : [...tags, FAVORITE_TAG]
 }
 
-export type AppTheme =
-  | 'pure-white'
-  | 'warm-paper'
-  | 'ivory'
-  | 'soft-gray'
-  | 'dark'
-  | 'pine'
-  | 'oled'
-  | 'liquid-glass'
-  | 'mist'
-  | 'graphite'
-  | 'midnight'
-  | 'sand'
+/* 主题目录的唯一定义在设计系统包里(tokens.css 是运行时值的唯一真相)。
+   这里 re-export,让书架这一层的调用方不必知道包边界。 */
+export { APP_THEMES, LEGACY_APP_THEME_MAP, type AppTheme } from '@deepread/design-system'
 
 export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   added: '最近添加',
@@ -165,28 +155,6 @@ export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   size: '文件大小',
   progress: '阅读进度',
 }
-
-export const APP_THEMES: readonly {
-  readonly id: AppTheme
-  readonly label: string
-  /** Mini page preview: background, ink, and accent of this world. */
-  readonly swatch: string
-  readonly ink: string
-  readonly accent: string
-}[] = [
-  { id: 'pure-white', label: '纯白', swatch: '#f6f5f2', ink: '#1d1b17', accent: '#3d6deb' },
-  { id: 'warm-paper', label: '暖纸', swatch: '#f3ecdd', ink: '#2b2620', accent: '#3d6deb' },
-  { id: 'ivory', label: '象牙', swatch: '#f8f4ea', ink: '#33302a', accent: '#3d6deb' },
-  { id: 'soft-gray', label: '浅灰', swatch: '#ebebeb', ink: '#222222', accent: '#3d6deb' },
-  { id: 'dark', label: '深色', swatch: '#131210', ink: '#ece9e3', accent: '#6e93f6' },
-  { id: 'pine', label: '松林', swatch: '#0f1512', ink: '#e8eee9', accent: '#8aa5f0' },
-  { id: 'oled', label: 'OLED 纯黑', swatch: '#000000', ink: '#e8e5df', accent: '#7d9ef7' },
-  { id: 'liquid-glass', label: '液态玻璃', swatch: '#dfe5ec', ink: '#1c2430', accent: '#3d6deb' },
-  { id: 'mist', label: '晨雾', swatch: '#ecf0f4', ink: '#1e2732', accent: '#3d6deb' },
-  { id: 'graphite', label: '石墨', swatch: '#1c1c1e', ink: '#f5f5f7', accent: '#0a84ff' },
-  { id: 'midnight', label: '午夜', swatch: '#0b1220', ink: '#eef2fa', accent: '#7aa2ff' },
-  { id: 'sand', label: '沙丘', swatch: '#e9e4dc', ink: '#2b2823', accent: '#0a6ccd' },
-]
 
 export const PROBLEM_MESSAGE: Readonly<Record<ImportProblem['kind'], string>> = {
   unsupported: '暂时不认识这个文件格式。目前支持 EPUB、MOBI、AZW3、FB2、CBZ、PDF、TXT、Markdown。',
@@ -339,4 +307,21 @@ export const columnsFromStorage = (): ShelfColumns => {
   const stored = localStorage.getItem(SHELF_COLUMNS_KEY)
   if (stored === null || !SHELF_COLUMNS_VALID.includes(stored)) return 'auto'
   return stored === 'auto' ? 'auto' : (Number(stored) as 3 | 4 | 5 | 6 | 7 | 8)
+}
+
+/** 书架密度:只改「每排放几本」与间距,不改封面 3/4 比例和文字层级。
+    三档写在 CSS 变量里,standard 是缺省值所以没有自己的规则块。 */
+export type ShelfDensity = 'comfortable' | 'standard' | 'compact'
+
+export const SHELF_DENSITY_OPTIONS = [
+  { value: 'comfortable', label: '舒适' },
+  { value: 'standard', label: '标准' },
+  { value: 'compact', label: '紧凑' },
+] as const satisfies readonly { readonly value: string; readonly label: string }[]
+
+export const SHELF_DENSITY_KEY = 'deepread.shelf.density'
+
+export const densityFromStorage = (): ShelfDensity => {
+  const stored = localStorage.getItem(SHELF_DENSITY_KEY)
+  return stored === 'comfortable' || stored === 'compact' ? stored : 'standard'
 }

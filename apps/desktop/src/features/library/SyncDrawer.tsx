@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { toAppError, type CloudConfigGetResponse } from '@deepread/shared'
 import { invokeCommand } from '../../lib/ipc'
 import { AUTO_SYNC_STORAGE_KEY, isAutoSyncEnabled, runSync, type SyncReport } from '../../lib/sync'
+import { useDrawerFocus } from '../../lib/modal-dialog'
 
 interface SyncDrawerProps {
   /** Refresh the shelf after a WebDAV restore replaced the database. */
@@ -20,6 +21,8 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
   const [error, setError] = useState<string | null>(null)
   /** 自动同步开关:与书架侧的静默同步 effect 读同一个 localStorage 键。 */
   const [autoSync, setAutoSync] = useState(isAutoSyncEnabled)
+  const panelRef = useRef<HTMLElement>(null)
+  useDrawerFocus(panelRef)
 
   useEffect(() => {
     invokeCommand('cloud.config.get', undefined)
@@ -118,7 +121,7 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
     })
 
   return (
-    <aside className="ai-drawer sync-drawer" aria-label="云同步">
+    <aside ref={panelRef} className="ai-drawer sync-drawer" aria-label="云同步">
       <div className="lookup-head">
         <strong>云同步(WebDAV)</strong>
         <button type="button" className="chrome-button" onClick={onClose} title="关闭">

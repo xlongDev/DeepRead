@@ -61,6 +61,20 @@ export const READER_THEMES: readonly { readonly label: string; readonly theme: R
   },
 ]
 
+/**
+ * 设置面板的**展示分组**:只决定显示顺序与组标题,绝不重排 READER_THEMES。
+ * `themeIndex` 是按数组位置持久化的,改动下标会让老用户存着的 2(夜间)
+ * 升级后变成牛皮。组内存的是原下标,点击回传的仍是同一个数字。
+ */
+export const READER_THEME_GROUPS: readonly {
+  readonly label: string
+  readonly indices: readonly number[]
+}[] = [
+  { label: '浅色纸', indices: [0, 6] },
+  { label: '暖色纸', indices: [1, 3, 4] },
+  { label: '夜间', indices: [2, 5, 7, 8] },
+]
+
 export const HIGHLIGHT_COLOR = '#f5d76e'
 
 /**

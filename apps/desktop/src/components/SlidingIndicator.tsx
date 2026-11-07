@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEventHandler,
   type ReactNode,
   type Ref,
 } from 'react'
@@ -49,6 +50,11 @@ export interface SlidingIndicatorProps {
   readonly role?: 'toolbar' | 'tablist'
   /** 只有带 role 的容器(或 nav)才传 —— 裸 div 上挂 aria-label 是无效 ARIA。 */
   readonly ariaLabel?: string
+  /**
+   * tablist 的 ←/→/Home/End 键盘模式;挂在容器上才能一次查到全部页签。
+   * 传了它就强制 `role="tablist"` —— 键盘页签模式只对 tablist 有意义。
+   */
+  readonly onKeyDown?: KeyboardEventHandler<HTMLElement>
   readonly children: ReactNode
 }
 
@@ -59,6 +65,7 @@ export function SlidingIndicator({
   as = 'div',
   role,
   ariaLabel,
+  onKeyDown,
   children,
 }: SlidingIndicatorProps) {
   const containerRef = useRef<HTMLElement | null>(null)
@@ -128,6 +135,23 @@ export function SlidingIndicator({
       <nav ref={containerRef} className={className} aria-label={ariaLabel}>
         {body}
       </nav>
+    )
+  }
+
+  // 带键盘 handler 的一定是 tablist。role 写死(而不是沿用可选的 `role` prop)
+  // 才能让容器被识别成交互元素:裸 div + onKeyDown 是无语义的静态节点。
+  if (onKeyDown !== undefined) {
+    return (
+      <div
+        ref={containerRef as Ref<HTMLDivElement>}
+        className={className}
+        role="tablist"
+        aria-label={ariaLabel}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+      >
+        {body}
+      </div>
     )
   }
 

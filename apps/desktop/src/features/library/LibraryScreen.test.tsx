@@ -306,6 +306,20 @@ beforeEach(() => {
 })
 
 describe('LibraryScreen 外壳契约', () => {
+  it('skip link 是第一个可聚焦元素,落点是主内容', async () => {
+    await renderLibrary()
+    const link = document.querySelector('.skip-link')
+    expect(link?.getAttribute('href')).toBe('#main-content')
+    // 不能是 display:none 的隐藏链接:那样它压根进不了 Tab 顺序。
+    const firstFocusable = document
+      .querySelector('.library')
+      ?.querySelector('a[href], button, input, [tabindex]:not([tabindex="-1"])')
+    expect(firstFocusable).toBe(link)
+    const main = document.querySelector('#main-content')
+    expect(main?.tagName).toBe('MAIN')
+    expect(main?.getAttribute('tabindex')).toBe('-1')
+  })
+
   it('没有独立顶栏:品牌住进侧栏顶部,导入回到工具栏', async () => {
     await renderLibrary()
     expect(document.querySelector('.library-header')).toBeNull()
@@ -324,30 +338,36 @@ describe('LibraryScreen 外壳契约', () => {
     expect(toolbarButtons()).toContain('导入书籍')
   })
 
-  it('侧栏开关常驻:收起后主区拿到全部宽度,开关还点得到', async () => {
+  it('侧栏开关常驻:收起后变成 64px 图标 rail,开关还点得到', async () => {
     await renderLibrary()
     const shell = document.querySelector('.library')
-    const toggle = screen.getByLabelText('隐藏侧边栏')
+    const toggle = screen.getByLabelText('收起侧栏')
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
 
     fireEvent.click(toggle)
     expect(shell!.classList.contains('is-sidebar-hidden')).toBe(true)
     // 关键:开关不在侧栏内部 —— 否则收起之后它跟着消失,就再也打不开了。
     expect(document.querySelector('.lib-sidebar')?.contains(toggle)).toBe(false)
-    expect(screen.getByLabelText('显示侧边栏')).toBeInTheDocument()
-    // 收起只是淡出 + 让出宽度,节点还在原地,展开时不用重建。
+    expect(screen.getByLabelText('展开侧栏')).toBeInTheDocument()
+    // 收起 = 图标 rail:节点、导航与「我在哪」的竖条都还在,展开不用重建。
+    expect(document.querySelector('.lib-sidebar')?.classList.contains('is-rail')).toBe(true)
     expect(screen.getByRole('complementary', { name: '主导航' })).toBeInTheDocument()
+    // 文字被 CSS 隐藏后退出可访问树,图标按钮靠 aria-label 保住名字。
+    for (const name of ['书架', '笔记', '统计', '云同步', '设置']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
     expect(localStorage.getItem('deepread.shelf.sidebar')).toBe('hidden')
 
-    fireEvent.click(screen.getByLabelText('显示侧边栏'))
+    fireEvent.click(screen.getByLabelText('展开侧栏'))
     expect(shell!.classList.contains('is-sidebar-hidden')).toBe(false)
+    expect(document.querySelector('.lib-sidebar')?.classList.contains('is-rail')).toBe(false)
   })
 
   it('侧栏收起状态会被记住', async () => {
     localStorage.setItem('deepread.shelf.sidebar', 'hidden')
     await renderLibrary()
     expect(document.querySelector('.library')!.classList.contains('is-sidebar-hidden')).toBe(true)
-    expect(screen.getByLabelText('显示侧边栏')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByLabelText('展开侧栏')).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('书架工具栏的控件按序排列,一个不多一个不少', async () => {
@@ -424,13 +444,66 @@ describe('LibraryScreen 外壳契约', () => {
 })
 
 describe('LibraryScreen 书架渲染', () => {
-  it('网格里的每本书只说「这是什么书」:标题加作者,进度压在封面底边', async () => {
+  it('书架密度默认标准档并写进 dataset', async () => {
+    await renderLibrary()
+    expect(document.documentElement.dataset.density).toBe('standard')
+    expect(localStorage.getItem('deepread.shelf.density')).toBe('standard')
+  })
+
+  it('书架密度从 localStorage 恢复紧凑档', async () => {
+    localStorage.setItem('deepread.shelf.density', 'compact')
+    await renderLibrary()
+    expect(document.documentElement.dataset.density).toBe('compact')
+  })
+
+  it('界面动效默认跟随系统:不写 data-motion,系统偏好交还原生 @media', async () => {
+    await renderLibrary()
+    expect(document.documentElement.hasAttribute('data-motion')).toBe(false)
+    expect(localStorage.getItem('deepread.motion')).toBe('system')
+  })
+
+  it('界面动效从 localStorage 恢复「减少动效」并写到 <html>', async () => {
+    localStorage.setItem('deepread.motion', 'reduce')
+    await renderLibrary()
+    expect(document.documentElement.dataset.motion).toBe('reduce')
+  })
+
+  it('隐藏的导入 file input 退出 Tab 顺序与可访问树(读屏走查)', async () => {
+    await renderLibrary()
+    const input = document.querySelector('input[type="file"]')
+    expect(input).not.toBeNull()
+    expect(input?.getAttribute('tabindex')).toBe('-1')
+    expect(input?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('每个可 Tab 到的控件都有可访问名', async () => {
+    await renderLibrary()
+    const named = (element: HTMLElement): boolean =>
+      Boolean(
+        element.getAttribute('aria-label')?.trim() ||
+        element.getAttribute('aria-labelledby')?.trim() ||
+        element.textContent?.replace(/\s+/g, ' ').trim() ||
+        element.getAttribute('title')?.trim() ||
+        element.getAttribute('placeholder')?.trim(),
+      )
+    const unnamed = [
+      ...document.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea'),
+    ]
+      .filter(
+        (element) => element.tabIndex >= 0 && element.closest('[aria-hidden="true"]') === null,
+      )
+      .filter((element) => !named(element))
+      .map((element) => element.outerHTML.slice(0, 120))
+    expect(unnamed).toEqual([])
+  })
+
+  it('网格里的每本书说清书名、作者与格式大小,进度压在封面底边', async () => {
     await renderLibrary()
     expect(document.querySelector('.shelf-grid')).not.toBeNull()
-    // 格式徽章退场:封面是书的门面,不贴 EPUB/MOBI 胶囊。
+    // 格式与大小在作者下面一行,不是贴回封面上的徽章。
     expect(document.querySelector('.book-format')).toBeNull()
-    // 卡片文字只剩书名与作者;大小与进度文案不再挂在卡片下面。
-    expect(screen.queryByText(/KB/)).toBeNull()
+    expect(screen.getByText('EPUB · 2 KB')).toBeInTheDocument()
+    expect(document.querySelectorAll('.book-meta-tech')).toHaveLength(3)
     // 进度是封面底边的细线(夜航书 42%)。
     const fill = document.querySelector(
       '.book-cover-progress .book-progress-fill',
@@ -1047,6 +1120,29 @@ describe('LibraryScreen 侧栏导航', () => {
 })
 
 describe('LibraryScreen 统计页', () => {
+  it('柱状图与热力图给读屏留了等价数据表', async () => {
+    await renderLibrary()
+    fireEvent.click(sidebarButton('统计'))
+    const page = await screen.findByLabelText('阅读统计')
+
+    // 七根柱子只有 title,读屏拿不到数;这个表一行一天,视觉隐藏但留在可访问树。
+    const weekTable = page.querySelector('table[aria-label="最近 7 天每日阅读时长"]')
+    expect(weekTable).not.toBeNull()
+    expect(weekTable?.classList.contains('visually-hidden')).toBe(true)
+    expect(weekTable?.querySelectorAll('tbody tr')).toHaveLength(
+      page.querySelectorAll('.stats-bar').length,
+    )
+    expect(weekTable?.textContent).toContain('日期')
+    expect(weekTable?.textContent).toContain('时长')
+
+    // 全年 365 格按月汇总成 12 行;只有当年有阅读记录时才渲染。
+    const yearTable = page.querySelector('table[aria-label$="年每月阅读时长"]')
+    if (yearTable !== null) {
+      expect(yearTable.querySelectorAll('tbody tr')).toHaveLength(12)
+      expect(yearTable.textContent).toContain('阅读天数')
+    }
+  })
+
   it('统计页有四块指标、最近 7 天与读得最久的书', async () => {
     const { onOpenBook } = await renderLibrary()
     fireEvent.click(sidebarButton('统计'))
@@ -1058,10 +1154,16 @@ describe('LibraryScreen 统计页', () => {
     for (const label of ['累计时长', '连续天数', '已读完', '平均每日']) {
       expect(within(page).getByText(label)).toBeInTheDocument()
     }
-    expect(within(page).getByText('10 分')).toBeInTheDocument()
+    // 视觉隐藏的数据表里也有「10 分」:要求至少有一处**可见**的读数,
+    // 而不是对整个页面做 getByText(会命中两个)。
+    expect(
+      within(page)
+        .getAllByText('10 分')
+        .some((node) => node.closest('table.visually-hidden') === null),
+    ).toBe(true)
+    const tiles = [...page.querySelectorAll('.stats-tile')]
     // 累计不在四块里了,但仍是柱状图下面那句说明的底数。
     expect(page.textContent).toContain('累计 50 分')
-    const tiles = [...page.querySelectorAll('.stats-tile')]
     expect(tiles).toHaveLength(4)
     // 已读完:BOOKS 里只有一本读到 100%。
     expect(tiles[2]?.textContent).toContain('1')
@@ -1148,14 +1250,47 @@ describe('LibraryScreen 卡片操作', () => {
     expect(screen.queryByLabelText('移出《夜航书》')).toBeNull()
   })
 
-  it('继续阅读 hero 卡浮现最近在读的那本,大封面加大标题加进度线', async () => {
+  it('继续阅读焦点区浮现最近在读的那本,进度写成文字而不是装饰条', async () => {
     await renderLibrary([{ ...BOOKS[0]!, lastReadAt: '2026-09-30T10:00:00Z' }])
     const hero = document.querySelector('.continue-reading')
     expect(hero).not.toBeNull()
     expect(hero?.textContent).toContain('夜航书')
     expect(hero?.textContent).toContain('继续阅读')
-    const fill = hero!.querySelector<HTMLElement>('.continue-reading-fill')!
-    expect(fill.style.width).toBe('42%')
+    expect(hero?.textContent).toContain('读到 42%')
+    // 进度是文字,不是装饰条。
+    expect(hero?.querySelector('.continue-reading-fill')).toBeNull()
+  })
+
+  it('焦点卡置顶的那本不在书架里画第二遍', async () => {
+    await renderLibrary([
+      { ...BOOKS[0]!, lastReadAt: '2026-09-30T10:00:00Z' },
+      BOOKS[1]!,
+      BOOKS[2]!,
+    ])
+    expect(document.querySelector('.continue-reading')?.textContent).toContain('夜航书')
+    const gridTitles = [...document.querySelectorAll('.book-meta-title')].map(
+      (node) => node.textContent,
+    )
+    expect(gridTitles).not.toContain('夜航书')
+    expect(gridTitles).toHaveLength(2)
+  })
+
+  it('刚打开的书(0%)不说「接着上次继续」,动作改为开始阅读', async () => {
+    await renderLibrary([{ ...BOOKS[0]!, progress: 0, lastReadAt: '2026-09-30T10:00:00Z' }])
+    const text = document.querySelector('.continue-reading')?.textContent ?? ''
+    expect(text).toContain('最近打开 · 尚未开始')
+    expect(text).toContain('开始阅读')
+    expect(text).not.toContain('接着上次继续')
+  })
+
+  it('页面标题在焦点卡之前:不是把 h1 挤到书卡下面', async () => {
+    await renderLibrary([{ ...BOOKS[0]!, lastReadAt: '2026-09-30T10:00:00Z' }])
+    const toolbar = document.querySelector('.shelf-toolbar')
+    const hero = document.querySelector('.continue-reading')
+    expect(toolbar).not.toBeNull()
+    expect(hero).not.toBeNull()
+    // 双主题对比过:焦点卡在上会让「书架」读成网格区的标签,读屏也先书后页面名。
+    expect(toolbar!.compareDocumentPosition(hero!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('菜单里的导出:落成 .md 只含这一本', async () => {

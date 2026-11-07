@@ -15,6 +15,8 @@ import {
   persistPageTurnStyle,
   persistStatsSettings,
   persistTypography,
+  READER_THEMES,
+  READER_THEME_GROUPS,
   TEXT_INDENT_OPTIONS,
   type TypographySettings,
 } from './reader-options'
@@ -257,5 +259,17 @@ describe('mergeTypography(补丁合并)', () => {
   it('originalLayout 只有显式给出才翻转(切换开关的瞬间)', () => {
     expect(mergeTypography(base, { fontSize: 20 }).originalLayout).toBe(false)
     expect(mergeTypography(base, { originalLayout: true }).originalLayout).toBe(true)
+  })
+})
+
+describe('阅读背景分组', () => {
+  it('九张纸不重不漏,且每组下标都能取到真实主题', () => {
+    const indices = READER_THEME_GROUPS.flatMap((group) => group.indices)
+    expect(indices).toHaveLength(READER_THEMES.length)
+    expect(new Set(indices).size).toBe(READER_THEMES.length)
+    expect([...indices].sort((a, b) => a - b)).toEqual(READER_THEMES.map((_, index) => index))
+    for (const index of indices) {
+      expect(READER_THEMES[index]?.theme.name).toBeTruthy()
+    }
   })
 })

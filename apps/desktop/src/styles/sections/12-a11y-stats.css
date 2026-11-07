@@ -1,9 +1,9 @@
 /*
  * 12-a11y-stats.css — reduced-motion · 触屏 · 统计 · 对照阅读
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Reduced motion: collapse every choreography ---------- */
 
@@ -26,6 +26,14 @@
   /* 装饰性的高光扫过直接不要:它没有信息量,瞬间闪一下反而更烦。 */
   .book-cover::after {
     display: none;
+  }
+
+  /* View Transition 是浏览器原生动画,不属于上面那批 CSS animation:即便 JS
+     入口已经早退,这里也给不支持 matchMedia 的引擎留一层瞬间切换。 */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 
@@ -703,9 +711,14 @@
   position: absolute;
 }
 
-/* 半屏放不下整窗的那套尺寸:书名、进度条、面板全部按栏宽收。 */
+/* 半屏放不下整窗的那套尺寸:书名、进度条、面板全部按栏宽收。
+   顶栏与底栏共用 12px 边距和同一条 max-width,免得两条 chrome 在窄栏里
+   一个贴边一个缩进。 */
 .reader-embedded .reader-top {
   top: 12px;
+  left: 12px;
+  right: 12px;
+  max-width: calc(100% - 24px);
 }
 
 /* 底栏的居中不能再用 left:50% + translateX(-50%):绝对定位的收缩盒
@@ -949,4 +962,125 @@ button.parallel-divider:active:not(:disabled) {
   color: var(--color-text-tertiary);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 统计读取失败:一句原因 + 一条可点的退路。错误块不是数据,别和零值同框。 */
+.stats-load-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+}
+
+.stats-load-error .library-error {
+  flex: 1 1 240px;
+}
+
+/* ---------- View Transitions: 常驻 chrome 不参与换装 ---------- */
+/* 书架↔笔记↔统计由 LibraryScreen 的 withViewTransition 拍 root 快照。
+   侧栏是位置锚点,每次切视图跟着淡入淡出会像整条导航闪了一下;给它独立的
+   transition-name,浏览器就会把它从 root 快照里摘出来单独成层(新旧位置相同
+   → 不动),只有内容区交叉淡入。名字必须整页唯一,重名会让整次过渡被丢弃。 */
+.lib-sidebar {
+  view-transition-name: library-rail;
+}
+
+/* ---------- W4: 高对比偏好与强制颜色(组件级) ---------- */
+/* **变量覆盖必须写在 unlayered 的 tokens.css**:这里属于 legacy 层,层顺序
+   优先于特异性,同一 :root 在 layer 里永远压不过 unlayered 的声明(项目踩过
+   227 处翻转那次就是这么来的)。本分片只放组件级规则。 */
+@media (prefers-contrast: more) {
+  :focus-visible {
+    outline-width: 3px;
+  }
+}
+
+/* 强制颜色下,半透明玻璃、中性灰底选中、彩色焦点环都会被系统抹掉 ——
+   换成系统色才不会丢「我在哪」与「焦点在哪个控件」。封面是书的内容,
+   不是 chrome,明确保护它不被重着色。 */
+@media (forced-colors: active) {
+  .modal-panel,
+  .ai-drawer,
+  .action-menu {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    backdrop-filter: none;
+  }
+
+  .lib-sidebar-nav .sliding-indicator {
+    background: transparent;
+    border: 2px solid Highlight;
+  }
+
+  .book-cover {
+    forced-color-adjust: none;
+  }
+
+  ::selection {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+/* ---------- W4: 用户强制减少动效(与系统 @media 并列) ----------
+   上面那条 @media 一行不动:系统偏好继续由浏览器原生判定。这里只处理在设置里
+   显式选「减少动效」的用户,条件写在 <html data-motion="reduce"> 上。
+   规则刻意集中在一处,不去动 02/05/07/11 分片里那四块媒体查询。
+   View Transition 伪元素不需要第三份:唯一的 JS 入口 withViewTransition 已按
+   dataset 早退,连快照都不拍,原生动画根本不会启动。 */
+:root[data-motion='reduce'] *,
+:root[data-motion='reduce'] *::before,
+:root[data-motion='reduce'] *::after {
+  animation-delay: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-delay: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion='reduce'] .book-cover::after {
+  display: none;
+}
+
+:root[data-motion='reduce'] .scrolling-text.is-overflow:hover {
+  animation: none !important;
+}
+
+:root[data-motion='reduce'] .sliding-indicator {
+  transition:
+    transform var(--duration-fast) linear,
+    width var(--duration-fast) linear,
+    height var(--duration-fast) linear;
+}
+
+:root[data-motion='reduce'] .reading-ruler-band,
+:root[data-motion='reduce'] .segmented-animated > .segmented-thumb,
+:root[data-motion='reduce'] .page-flip-chip {
+  transition: none;
+}
+
+/* ---------- W4: reduced transparency(组件级) ---------- */
+@media (prefers-reduced-transparency: reduce) {
+  /* 少数面板把 backdrop-filter 写死了,没走 --glass-blur 变量。通配清零是
+     这里唯一不漏的做法:逐个选择器登记,下次新增一块玻璃又会漏。
+     上面 .parallel-controls 的局部实心背景保留,它比通用值更需要底色。 */
+  *,
+  *::before,
+  *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .modal-overlay {
+    background: rgba(var(--shadow-color), 0.62);
+  }
+
+  .drop-overlay {
+    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
+  }
 }

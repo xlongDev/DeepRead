@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { darkTheme, lightTheme, themeCssVariables, themes } from './tokens'
+import { APP_THEMES } from './themes'
+import { ACCENT_DEFAULT, ACCENT_PRESETS } from './accents'
 import { MOTION, prefersReducedMotion } from './motion'
 
 // Read directly from disk: vitest stubs CSS imports (css: false), and the raw
@@ -17,6 +19,18 @@ function extractVarNames(text: string): Set<string> {
   return names
 }
 
+/** Values declared in the first `:root` block — the runtime base palette. */
+function rootVarValues(text: string): Map<string, string> {
+  const block = /:root\s*\{([\s\S]*?)\n\}/.exec(text)?.[1] ?? ''
+  const values = new Map<string, string>()
+  const pattern = /(--[a-z0-9-]+)\s*:\s*([^;]+);/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(block)) !== null) {
+    values.set(match[1] ?? '', (match[2] ?? '').trim())
+  }
+  return values
+}
+
 describe('theme tokens', () => {
   it('exposes exactly the same variable names as tokens.css', () => {
     const cssVars = extractVarNames(cssText)
@@ -25,13 +39,70 @@ describe('theme tokens', () => {
     }
   })
 
-  it('keeps dark overrides to a subset of declared variables', () => {
+  it('keeps app-theme overrides to a subset of declared variables', () => {
     const cssVars = extractVarNames(cssText)
-    const darkBlock = cssText.slice(cssText.indexOf("[data-theme='dark']"))
+    const start = cssText.indexOf("[data-app-theme='dark']")
+    expect(start).toBeGreaterThan(-1)
+    const darkBlock = cssText.slice(start, cssText.indexOf('\n}', start))
     expect(darkBlock).not.toBe('')
     const darkVars = [...extractVarNames(darkBlock)]
     for (const name of darkVars) {
       expect(cssVars.has(name), `dark override ${name} is not declared in :root`).toBe(true)
+    }
+    // The old `[data-theme='dark']` branch had no writer and its white
+    // --color-on-accent contradicted the live dark theme. Never bring it back.
+    expect(cssText).not.toContain("[data-theme='dark']")
+  })
+
+  it('has exactly one CSS block per catalogued app theme', () => {
+    const ids = [...cssText.matchAll(/\[data-app-theme='([^']+)'\]/g)].map((match) => match[1])
+    for (const theme of APP_THEMES) {
+      // pure-white is the :root default, so it has no block of its own.
+      if (theme.id === 'pure-white') continue
+      expect(ids, `missing CSS block for ${theme.id}`).toContain(theme.id)
+    }
+    for (const id of ids) {
+      expect(
+        APP_THEMES.some((theme) => theme.id === id),
+        `unlisted CSS theme ${id}`,
+      ).toBe(true)
+    }
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('keeps the unstyled :root on the default accent (no first-frame flash)', () => {
+    const rootBlock = /:root\s*\{([\s\S]*?)\}/.exec(cssText)?.[1] ?? ''
+    const preset = ACCENT_PRESETS.find((item) => item.id === ACCENT_DEFAULT)
+    expect(preset).toBeDefined()
+    expect(rootBlock).toContain(`--accent-h: ${preset?.hue}`)
+    expect(rootBlock).toContain(`--accent-c: ${preset?.chroma}`)
+  })
+
+  it('has one CSS preset block per catalogued accent', () => {
+    const ids = [...cssText.matchAll(/\[data-accent='([^']+)'\]/g)].map((match) => match[1])
+    for (const preset of ACCENT_PRESETS) {
+      expect(ids, `missing CSS block for ${preset.id}`).toContain(preset.id)
+      const block = new RegExp(`\\[data-accent='${preset.id}'\\]\\s*\\{([^}]+)\\}`).exec(
+        cssText,
+      )?.[1]
+      expect(block, `empty CSS block for ${preset.id}`).toBeTruthy()
+      expect(block).toContain(`--accent-h: ${preset.hue}`)
+      expect(block).toContain(`--accent-c: ${preset.chroma}`)
+    }
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('keeps the typed mirror aligned with the :root palette', () => {
+    const root = rootVarValues(cssText)
+    const expected: Record<string, string> = {
+      '--color-bg': lightTheme.colors.bg,
+      '--color-surface': lightTheme.colors.surface,
+      '--color-surface-glass': lightTheme.colors.surfaceGlass,
+      '--color-text-primary': lightTheme.colors.textPrimary,
+      '--color-accent': lightTheme.colors.accent,
+    }
+    for (const [name, value] of Object.entries(expected)) {
+      expect(root.get(name), `${name} drifted from tokens.css`).toBe(value)
     }
   })
 

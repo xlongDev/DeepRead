@@ -15,6 +15,17 @@ import {
 } from '@deepread/shared'
 import { extractCover, extractMetadata } from '@deepread/reader-adapter'
 import {
+  ACCENT_STORAGE_KEY,
+  MOTION_STORAGE_KEY,
+  motionAttribute,
+  onAccentFor,
+  parseAccent,
+  parseMotionPreference,
+  serializeAccent,
+  type AccentChoice,
+  type MotionPreference,
+} from '@deepread/design-system'
+import {
   ACCEPTED_EXTENSIONS,
   DIALOG_EXTENSIONS,
   classifyFile,
@@ -35,6 +46,7 @@ import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime, listenEvent } from '../../lib/ipc'
 import { useKeybindings } from '../../lib/keybindings'
+import { CommandBar } from '../../components/CommandBar'
 import { SyncDrawer } from './SyncDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
@@ -43,6 +55,7 @@ import { ShelfView } from './ShelfView'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
+  LEGACY_APP_THEME_MAP,
   BULK_CONFIRM,
   FAVORITE_TAG,
   isFinished,
@@ -56,13 +69,16 @@ import {
   sortDirFromStorage,
   sortFromStorage,
   SHELF_COLUMNS_KEY,
+  SHELF_DENSITY_KEY,
   toggleFavoriteTag,
   viewFromStorage,
   columnsFromStorage,
+  densityFromStorage,
   type AppTheme,
   type LibraryView,
   type ShelfBook,
   type ShelfColumns,
+  type ShelfDensity,
   type SmartFilter,
   type SortDir,
   type SortKey,
@@ -98,7 +114,14 @@ function withViewTransition(apply: () => void): void {
   const doc = document as Document & {
     startViewTransition?: (update: () => void) => void
   }
-  if (doc.startViewTransition === undefined) {
+  // 原生 VT 动画不吃 CSS 里的全局 reduced-motion 兜底,所以在入口就别拍快照。
+  // 两个来源:系统偏好(matchMedia 在 jsdom 里可能不存在,守卫不能省)与设置里
+  // 用户显式选的「减少动效」(写在 <html data-motion> 上,见 motion.ts)。
+  const reduced =
+    document.documentElement.dataset.motion === 'reduce' ||
+    (typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  if (doc.startViewTransition === undefined || reduced) {
     apply()
     return
   }
@@ -254,16 +277,26 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [shelfMode, setShelfMode] = useState<ViewMode>(viewFromStorage)
   /** 网格一行几本书('auto' = 自适应);与视图模式同一套 localStorage 习惯。 */
   const [shelfColumns, setShelfColumns] = useState<ShelfColumns>(columnsFromStorage)
+  const [shelfDensity, setShelfDensity] = useState<ShelfDensity>(densityFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [syncOpen, setSyncOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
-  const [appTheme, setAppTheme] = useState<AppTheme>(
-    // 白名单收窄:localStorage 里的旧值/脏值不在枚举里就回落默认 ——
-    // 直接 cast 会让 dataset 带上没有 CSS 块的主题名,界面停在半套状态。
-    () =>
-      APP_THEMES.some((theme) => theme.id === localStorage.getItem('deepread.app-theme'))
-        ? (localStorage.getItem('deepread.app-theme') as AppTheme)
-        : 'pure-white',
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => {
+    const stored = localStorage.getItem('deepread.app-theme')
+    if (stored === null) return 'pure-white'
+    if (APP_THEMES.some((theme) => theme.id === stored)) return stored as AppTheme
+    // 12 主题时代的值映射到 v2 的三个世界,老用户的选择不会静默回落默认;
+    // 完全不认识的脏值才回落 —— 直接 cast 会让 dataset 带上没有 CSS 块的主题名。
+    return LEGACY_APP_THEME_MAP[stored] ?? 'pure-white'
+  })
+  /** 强调色:预设 id 或自定义 hex;宿主持有,设置面板只是入口。 */
+  const [accent, setAccent] = useState<AccentChoice>(() =>
+    parseAccent(localStorage.getItem(ACCENT_STORAGE_KEY)),
+  )
+  /** 界面动效:只存用户意图,系统偏好仍由原生 @media 判定。 */
+  const [motionPreference, setMotionPreference] = useState<MotionPreference>(() =>
+    parseMotionPreference(localStorage.getItem(MOTION_STORAGE_KEY)),
   )
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
@@ -285,8 +318,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   }, [sidebarOpen])
   /** 书架搜索框:⌘K 聚焦用。 */
   const shelfSearchInputRef = useRef<HTMLInputElement>(null)
-  // ⌘B / Ctrl+B 开关侧栏,⌘K / Ctrl+K 聚焦书架搜索 —— 与阅读器同一套
+  // ⌘B / Ctrl+B 开关侧栏,⌘K / Ctrl+K 打开命令栏 —— 与阅读器同一套
   // 「修饰键 + 单键」心智;修饰键组合不与打字冲突,无需可编辑守卫。
+  // 书架搜索框仍可直接点,但书与命令的入口收敛到同一个地方。
   // 键位来自设置(改键即时生效)。
   const keybindings = useKeybindings()
   useEffect(() => {
@@ -297,11 +331,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         setSidebarOpen((isOpen) => !isOpen)
       } else if (keybindings.search !== '' && event.key === keybindings.search) {
         event.preventDefault()
-        const input = shelfSearchInputRef.current
-        if (input !== null) {
-          input.focus()
-          input.select()
-        }
+        setCommandOpen(true)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -323,6 +353,10 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   }
 
   const [stats, setStats] = useState<ReadingStats | null>(null)
+  /** 读取失败不是「读了 0 秒」:错误必须与空数据分开,否则统计页在撒谎。 */
+  const [statsError, setStatsError] = useState<string | null>(null)
+  /** 重试计数:改一下就让统计页的 effect 重跑,不另开一条加载路径。 */
+  const [statsReload, setStatsReload] = useState(0)
   /** 每本书累计读了多少(排行榜)。 */
   const [topBooks, setTopBooks] = useState<readonly BookReadingStat[]>([])
   /**
@@ -357,6 +391,38 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     document.documentElement.dataset['appTheme'] = appTheme
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (accent.kind === 'preset') {
+      root.dataset.accent = accent.id
+      root.style.removeProperty('--color-accent')
+      root.style.removeProperty('--color-on-accent')
+    } else {
+      // 自定义色直接盖 --color-accent;soft / hover 都读这个变量,自动跟随。
+      // on-accent 按亮度算,否则浅色底上白字会掉到 3:1 以下。
+      root.removeAttribute('data-accent')
+      root.style.setProperty('--color-accent', accent.hex)
+      root.style.setProperty('--color-on-accent', onAccentFor(accent.hex))
+    }
+    localStorage.setItem(ACCENT_STORAGE_KEY, serializeAccent(accent))
+  }, [accent])
+
+  useEffect(() => {
+    document.documentElement.dataset.density = shelfDensity
+    localStorage.setItem(SHELF_DENSITY_KEY, shelfDensity)
+  }, [shelfDensity])
+
+  useEffect(() => {
+    const attribute = motionAttribute(motionPreference)
+    if (attribute === null) {
+      // 移除而非写 'system':CSS 里没有 system 块,系统偏好交给 @media。
+      document.documentElement.removeAttribute('data-motion')
+    } else {
+      document.documentElement.dataset.motion = attribute
+    }
+    localStorage.setItem(MOTION_STORAGE_KEY, motionPreference)
+  }, [motionPreference])
 
   /**
    * 申请「持久化」存储。
@@ -872,15 +938,16 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         if (cancelled) return
         setStats(loaded)
         setTopBooks(perBook)
+        setStatsError(null)
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (cancelled) return
-        setStats({ days: [], totalSeconds: 0 })
+        setStatsError(toAppError(error).message)
       })
     return () => {
       cancelled = true
     }
-  }, [view])
+  }, [view, statsReload])
 
   // 挂载即取统计与阅读目标:侧栏那行「今日 vs 目标」常驻可见,不能等用户
   // 进统计页才加载。统计页进入时上面的 effect 会再取最新的 —— 侧栏摘要允许
@@ -1310,6 +1377,12 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         void importFromBrowserFiles(Array.from(event.dataTransfer.files))
       }}
     >
+      {/* 键盘/读屏用户的第一站:跳过整条侧栏直接落到主内容。必须是根里第一个
+          可聚焦元素;平时移出视口,但不用 display:none —— 那会让它退出 Tab 顺序。 */}
+      <a className="skip-link" href="#main-content">
+        跳到主要内容
+      </a>
+
       {/* 没有系统标题栏:这一条盖住窗口顶部,是唯一的拖拽把手 —— 侧栏收起时它还在。 */}
       <div className="window-drag" data-tauri-drag-region />
 
@@ -1320,9 +1393,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           type="button"
           className={`sidebar-toggle${isTauriRuntime() ? '' : ' is-web-float'}`}
           onClick={() => setSidebarOpen((isOpen) => !isOpen)}
-          aria-label={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+          aria-label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
           aria-expanded={sidebarOpen}
-          title={sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'}
+          title={sidebarOpen ? '收起侧栏' : '展开侧栏'}
         >
           <SidebarToggleIcon expanded={sidebarOpen} />
         </button>
@@ -1349,7 +1422,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         sidebarOpen={sidebarOpen}
       />
 
-      <main className="library-main">
+      {/* skip link 的落点:tabIndex -1 让程序化聚焦生效,但不会多占一个 Tab 位。
+          它由 CSS 去掉聚焦时的整块描边 —— 焦点已经用内容变化表达了。 */}
+      <main className="library-main" id="main-content" tabIndex={-1}>
         {view === 'shelf' && (
           <>
             {/* 两个平台都要等一次异步读(桌面是 SQLite、浏览器是 IndexedDB),
@@ -1542,6 +1617,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
             goalsBusy={goalsBusy}
             topBooks={topBooks}
             onOpenBook={(bookHash) => openShelfBook(bookHash)}
+            error={statsError}
+            onRetry={() => setStatsReload((count) => count + 1)}
           />
         )}
 
@@ -1556,6 +1633,19 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         <div className="drop-overlay" aria-hidden>
           <div className="drop-overlay-card">松开导入到书架</div>
         </div>
+      )}
+
+      {commandOpen && (
+        <CommandBar
+          books={books}
+          onClose={() => setCommandOpen(false)}
+          onOpenBook={(hash) => void openShelfBook(hash)}
+          onView={changeView}
+          onImport={triggerImport}
+          onSettings={() => setSettingsOpen(true)}
+          onSync={() => setSyncOpen(true)}
+          onTheme={setAppTheme}
+        />
       )}
 
       {syncOpen && (
@@ -1576,8 +1666,14 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         <SettingsDialog
           appTheme={appTheme}
           onThemeChange={setAppTheme}
+          accent={accent}
+          onAccentChange={setAccent}
           shelfColumns={shelfColumns}
           onShelfColumns={changeShelfColumns}
+          shelfDensity={shelfDensity}
+          onShelfDensity={setShelfDensity}
+          motionPreference={motionPreference}
+          onMotionChange={setMotionPreference}
           onRestored={loadBooks}
           onClose={() => setSettingsOpen(false)}
         />
@@ -1589,6 +1685,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         multiple
         accept={ACCEPTED_EXTENSIONS}
         className="visually-hidden"
+        tabIndex={-1}
+        aria-hidden="true"
         onChange={(event) => {
           void importFromBrowserFiles(Array.from(event.target.files ?? []))
           event.target.value = ''

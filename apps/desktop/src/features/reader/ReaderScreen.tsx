@@ -67,6 +67,7 @@ import {
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import { keyHint, useKeybindings } from '../../lib/keybindings'
+import { handleTablistKeys } from '../../lib/tablist-keys'
 import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu'
 import {
   buildFontFacesCss,
@@ -2285,6 +2286,8 @@ export function ReaderScreen({
         type="file"
         accept=".ttf,.otf,.woff,.woff2"
         className="visually-hidden"
+        tabIndex={-1}
+        aria-hidden="true"
         onChange={(event) => {
           const file = event.target.files?.[0]
           event.target.value = ''
@@ -2476,11 +2479,17 @@ export function ReaderScreen({
                 role="tablist"
                 ariaLabel="阅读设置分区"
                 activeSelector="button.is-active"
+                onKeyDown={(event) => {
+                  handleTablistKeys(event, (index) =>
+                    setSettingsTab(index === 1 ? 'display' : 'type'),
+                  )
+                }}
               >
                 <button
                   type="button"
                   role="tab"
                   aria-selected={settingsTab === 'type'}
+                  tabIndex={settingsTab === 'type' ? 0 : -1}
                   className={settingsTab === 'type' ? 'is-active' : ''}
                   onClick={() => setSettingsTab('type')}
                 >
@@ -2490,6 +2499,7 @@ export function ReaderScreen({
                   type="button"
                   role="tab"
                   aria-selected={settingsTab === 'display'}
+                  tabIndex={settingsTab === 'display' ? 0 : -1}
                   className={settingsTab === 'display' ? 'is-active' : ''}
                   onClick={() => setSettingsTab('display')}
                 >

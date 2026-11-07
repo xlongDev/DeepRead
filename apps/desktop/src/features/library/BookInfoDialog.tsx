@@ -93,12 +93,18 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
     <div className="modal-overlay">
       <button type="button" className="modal-dismiss" aria-label="关闭书籍信息" onClick={onClose} />
       <dialog ref={panelRef} className="modal-panel" open aria-modal="true" aria-label="书籍信息">
-        <header className="modal-head">
+        <div className="modal-head">
           <strong className="modal-title">书籍信息</strong>
-          <button type="button" className="chrome-button" onClick={onClose} title="关闭">
+          <button
+            type="button"
+            className="chrome-button"
+            onClick={onClose}
+            aria-label="关闭"
+            title="关闭"
+          >
             <X size={14} weight="regular" aria-hidden />
           </button>
-        </header>
+        </div>
 
         {/* 书架卡片不再显示格式与大小,这里是它们唯一的展示位。 */}
         {book.format !== 'unknown' && (
@@ -222,7 +228,7 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
           </p>
         )}
 
-        <footer className="modal-foot">
+        <div className="modal-foot">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
             取消
           </button>
@@ -234,7 +240,7 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
           >
             {busy ? '保存中…' : '保存'}
           </button>
-        </footer>
+        </div>
       </dialog>
     </div>
   )

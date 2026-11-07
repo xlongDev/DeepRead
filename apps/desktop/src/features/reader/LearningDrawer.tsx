@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, X } from '@phosphor-icons/react'
 import { toAppError, type AnnotationRecord, type LearningCard } from '@deepread/shared'
 import { INITIAL_SRS_STATE, isDue, scheduleReview, type ReviewGrade } from '@deepread/shared'
@@ -14,6 +14,7 @@ import { downloadText } from '../../lib/download'
 import { resolveActiveProvider } from '../../lib/ai-active-provider'
 import { Segmented } from './Segmented'
 import { runChatOnce } from '../../lib/ai-chat'
+import { useDrawerFocus } from '../../lib/modal-dialog'
 
 const QUIZ_QUESTION_COUNT = 5
 
@@ -78,6 +79,8 @@ export function LearningDrawer({
   const [quiz, setQuiz] = useState<GeneratedQuiz | null>(null)
   const [answers, setAnswers] = useState<ReadonlyMap<number, QuizAnswer>>(new Map())
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set())
+  const panelRef = useRef<HTMLElement>(null)
+  useDrawerFocus(panelRef)
 
   const loadCards = useCallback(async (): Promise<void> => {
     const response = await invokeCommand('cards.list', { bookHash })
@@ -299,7 +302,7 @@ export function LearningDrawer({
   const highlightCount = annotations.filter((a) => (a.excerpt ?? '').trim().length > 0).length
 
   return (
-    <aside className="ai-drawer learning-drawer" aria-label="学习">
+    <aside ref={panelRef} className="ai-drawer learning-drawer" aria-label="学习">
       <div className="lookup-head">
         <strong>学习</strong>
         <button type="button" className="chrome-button" onClick={onClose} title="关闭">

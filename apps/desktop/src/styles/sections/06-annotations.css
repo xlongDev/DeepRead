@@ -1,9 +1,9 @@
 /*
  * 06-annotations.css — 墨条 · 高亮批注 · 词典 · 修复 · 抽屉 · AI · 人物图
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- 划词工具「墨条」(InkBar) ----------
    几何(贴边/翻转/夹取)在 selection-place.ts,这里只负责长相和入场。

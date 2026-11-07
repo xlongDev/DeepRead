@@ -1,9 +1,9 @@
 /*
  * 08-dialogs.css — 设置弹窗 · TXT 章节规则 · 同步抽屉
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Modal system (settings) ---------- */
 
@@ -11,7 +11,7 @@
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: rgba(20, 18, 14, 0.32);
+  background: rgba(var(--shadow-color), 0.32);
   backdrop-filter: blur(10px) saturate(1.2);
   -webkit-backdrop-filter: blur(10px) saturate(1.2);
   display: flex;
@@ -23,7 +23,7 @@
 
 @media (prefers-reduced-transparency: reduce) {
   .modal-overlay {
-    background: rgba(20, 18, 14, 0.5);
+    background: rgba(var(--shadow-color), 0.5);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -199,6 +199,65 @@ dialog.modal-panel {
   /* 3px 的柔光环在九张卡并排时太吵;2px 足够说「就是这张」。 */
   box-shadow: 0 0 0 2px var(--color-accent-soft);
   color: var(--color-text-primary);
+}
+
+/* ---------- Accent picker ---------- */
+/* 色块就是颜色本身,不加文字不加图标;选中环用当前 --color-accent,所以
+   换到哪个预设,环就是哪个颜色。 */
+.accent-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+  /* 选中环是 box-shadow 外扩 4px。第一颗紧贴 .settings-body 左边界时,
+     那 4px 会被 overflow-x:auto 裁掉,读成「选中框超出边缘」。留 5px
+     内边距让整圈落在可绘制区内;圆点的视觉重心也更贴标签左缘。 */
+  padding-inline: 5px;
+}
+
+.accent-swatch {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.accent-swatch.is-active,
+.accent-custom.is-active input[type='color'] {
+  box-shadow:
+    0 0 0 2px var(--surface-card),
+    0 0 0 4px var(--color-accent);
+}
+
+.accent-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.accent-custom input[type='color'] {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+}
+
+.accent-custom input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.accent-custom input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: var(--radius-full);
 }
 
 .theme-swatch-color {
@@ -424,4 +483,106 @@ dialog.modal-panel {
   margin: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
+}
+
+/* ---------- Command bar (⌘K) ----------
+   复用 .modal-overlay/.modal-panel 的定位与浮层玻璃,只把内边距与分组改掉。
+   放在 dialogs 分片里,与 .modal-panel 同层且靠后,覆盖才赢得过它。 */
+.command-panel {
+  gap: 0;
+  padding: 0;
+  max-height: min(64dvh, 520px);
+}
+
+.command-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-20);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.command-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+}
+
+.command-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.command-esc {
+  padding: 2px var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.command-results {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-8);
+}
+
+.command-group-label {
+  margin: var(--space-8) var(--space-8) var(--space-4);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+}
+
+.command-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+  width: 100%;
+  padding: var(--space-10) var(--space-12);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-item.is-active {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.command-item-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.command-item.is-active .command-item-hint {
+  color: var(--color-on-accent);
+  opacity: 0.75;
+}
+
+.command-empty {
+  margin: var(--space-24);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.command-footnote {
+  margin: 0;
+  padding: var(--space-10) var(--space-20);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
 }

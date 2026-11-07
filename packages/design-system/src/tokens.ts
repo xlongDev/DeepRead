@@ -1,12 +1,12 @@
 /**
  * Design tokens — the TypeScript mirror of `tokens.css` (spec §10 / §18).
  *
- * `tokens.css` is the runtime source; this file is the typed source used by
- * logic and tests. `tokens.test.ts` keeps the two in sync by asserting that
- * every variable emitted here exists in the CSS.
+ * `tokens.css` is the runtime source; this file is the typed mirror read by
+ * tests (there is no runtime consumer). `tokens.test.ts` keeps the two in sync
+ * by asserting variable names and the base palette values.
  *
- * Visual direction (spec §11): Apple-inspired Liquid Glass — restrained,
- * calm, premium. Never at the cost of readability.
+ * Visual direction (v2): Structured Quiet — cool neutral OKLCH surfaces, one
+ * signal hue, opaque chrome, hairline depth. Restraint serves legibility.
  */
 
 export interface ColorTokens {
@@ -114,18 +114,18 @@ export const lightTheme: ThemeTokens = {
   name: 'Pure White',
   colorScheme: 'light',
   colors: {
-    bg: '#f6f5f2',
-    surface: '#ffffff',
-    surfaceGlass: 'rgba(255, 255, 255, 0.62)',
-    textPrimary: '#1d1b17',
-    textSecondary: '#6f6a61',
-    textTertiary: '#9c968b',
-    accent: '#3d6deb',
-    accentSoft: 'rgba(61, 109, 235, 0.12)',
-    border: 'rgba(29, 27, 23, 0.10)',
-    danger: '#c4453d',
-    dangerSoft: 'rgba(196, 69, 61, 0.12)',
-    success: '#2f8a5b',
+    bg: 'oklch(0.952 0.008 var(--ink-hue))',
+    surface: 'oklch(0.995 0.002 var(--ink-hue))',
+    surfaceGlass: 'color-mix(in srgb, var(--color-surface) 88%, transparent)',
+    textPrimary: 'oklch(0.24 0.014 var(--ink-hue))',
+    textSecondary: 'oklch(0.5 0.012 var(--ink-hue))',
+    textTertiary: 'oklch(0.555 0.01 var(--ink-hue))',
+    accent: 'oklch(var(--accent-l) var(--accent-c) var(--accent-h))',
+    accentSoft: 'color-mix(in srgb, var(--color-accent) 10%, transparent)',
+    border: 'color-mix(in srgb, var(--color-text-primary) 12%, transparent)',
+    danger: 'oklch(0.55 0.15 25)',
+    dangerSoft: 'color-mix(in srgb, var(--color-danger) 12%, transparent)',
+    success: 'oklch(0.55 0.1 155)',
   },
   typography: {
     fontSans:
@@ -143,12 +143,12 @@ export const lightTheme: ThemeTokens = {
     fontWeightRegular: 400,
     fontWeightMedium: 500,
     fontWeightSemibold: 600,
-    lineHeightTight: 1.25,
+    lineHeightTight: 1.22,
     lineHeightBody: 1.6,
-    leading2xs: 1.4,
-    leadingXs: 1.45,
-    leadingSm: 1.5,
-    leadingMd: 1.55,
+    leading2xs: 1.45,
+    leadingXs: 1.5,
+    leadingSm: 1.55,
+    leadingMd: 1.6,
     leadingLg: 1.5,
     leadingXl: 1.4,
     leading2xl: 1.32,
@@ -171,11 +171,11 @@ export const lightTheme: ThemeTokens = {
     s64: '64px',
   },
   radius: {
-    xs: '4px',
-    sm: '8px',
-    md: '10px',
-    lg: '12px',
-    xl: '16px',
+    xs: '3px',
+    sm: '6px',
+    md: '8px',
+    lg: '10px',
+    xl: '14px',
     full: '9999px',
   },
   shadow: {
@@ -199,18 +199,18 @@ export const darkTheme: ThemeTokens = {
   name: 'Dark',
   colorScheme: 'dark',
   colors: {
-    bg: '#131210',
-    surface: '#1d1b18',
-    surfaceGlass: 'rgba(29, 27, 24, 0.55)',
-    textPrimary: '#ece9e3',
-    textSecondary: '#a39d92',
-    textTertiary: '#6f6a61',
-    accent: '#6e93f6',
-    accentSoft: 'rgba(110, 147, 246, 0.16)',
-    border: 'rgba(236, 233, 227, 0.12)',
-    danger: '#e0706a',
-    dangerSoft: 'rgba(224, 112, 106, 0.16)',
-    success: '#5cb886',
+    bg: 'oklch(0.2 0.008 var(--ink-hue))',
+    surface: 'oklch(0.245 0.008 var(--ink-hue))',
+    surfaceGlass: 'color-mix(in srgb, var(--color-surface) 86%, transparent)',
+    textPrimary: 'oklch(0.96 0.004 var(--ink-hue))',
+    textSecondary: 'oklch(0.72 0.01 var(--ink-hue))',
+    textTertiary: 'oklch(0.635 0.01 var(--ink-hue))',
+    accent: 'oklch(var(--accent-l) var(--accent-c) var(--accent-h))',
+    accentSoft: 'color-mix(in srgb, var(--color-accent) 16%, transparent)',
+    border: 'color-mix(in srgb, var(--color-text-primary) 14%, transparent)',
+    danger: 'oklch(0.68 0.14 25)',
+    dangerSoft: 'color-mix(in srgb, var(--color-danger) 16%, transparent)',
+    success: 'oklch(0.7 0.11 155)',
   },
   typography: lightTheme.typography,
   spacing: lightTheme.spacing,

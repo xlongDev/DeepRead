@@ -1,9 +1,9 @@
 /*
  * 04-notes.css — 笔记与统计页 · 笔记列表
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Notes & stats pages ---------- */
 
@@ -320,6 +320,11 @@
 
   .lib-sidebar-count {
     margin-left: var(--space-4);
+  }
+
+  /* 沉底容器在横排里不存在:子元素直接回到侧栏 flex,目标卡与 foot 各自排。 */
+  .lib-sidebar-bottom {
+    display: contents;
   }
 
   /* 横向排布时「沉底」失效,改成靠右并去掉那根竖分隔线(负 margin 一并归零)。 */

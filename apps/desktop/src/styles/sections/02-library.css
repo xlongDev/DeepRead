@@ -1,9 +1,9 @@
 /*
  * 02-library.css — 书架首页 · 书格 · 卡片操作
  *
- * 由 global.css 按分区切出,**顺序即层叠顺序**,不允许重排:
- * 本仓多处同名选择器靠先后顺序取胜(见 DESIGN.md「一个类一个意图」)。
- * 新增规则请落到对应分区;跨领域的新分区在 global.css 的 @import 里按序插入。
+ * 由 global.css 以 @layer(legacy) 引入;同层内由选择器特异性与源码次序决定
+ * (见 DESIGN.md「Stylesheets」),不要靠换 layer 去压过一条具体规则。
+ * 新增规则请落到对应分区;新分片在 global.css 的 @import 里按序插入。
  */
 /* ---------- Library (shelf home) ---------- */
 
@@ -18,8 +18,8 @@
   /* 侧栏从窗口最顶部开始(deepseek 那种一整块,而不是被一条窗口条切开),
      交通灯是原生控件、浮在它的上面。 */
   grid-template-rows: minmax(0, 1fr);
-  /* 侧栏收起 = 第一列归零。grid-template-columns 本身可过渡,所以不用改结构、
-     也不用给内容加包装层。不支持的引擎会瞬间切换,功能不受影响。 */
+  /* 侧栏收起 = 第一列收成 64px 图标 rail(不是归零:导航与「我在哪」的信号
+     不能一起消失)。grid-template-columns 本身可过渡,不用改结构或加包装层。 */
   transition: grid-template-columns var(--duration-base) var(--ease-emphasized);
   /* 桌面,不是舞台。原来两层 radial-gradient(accent + 橙色)让整个书架浮在
      一片雾上 —— 那是营销页的语法,不是工具的。FlClash 的页面是纯色的:
@@ -29,7 +29,7 @@
 }
 
 .library.is-sidebar-hidden {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: 64px minmax(0, 1fr);
 }
 
 /* 侧栏顶部条:是侧栏的一部分(同一块面板从窗口顶开始),交通灯浮在它上面。
@@ -43,8 +43,8 @@
 }
 
 /* 无系统标题栏:窗口顶部 40px 是拖拽把手。用 fixed 而不是占一格,是为了侧栏
-   收起后它仍然在(否则窗口就没法拖了)。这 40px 里本来没有可点内容 ——
-   主区标题从它的下沿才开始。 */
+   收起后它仍然在(否则窗口就没法拖了)。主区标题从它的下沿才开始;web 品牌行
+   里那颗开关落在这条覆盖区内,必须靠 z-index 压过它(见 is-web-inline)。 */
 .window-drag {
   position: fixed;
   top: 0;
@@ -89,7 +89,10 @@
    这里不渲染,改由左上角浮一个 —— 浮钮的 top 与品牌行里那颗的中心对齐,
    切换时按钮不跳。顶部的交通灯让位条在 web 上也一并去掉。 */
 .sidebar-toggle.is-web-inline {
-  position: static;
+  /* 回到文档流,但 static 上 z-index 无效:不加 relative 的话,顶部 40px 的
+     .window-drag(z-index:4) 会吃掉这颗按钮的全部点击 —— 实测点不到。 */
+  position: relative;
+  z-index: 5;
   margin-left: auto;
 }
 
@@ -310,13 +313,40 @@
 
 /* ---------- Shelf grid ---------- */
 
+/* 容器查询的容器。只包书架列表:查询值就等于书架的真实可用宽度,不会把
+   .library-main 的 32px 内边距和滚动条算进去。实测 Chromium 下
+   contain: layout 不改变作用域内 fixed 后代的锚点,浮层仍留在外面是因为
+   它们不属于「书的排版」,与定位无关。 */
+.shelf-viewport {
+  container-type: inline-size;
+  min-width: 0;
+}
+
 .shelf-grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: var(--space-32) var(--space-24);
+  grid-template-columns: repeat(auto-fill, minmax(var(--shelf-min-col, 168px), 1fr));
+  gap: var(--shelf-gap-y, var(--space-32)) var(--shelf-gap-x, var(--space-24));
+}
+
+/* 三档密度。standard 是缺省值 —— 上面 fallback 里的就是它,不需要规则块。
+   封面保持 3/4:书是实物,压缩密度只能靠「每排放几本」和间距,不能把书压扁。 */
+:root[data-density='comfortable'] {
+  --shelf-min-col: 200px;
+  --shelf-min-col-narrow: 160px;
+  --shelf-gap-x: var(--space-32);
+  --shelf-gap-y: var(--space-40);
+  --shelf-row-gap: var(--space-10);
+}
+
+:root[data-density='compact'] {
+  --shelf-min-col: 132px;
+  --shelf-min-col-narrow: 116px;
+  --shelf-gap-x: var(--space-14);
+  --shelf-gap-y: var(--space-20);
+  --shelf-row-gap: var(--space-2);
 }
 
 /* 固定行数:工具条「每行」选了具体数字。minmax(0,1fr) 让封面随列数均分,
@@ -326,9 +356,19 @@
   grid-template-columns: repeat(var(--shelf-cols, 5), minmax(0, 1fr));
 }
 
+/* 老引擎兜底:不认 @container 时,至少按视口收窄。 */
 @media (max-width: 760px) {
   .shelf-grid.is-fixed {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--shelf-min-col-narrow, 140px), 1fr));
+  }
+}
+
+/* 视口没变、内容区变窄同样要回落:分屏、并排阅读、侧栏展开都是这种情形。
+   按**内容区**判断而不是视口,固定 8 列才不会在窄栏里挤成一排邮票。
+   值与上面的兜底一致,两条规则不打架。 */
+@container (max-width: 720px) {
+  .shelf-grid.is-fixed {
+    grid-template-columns: repeat(auto-fill, minmax(var(--shelf-min-col-narrow, 140px), 1fr));
   }
 }
 
@@ -384,15 +424,15 @@
   font-family: var(--font-serif);
   font-size: 52px;
   font-weight: var(--font-weight-medium);
-  color: rgba(29, 27, 23, 0.78);
+  color: color-mix(in srgb, var(--cover-ink) 78%, transparent);
   line-height: var(--leading-none);
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+  text-shadow: 0 1px 0 color-mix(in srgb, var(--cover-fg) 40%, transparent);
 }
 
 .book-cover-title {
   font-size: var(--font-size-xs);
   line-height: var(--line-height-tight);
-  color: rgba(29, 27, 23, 0.62);
+  color: color-mix(in srgb, var(--cover-ink) 62%, transparent);
   text-align: center;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -491,6 +531,18 @@
   color: var(--color-text-secondary);
 }
 
+/* 格式 · 大小:书的客观属性,不是内容。放在作者下面一行、用三级墨色与
+   tabular 数字,扫视时查得到,又不会和书名/作者抢层级。不贴封面徽章 ——
+   那是把 UI 盖在书上的老毛病。 */
+.book-meta-tech {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 封面上的两颗玻璃按钮(星标 + ⋯):悬浮才出现,竖排贴右上角。
    底色是压在封面**图像**上的暗色纱,两个主题通用(封面内容不随主题变)。 */
 .book-quick {
@@ -526,8 +578,8 @@
   border-radius: var(--radius-full);
   /* 浮在封面图上:一个实心的深色圆点比「半透明+模糊」更清楚,也不用为
      每一个按钮重算一次底下那张图的模糊。 */
-  background: rgba(20, 18, 14, 0.62);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--cover-ink) 62%, transparent);
+  color: var(--cover-fg);
   cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out),
@@ -535,7 +587,7 @@
 }
 
 .book-quick-btn:hover {
-  background: rgba(20, 18, 14, 0.68);
+  background: color-mix(in srgb, var(--cover-ink) 68%, transparent);
 }
 
 .book-quick-btn svg {
@@ -543,7 +595,7 @@
 }
 
 .book-quick-btn:focus-visible {
-  outline: 2px solid #ffffff;
+  outline: 2px solid var(--cover-fg);
   outline-offset: 2px;
 }
 
