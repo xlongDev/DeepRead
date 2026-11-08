@@ -15,17 +15,25 @@
   --accent-h: 271;
   --accent-c: 0.14;
   --accent-l: 0.48;
-  --color-bg: oklch(0.952 0.008 var(--ink-hue));
+  /* 暖纸:底色比卡片略深、略暖,明度差就是全部层次。chroma 从 .008 提到
+     .012 让「纸」真的偏暖而不是一块灰白;L 从 .952 收到 .948,把 page/card
+     的 OKLCH 差从 4.3% 拉到 4.7%(DESIGN.md 的目标是 ~6%,不一次拉满以免
+     压低纸面上三级墨色的对比度)。 */
+  --color-bg: oklch(0.948 0.012 var(--ink-hue));
   --color-surface: oklch(0.995 0.002 var(--ink-hue));
   --color-surface-glass: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  /* 三级墨色按「写在 page 上」重新校准:旧值 .555 在卡片上是 4.70:1,
+     但书卡 FORMAT · SIZE、工具条 hint 都直接坐在纸面上,那里只有 4.16:1,
+     低于 AA。整组压深一档,层级间距(primary→secondary→tertiary)不变。 */
   --color-text-primary: oklch(0.24 0.014 var(--ink-hue));
-  --color-text-secondary: oklch(0.5 0.012 var(--ink-hue));
-  --color-text-tertiary: oklch(0.555 0.01 var(--ink-hue));
+  --color-text-secondary: oklch(0.44 0.012 var(--ink-hue));
+  --color-text-tertiary: oklch(0.515 0.01 var(--ink-hue));
   --color-accent: oklch(var(--accent-l) var(--accent-c) var(--accent-h));
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, transparent);
   /* 彩底(accent/danger 及其混合)上的文字与图标;深色主题翻墨色。 */
   --color-on-accent: oklch(0.99 0 0);
-  --color-border: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  /* 12% 的发丝线在暖纸上几乎看不见;14% 与石墨 / OLED 对齐。 */
+  --color-border: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
   --color-danger: oklch(0.55 0.15 25);
   --color-danger-soft: color-mix(in srgb, var(--color-danger) 12%, transparent);
   --color-success: oklch(0.55 0.1 155);
@@ -49,7 +57,9 @@
      legible. Flatten it and every card has to fake depth with a shadow. */
   --surface-page: var(--color-bg);
   --surface-card: var(--color-surface);
-  --surface-sunk: color-mix(in srgb, var(--color-surface) 88%, var(--color-bg));
+  /* 「卡内的坑」要比卡片明显低一档:85% 让输入框与进度轨在暖纸上读得出来,
+     又不至于变成一块灰补丁。 */
+  --surface-sunk: color-mix(in srgb, var(--color-surface) 85%, var(--color-bg));
 
   /* ---------- Glass ----------
      Chrome bars and floating panels wear it; page and card bodies do not.
@@ -376,7 +386,7 @@
 
 /* ---------- W4: contrast preferences & forced colours (token overrides) ----------
    必须留在 unlayered:legacy 层里的 :root 压不过这里(层顺序优先于特异性)。
-   常规档的三级墨色已按 WCAG AA 4.5:1 校准,见 w37 对比度审计。 */
+   常规档的三级墨色已按 WCAG AA 4.5:1 校准(含纸面,见 W4.6 对比度审计)。 */
 @media (prefers-contrast: more) {
   /* 从当前主题的 secondary + primary 混合,浅色自动更深、深色自动更亮:
      不写死两套 L,也不引入第二个 [data-app-theme] 选择器 —— 目录测试要求
