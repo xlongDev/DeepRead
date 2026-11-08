@@ -106,23 +106,31 @@ button {
   background: color-mix(in srgb, var(--color-accent) 24%, transparent);
 }
 
-/* Themed browser chrome: the parts the design system did not draw. */
+/* Themed browser chrome: the parts the design system did not draw.
+   轨道收窄到 8px、内衬 2px,露出的滑块仍是 4px,但不再像一条贴边的灰墙;
+   拖动时翻 accent,和滑杆/进度条共用一个「正在操作」的信号。 */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-text-tertiary) 38%, transparent);
+  background: color-mix(in srgb, var(--color-text-tertiary) 34%, transparent);
   background-clip: padding-box;
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   border-radius: var(--radius-full);
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-text-tertiary) 60%, transparent);
+  background: color-mix(in srgb, var(--color-text-tertiary) 56%, transparent);
   background-clip: padding-box;
-  border: 3px solid transparent;
+  border: 2px solid transparent;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: color-mix(in srgb, var(--color-accent) 60%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 
 *::-webkit-scrollbar-track {

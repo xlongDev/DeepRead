@@ -681,15 +681,30 @@
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--duration-fast) var(--ease-out);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-base) var(--ease-out);
 }
 
+/* 首屏最大的可点区域只讲一个 hover 故事:书(物件)抬起来,CTA 箭头往前走一步。
+   卡片本体保持平 —— 加阴影会把它从「书架里的一本书」变成「浮起的弹窗」。
+   位移走独立的 translate 属性,不占 transform:那位要留给按钮自己的按压反馈,
+   两个位移才能叠加而不是互相覆盖。 */
 .continue-reading:hover {
-  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.continue-reading:hover .continue-reading-cover {
+  translate: 0 -3px;
+  box-shadow: var(--shadow-cover-hover);
 }
 
 .continue-reading:hover .continue-reading-go {
   background: color-mix(in srgb, var(--color-accent) 86%, var(--color-text-primary));
+}
+
+.continue-reading:hover .continue-reading-go svg {
+  translate: 2px 0;
 }
 
 /* 书是物件,不是界面表面:2px 硬边 + 1px 描边,保留唯一一层物理阴影。 */
@@ -704,6 +719,9 @@
   border-radius: 2px;
   box-shadow: var(--shadow-cover);
   color: var(--cover-fg);
+  transition:
+    translate var(--duration-base) var(--ease-spring),
+    box-shadow var(--duration-base) var(--ease-out);
 }
 
 .continue-reading-cover-img {
@@ -764,6 +782,10 @@
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out);
+}
+
+.continue-reading-go svg {
+  transition: translate var(--duration-fast) var(--ease-out);
 }
 
 @media (max-width: 720px) {
@@ -872,12 +894,9 @@
    destinations without looking like a list — the eye reads one highlighted
    row, not eight boxes.
 
-   Selection has two parts, and they do different jobs:
-     · the row fill slides between destinations (neutral, 7% ink)
-     · a 3×16 accent bar sits at the sidebar's own left edge
-   The bar is what you actually track while scrolling; the fill is what tells
-   you the row is live. Neither one is the accent-tinted pill this used to be
-   — an accent fill on a nav row competes with the primary action. */
+   「我在哪」只靠位置说:中性灰行底在三个目的地之间滑动,文字留墨色、字重 500。
+   不再画 accent 竖条 —— 强调色变成用户可换之后,那道彩条会退化成第二个信号,
+   还会把侧栏边缘切碎;整排实心 accent 更不行,它和主按钮抢同一份注意力。 */
 .lib-sidebar {
   grid-column: 1;
   grid-row: 1;
@@ -888,6 +907,9 @@
   overflow-x: hidden;
   overflow-y: auto;
   padding: var(--space-16) var(--space-12) var(--space-16) var(--space-16);
+  /* 侧栏取页面色、不是一张卡,所以和内容区只隔一根发丝线,不靠阴影或底色
+     切分。窄屏横排时由 04-notes.css 换成 border-bottom,并把这根竖线归零。 */
+  border-right: 1px solid var(--color-border);
   background: transparent;
   animation: fade-in var(--duration-base) var(--ease-out);
   transition: opacity var(--duration-fast) var(--ease-out);
@@ -1115,8 +1137,14 @@
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
+/* 目标卡是统计页的常驻入口:hover 时细进度条亮一档,读成「点我去看细节」,
+   而不是一张静止的贴纸。 */
 .lib-sidebar-goal:hover {
-  box-shadow: 0 0 0 1px var(--color-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+}
+
+.lib-sidebar-goal:hover .lib-goal-fill {
+  filter: brightness(1.12);
 }
 
 .lib-sidebar-goal.is-plain {
@@ -1130,6 +1158,7 @@
 
 .lib-sidebar-goal.is-plain:hover {
   border: 0;
+  box-shadow: none;
   background: color-mix(in srgb, var(--color-text-tertiary) 12%, transparent);
   color: var(--color-text-secondary);
 }
@@ -1169,7 +1198,9 @@
   height: 100%;
   border-radius: inherit;
   background: var(--color-accent);
-  transition: width var(--duration-slow) var(--ease-emphasized);
+  transition:
+    width var(--duration-slow) var(--ease-emphasized),
+    filter var(--duration-fast) var(--ease-out);
 }
 
 /* 目标卡与底部操作区同属一块:由容器统一沉底,目标卡就正好落在发丝线上方。

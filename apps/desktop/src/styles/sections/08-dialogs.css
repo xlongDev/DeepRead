@@ -139,8 +139,11 @@ dialog.modal-panel {
   white-space: nowrap;
 }
 
+/* .btn 的轮廓画在 box-shadow 上(border: 0 是为了不撑高那一行 36px 控件),
+   所以 hover 必须改 box-shadow —— 写 border-color 是一条形同虚设的规则,
+   鼠标划过只剩字色变化,读不出「这块可以按」。 */
 .btn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
   color: var(--color-accent);
 }
 
@@ -154,9 +157,13 @@ dialog.modal-panel {
   background: var(--color-accent-soft);
 }
 
-.btn.is-danger,
+.btn.is-danger {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  color: var(--color-danger);
+}
+
+/* segmented 里的按钮是 border:none,选中由滑块负责;这里只需要危险色的字。 */
 .segmented button.is-danger {
-  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
   color: var(--color-danger);
 }
 
@@ -201,6 +208,14 @@ dialog.modal-panel {
   color: var(--color-text-primary);
 }
 
+/* 选中态写在后面,会把 hover 的 --shadow-soft 盖掉;把两层叠回来,
+   否则「已经选中的那张」反而是唯一一张鼠标划过不会抬起的卡。 */
+.theme-swatch.is-active:hover {
+  box-shadow:
+    0 0 0 2px var(--color-accent-soft),
+    var(--shadow-soft);
+}
+
 /* ---------- Accent picker ---------- */
 /* 色块就是颜色本身,不加文字不加图标;选中环用当前 --color-accent,所以
    换到哪个预设,环就是哪个颜色。 */
@@ -222,7 +237,16 @@ dialog.modal-panel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   cursor: pointer;
-  transition: box-shadow var(--duration-fast) var(--ease-out);
+  transition:
+    box-shadow var(--duration-fast) var(--ease-out),
+    scale var(--duration-fast) var(--ease-out);
+}
+
+/* 六颗色板此前只有选中环,鼠标划过毫无反应。放大走独立的 scale 属性,
+   不占 transform —— 全局 button:active 的 scale(0.97) 才能继续叠成「按下回弹」。 */
+.accent-swatch:hover:not(.is-active) {
+  scale: 1.14;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 .accent-swatch.is-active,
@@ -239,6 +263,11 @@ dialog.modal-panel {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.accent-custom:hover {
+  color: var(--color-text-primary);
 }
 
 .accent-custom input[type='color'] {
@@ -249,6 +278,11 @@ dialog.modal-panel {
   border-radius: var(--radius-full);
   background: transparent;
   cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.accent-custom:hover input[type='color'] {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
 }
 
 .accent-custom input[type='color']::-webkit-color-swatch-wrapper {

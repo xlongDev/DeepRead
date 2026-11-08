@@ -23,11 +23,6 @@
     scroll-behavior: auto !important;
   }
 
-  /* 装饰性的高光扫过直接不要:它没有信息量,瞬间闪一下反而更烦。 */
-  .book-cover::after {
-    display: none;
-  }
-
   /* View Transition 是浏览器原生动画,不属于上面那批 CSS animation:即便 JS
      入口已经早退,这里也给不支持 matchMedia 的引擎留一层瞬间切换。 */
   ::view-transition-group(*),
@@ -137,6 +132,11 @@
   align-items: center;
   gap: 2px;
   padding: var(--space-16) var(--space-8);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.stats-tile:hover {
+  background: color-mix(in srgb, var(--color-text-tertiary) 6%, transparent);
 }
 
 .stats-tile + .stats-tile {
@@ -210,6 +210,7 @@
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-surface) 60%, transparent);
   overflow: hidden;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 .stats-bar-fill {
@@ -224,7 +225,9 @@
     var(--color-accent),
     color-mix(in srgb, var(--color-accent) 55%, transparent)
   );
-  transition: height var(--duration-base) var(--ease-emphasized);
+  transition:
+    height var(--duration-base) var(--ease-emphasized),
+    filter var(--duration-fast) var(--ease-out);
   /* 进场时长起来(React 侧给每根柱子错开 40ms):数据是"刚到"的,一排
      瞬间弹满的柱子读不出先后。生长用 scaleY 而不是 height —— height 是
      布局动画,每帧都 reflow;scale 走合成器,才守得住"动画只做
@@ -237,11 +240,27 @@
   min-height: 0;
 }
 
+/* 图表不是死的贴图:指着某一天,那一列的槽和它的数据一起亮起来。读数仍以
+   visually-hidden 表和原生 title 为准,这里只给「我正在看哪一列」一个落点。 */
+.stats-bar:hover .stats-bar-track {
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+}
+
+.stats-bar:hover .stats-bar-fill {
+  filter: brightness(1.12);
+}
+
 .stats-bar-label {
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
   text-align: center;
+}
+
+/* 七列从旧到新,最右一列是今天:给它一级墨色,不必再补一个「今天」标签。 */
+.stats-bar-label:last-child {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
 }
 
 /* ---- 今日目标 hero ----
@@ -394,6 +413,16 @@
   border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* 一周里哪天读过本来就靠颜色说,hover 只补一个「这一格可以指」的轻抬,
+   不改 border-color —— 已读格的边框是 transparent,改了会多出一圈实心环。 */
+.goal-week-dot:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 .goal-week-dot.is-read {
@@ -561,6 +590,21 @@
   aspect-ratio: 1;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-text-tertiary) 22%, transparent);
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* 一年 53 列 × 7 行,单格只有约 16px:悬停放大到看得清,再用一圈墨色把它
+   从整片色块里拎出来。放大走 transform,不推挤邻格;未来格与补位格没有
+   数据,不参与这次交互。图例里的格子不是数据,也不在 .stats-heatmap-grid 内。 */
+.stats-heatmap-grid .stats-heat-cell:not(.is-future):not(.is-pad):hover {
+  position: relative;
+  z-index: 2;
+  transform: scale(1.4);
+  box-shadow:
+    0 0 0 1px var(--color-text-primary),
+    0 3px 10px rgba(var(--shadow-color), 0.28);
 }
 
 .stats-heat-cell.level-1 {
@@ -616,6 +660,13 @@
   fill: none;
   stroke: color-mix(in srgb, var(--color-border) 70%, transparent);
   stroke-width: 10;
+  transition: stroke var(--duration-fast) var(--ease-out);
+}
+
+/* 环本身不是按钮,但它是这块区域唯一的图形:hover 时把未完成的那一圈
+   稍稍提起,让「进度」和「剩余」的比例在读的时候更分明。 */
+.stats-goal-ring-wrap:hover .stats-goal-track {
+  stroke: color-mix(in srgb, var(--color-text-tertiary) 34%, transparent);
 }
 
 .stats-goal-fill {
@@ -1041,10 +1092,6 @@ button.parallel-divider:active:not(:disabled) {
   transition-delay: 0.01ms !important;
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
-}
-
-:root[data-motion='reduce'] .book-cover::after {
-  display: none;
 }
 
 :root[data-motion='reduce'] .scrolling-text.is-overflow:hover {
