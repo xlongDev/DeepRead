@@ -216,6 +216,17 @@ dialog.modal-panel {
     var(--shadow-soft);
 }
 
+/* 界面背景下拉里的当前预览:一小块渐变,和档位名一起坐在触发器里。 */
+.background-preview {
+  display: inline-block;
+  width: 20px;
+  height: 12px;
+  margin-right: var(--space-8);
+  vertical-align: -1px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+}
+
 /* ---------- Accent picker ---------- */
 /* 色块就是颜色本身,不加文字不加图标;选中环用当前 --color-accent,所以
    换到哪个预设,环就是哪个颜色。 */
@@ -540,8 +551,12 @@ dialog.modal-panel {
 .command-input {
   flex: 1;
   min-width: 0;
-  border: 0;
-  background: transparent;
+  /* 输入框自己是一枚胶囊,不再靠 :focus-visible 的方角 outline 画出边界;
+     outline 会跟着 border-radius 走,聚焦时仍是圆角。 */
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunk);
   color: var(--color-text-primary);
   font-family: inherit;
   font-size: var(--font-size-md);
@@ -552,9 +567,10 @@ dialog.modal-panel {
 }
 
 .command-esc {
-  padding: 2px var(--space-6);
+  padding: 3px var(--space-10);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-xs);
+  /* 和输入框同一颗胶囊语言,别在圆角面板里留一枚方角 kbd。 */
+  border-radius: var(--radius-full);
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
@@ -591,9 +607,19 @@ dialog.modal-panel {
   cursor: pointer;
 }
 
-.command-item.is-active {
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+/* 跟左侧边栏导航同一套「位置」语言:中性灰底 + 墨色 + 字重 500。
+   命令栏回答「你要去哪」,不是「开关已打开」,所以不用实心 accent 胶囊,
+   文字也不翻白 —— 之前那一整条蓝底在清透玻璃里太抢,还把 hint 压没了。 */
+.command-item:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+  color: var(--color-text-primary);
+}
+
+.command-item.is-active,
+.command-item.is-active:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
 }
 
 .command-item-hint {
@@ -603,8 +629,8 @@ dialog.modal-panel {
 }
 
 .command-item.is-active .command-item-hint {
-  color: var(--color-on-accent);
-  opacity: 0.75;
+  color: var(--color-text-secondary);
+  opacity: 1;
 }
 
 .command-empty {

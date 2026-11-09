@@ -25,6 +25,9 @@
      一片雾上 —— 那是营销页的语法,不是工具的。FlClash 的页面是纯色的:
      层次全部由「页面 / 卡片」两级表面差赚出来,不靠背景光。 */
   background: var(--surface-page);
+  /* 可选壁纸:--wallpaper 由宿主从背景方案生成,缺省 none 时纯色桌面一字不改。
+     必须写在 background 简写之后,否则会被它重置成 none。 */
+  background-image: var(--wallpaper, none);
   overflow: hidden;
 }
 

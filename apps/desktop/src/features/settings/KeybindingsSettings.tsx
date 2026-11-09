@@ -72,7 +72,7 @@ export function KeybindingsSettings() {
         修饰键固定为 ⌘(Windows 上 Ctrl 同效)。撞键自动互换;Esc 取消修改。
       </p>
       <div className="modal-actions">
-        <button type="button" onClick={() => resetKeybindings()}>
+        <button type="button" className="btn" onClick={() => resetKeybindings()}>
           恢复默认键位
         </button>
       </div>

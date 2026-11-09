@@ -55,7 +55,9 @@
 
 .note-group-head {
   display: flex;
-  align-items: baseline;
+  /* baseline 会让带 svg 的 inline-flex「导出」用图标底边当基线,比书名
+     高一截;整行垂直居中才和 h2 / 条数 / 胶囊按钮都对齐。 */
+  align-items: center;
   gap: var(--space-8);
 }
 

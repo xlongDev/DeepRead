@@ -306,6 +306,43 @@ beforeEach(() => {
 })
 
 describe('LibraryScreen 外壳契约', () => {
+  it('壁纸态切视图不拍 root 快照(旧页透过玻璃闪一下)', async () => {
+    const startViewTransition = vi.fn((update: () => void) => {
+      update()
+    })
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: startViewTransition,
+    })
+    localStorage.setItem('deepread.background', 'fresh')
+    try {
+      await renderLibrary()
+      fireEvent.click(screen.getByRole('button', { name: /笔记/ }))
+      expect(startViewTransition).not.toHaveBeenCalled()
+      expect(document.querySelector('.notes-page')).not.toBeNull()
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition')
+      localStorage.removeItem('deepread.background')
+    }
+  })
+
+  it('纯色桌面仍保留原来的 View Transition', async () => {
+    const startViewTransition = vi.fn((update: () => void) => {
+      update()
+    })
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: startViewTransition,
+    })
+    try {
+      await renderLibrary()
+      fireEvent.click(screen.getByRole('button', { name: /笔记/ }))
+      expect(startViewTransition).toHaveBeenCalledTimes(1)
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition')
+    }
+  })
+
   it('skip link 是第一个可聚焦元素,落点是主内容', async () => {
     await renderLibrary()
     const link = document.querySelector('.skip-link')

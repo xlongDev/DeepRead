@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
+import { DropdownMenu } from '../../components/DropdownMenu'
 import { toAppError, type AiProviderConfig } from '@deepread/shared'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { resolveActiveProvider, writeActiveProviderId } from '../../lib/ai-active-provider'
@@ -21,6 +22,31 @@ export const PROVIDER_PRESETS: readonly {
   { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto' },
   { label: 'Ollama(本地)', baseUrl: 'http://localhost:11434/v1', model: 'qwen3.8-flash' },
   { label: 'LM Studio(本地)', baseUrl: 'http://localhost:1234/v1', model: 'local-model' },
+  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+  { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  {
+    label: '硅基流动',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    model: 'Qwen/Qwen2.5-72B-Instruct',
+  },
+  {
+    label: '火山方舟',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-pro-32k',
+  },
+  {
+    label: '腾讯混元',
+    baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
+    model: 'hunyuan-turbo',
+  },
+  { label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
+  {
+    label: 'Together AI',
+    baseUrl: 'https://api.together.xyz/v1',
+    model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  },
+  { label: '零一万物', baseUrl: 'https://api.lingyiwanwu.com/v1', model: 'yi-large' },
+  // 预设只是起点:地址与模型名都能在下面改,别把版本号当成配置契约。
 ]
 
 export interface AiProviderFormState {
@@ -149,7 +175,7 @@ interface AiProviderFormProps {
   readonly error?: string | null
 }
 
-/** AI 服务配置表单:预设、连接信息、密钥。主设置页与阅读器抽屉共用。 */
+/** AI 服务配置表单:已配置 → 快速填充 → 连接 → 模型 → 保存。只被设置弹窗使用。 */
 export function AiProviderForm({
   providers,
   configForm,
@@ -159,89 +185,152 @@ export function AiProviderForm({
   onApplyPreset,
   error,
 }: AiProviderFormProps) {
+  const presetOptions = PROVIDER_PRESETS.map((preset) => ({
+    value: preset.label,
+    label: preset.label,
+    hint: preset.model,
+  }))
+  const selectedPreset =
+    PROVIDER_PRESETS.find((preset) => preset.label === configForm.name)?.label ?? ''
+  const set = (key: keyof AiProviderFormState, value: string): void =>
+    onFormChange({ ...configForm, [key]: value })
+
   return (
     <div className="ai-provider-module">
       {providers.length > 0 && (
-        <div className="ai-provider-list">
-          {providers.map((provider) => (
-            <div key={provider.id} className="settings-row dictionary-row">
-              <span className="settings-label">
-                {provider.name} · {provider.model}
-              </span>
-              <button
-                type="button"
-                className="chrome-button"
-                onClick={() => void onRemove(provider.id)}
-                title="移除"
-              >
-                <X size={14} weight="regular" aria-hidden />
-              </button>
-            </div>
-          ))}
-        </div>
+        <section className="ai-section">
+          <p className="ai-section-title">已配置 · {providers.length}</p>
+          <div className="ai-provider-list">
+            {providers.map((provider) => (
+              <div key={provider.id} className="ai-provider-card">
+                <span className="ai-provider-info">
+                  <strong>{provider.name}</strong>
+                  <span>
+                    {provider.model} · {provider.baseUrl}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="chrome-button"
+                  onClick={() => void onRemove(provider.id)}
+                  aria-label={`移除 ${provider.name}`}
+                  title="移除"
+                >
+                  <X size={14} weight="regular" aria-hidden />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
+
       {onApplyPreset && (
-        <div className="segmented ai-presets">
-          {PROVIDER_PRESETS.map((preset) => (
-            <button key={preset.label} type="button" onClick={() => onApplyPreset(preset)}>
-              {preset.label}
-            </button>
-          ))}
-        </div>
+        <section className="ai-section">
+          <p className="ai-section-title">快速填充</p>
+          <DropdownMenu
+            value={selectedPreset}
+            options={presetOptions}
+            onChange={(label) => {
+              const preset = PROVIDER_PRESETS.find((item) => item.label === label)
+              if (preset !== undefined) onApplyPreset(preset)
+            }}
+            ariaLabel="快速填充服务商"
+            title="选一个服务商,自动填入 Base URL 与默认模型;之后仍可修改"
+          >
+            <span className="dropdown-value">{selectedPreset || '选择服务商…'}</span>
+          </DropdownMenu>
+        </section>
       )}
-      <input
-        className="field-input"
-        placeholder="名称"
-        value={configForm.name}
-        onChange={(event) => onFormChange({ ...configForm, name: event.target.value })}
-      />
-      <input
-        className="field-input"
-        placeholder="Base URL(OpenAI 兼容,含 /v1)"
-        value={configForm.baseUrl}
-        onChange={(event) => onFormChange({ ...configForm, baseUrl: event.target.value })}
-      />
-      <input
-        className="field-input"
-        placeholder="对话模型,如 deepseek-v4-pro"
-        value={configForm.model}
-        onChange={(event) => onFormChange({ ...configForm, model: event.target.value })}
-      />
-      <input
-        className="field-input"
-        placeholder="Embedding 模型(建索引问答用,留空则不可用)"
-        value={configForm.embeddingModel}
-        onChange={(event) => onFormChange({ ...configForm, embeddingModel: event.target.value })}
-      />
-      <input
-        className="field-input"
-        placeholder="TTS 模型(可选,用于云端朗读)"
-        value={configForm.ttsModel}
-        onChange={(event) => onFormChange({ ...configForm, ttsModel: event.target.value })}
-      />
-      <input
-        className="field-input"
-        type="password"
-        placeholder="API Key(存入系统钥匙串)"
-        value={configForm.apiKey}
-        onChange={(event) => onFormChange({ ...configForm, apiKey: event.target.value })}
-      />
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={() => void onSave()}
-        disabled={configForm.baseUrl.trim().length === 0 || configForm.model.trim().length === 0}
-      >
-        保存配置
-      </button>
-      {error !== null && (
+
+      <div className="ai-fields-grid">
+        <section className="ai-section">
+          <p className="ai-section-title">连接信息</p>
+          <label className="ai-field">
+            <span className="ai-field-label">名称</span>
+            <input
+              className="field-input"
+              placeholder="给这份配置起个名字"
+              value={configForm.name}
+              onChange={(event) => set('name', event.target.value)}
+            />
+          </label>
+          <label className="ai-field">
+            <span className="ai-field-label">Base URL</span>
+            <input
+              className="field-input"
+              placeholder="OpenAI 兼容地址,含 /v1"
+              value={configForm.baseUrl}
+              onChange={(event) => set('baseUrl', event.target.value)}
+            />
+          </label>
+          <label className="ai-field">
+            <span className="ai-field-label">API Key</span>
+            <input
+              className="field-input"
+              type="password"
+              placeholder="存入系统钥匙串"
+              value={configForm.apiKey}
+              onChange={(event) => set('apiKey', event.target.value)}
+            />
+          </label>
+        </section>
+
+        <section className="ai-section">
+          <p className="ai-section-title">模型</p>
+          <label className="ai-field">
+            <span className="ai-field-label">
+              对话模型 <em className="ai-field-hint">必填</em>
+            </span>
+            <input
+              className="field-input"
+              placeholder="如 deepseek-v4-pro"
+              value={configForm.model}
+              onChange={(event) => set('model', event.target.value)}
+            />
+          </label>
+          <label className="ai-field">
+            <span className="ai-field-label">
+              Embedding <em className="ai-field-hint">可选 · 建索引问答</em>
+            </span>
+            <input
+              className="field-input"
+              placeholder="留空则不可用"
+              value={configForm.embeddingModel}
+              onChange={(event) => set('embeddingModel', event.target.value)}
+            />
+          </label>
+          <label className="ai-field">
+            <span className="ai-field-label">
+              TTS <em className="ai-field-hint">可选 · 云端朗读</em>
+            </span>
+            <input
+              className="field-input"
+              placeholder="留空则用本地朗读"
+              value={configForm.ttsModel}
+              onChange={(event) => set('ttsModel', event.target.value)}
+            />
+          </label>
+        </section>
+      </div>
+
+      <div className="ai-form-actions">
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => void onSave()}
+          disabled={configForm.baseUrl.trim().length === 0 || configForm.model.trim().length === 0}
+        >
+          保存配置
+        </button>
+        <p className="ai-privacy">
+          密钥保存在本机钥匙串,不会进入页面或仓库;对话时仅发送勾选的正文片段。
+        </p>
+      </div>
+      {error != null && (
         <p className="ai-error" role="alert">
           {error}
         </p>
       )}
-      <p className="ai-privacy">
-        密钥保存在本机钥匙串,不会进入页面或仓库;对话时仅发送勾选的正文片段。
-      </p>
     </div>
   )
 }

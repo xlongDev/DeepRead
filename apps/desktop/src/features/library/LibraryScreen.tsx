@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Plus } from '@phosphor-icons/react'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -16,13 +16,17 @@ import {
 import { extractCover, extractMetadata } from '@deepread/reader-adapter'
 import {
   ACCENT_STORAGE_KEY,
+  BACKGROUND_STORAGE_KEY,
   MOTION_STORAGE_KEY,
   motionAttribute,
   onAccentFor,
   parseAccent,
+  parseBackground,
   parseMotionPreference,
   serializeAccent,
+  wallpaperFor,
   type AccentChoice,
+  type BackgroundChoice,
   type MotionPreference,
 } from '@deepread/design-system'
 import {
@@ -43,6 +47,7 @@ import { mapWithConcurrency } from '../../lib/pool'
 import { AUTO_SYNC_INTERVAL_MS, isAutoSyncEnabled, runSync } from '../../lib/sync'
 import { loadNotes } from '../../lib/notes'
 import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
+import { useGlassRefraction } from './glass/useGlassRefraction'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime, listenEvent } from '../../lib/ipc'
 import { useKeybindings } from '../../lib/keybindings'
@@ -114,14 +119,18 @@ function withViewTransition(apply: () => void): void {
   const doc = document as Document & {
     startViewTransition?: (update: () => void) => void
   }
+  const root = document.documentElement
   // 原生 VT 动画不吃 CSS 里的全局 reduced-motion 兜底,所以在入口就别拍快照。
   // 两个来源:系统偏好(matchMedia 在 jsdom 里可能不存在,守卫不能省)与设置里
   // 用户显式选的「减少动效」(写在 <html data-motion> 上,见 motion.ts)。
   const reduced =
-    document.documentElement.dataset.motion === 'reduce' ||
+    root.dataset.motion === 'reduce' ||
     (typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-  if (doc.startViewTransition === undefined || reduced) {
+  // 壁纸态内容区是半透明玻璃:root 快照的 cross-fade 会让淡出的上一页文字
+  // 透过新页玻璃,还会先白一帧再显出渐变。直接换 DOM,由真实页面连续绘制。
+  const wallpapered = root.dataset.background !== undefined && root.dataset.background !== 'none'
+  if (doc.startViewTransition === undefined || reduced || wallpapered) {
     apply()
     return
   }
@@ -298,6 +307,11 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [motionPreference, setMotionPreference] = useState<MotionPreference>(() =>
     parseMotionPreference(localStorage.getItem(MOTION_STORAGE_KEY)),
   )
+  /** 界面背景(壁纸):独立轴,默认纯色桌面;明暗由 appTheme 一起决定。 */
+  const [background, setBackground] = useState<BackgroundChoice>(() =>
+    parseBackground(localStorage.getItem(BACKGROUND_STORAGE_KEY)),
+  )
+  const glassCanvasRef = useGlassRefraction(background, appTheme !== 'pure-white')
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   /** 正在编辑书籍信息的那一本;null = 弹窗关闭。 */
@@ -391,6 +405,22 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     document.documentElement.dataset['appTheme'] = appTheme
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
+
+  // 布局阶段写壁纸,不能等 useEffect:那会在首次 paint 先出一帧纯色桌面,
+  // 切回书架时读作「白一下才渐变」。useLayoutEffect 在 paint 前同步落地。
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const wallpaper = wallpaperFor(background, appTheme !== 'pure-white')
+    if (wallpaper === null) root.style.removeProperty('--wallpaper')
+    else root.style.setProperty('--wallpaper', wallpaper)
+    root.dataset.background = background
+    localStorage.setItem(BACKGROUND_STORAGE_KEY, background)
+    // 书架卸载(进入阅读器)时收走开关,否则壁纸态玻璃会跟着留在 html 上。
+    return () => {
+      root.style.removeProperty('--wallpaper')
+      root.removeAttribute('data-background')
+    }
+  }, [background, appTheme])
 
   useEffect(() => {
     const root = document.documentElement
@@ -1377,6 +1407,10 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         void importFromBrowserFiles(Array.from(event.dataTransfer.files))
       }}
     >
+      {/* 壁纸态的 rim 折射画布。hidden 由折射管线拿到 WebGL2 后撤掉;
+          无 WebGL2 / 低透明度偏好时它就保持隐藏,组件退回原生 CSS 玻璃。 */}
+      <canvas ref={glassCanvasRef} className="glass-refraction" hidden aria-hidden="true" />
+
       {/* 键盘/读屏用户的第一站:跳过整条侧栏直接落到主内容。必须是根里第一个
           可聚焦元素;平时移出视口,但不用 display:none —— 那会让它退出 Tab 顺序。 */}
       <a className="skip-link" href="#main-content">
@@ -1674,6 +1708,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           onShelfDensity={setShelfDensity}
           motionPreference={motionPreference}
           onMotionChange={setMotionPreference}
+          background={background}
+          onBackgroundChange={setBackground}
           onRestored={loadBooks}
           onClose={() => setSettingsOpen(false)}
         />

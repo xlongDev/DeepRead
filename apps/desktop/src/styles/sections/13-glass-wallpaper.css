@@ -1,0 +1,177 @@
+/*
+ * 13-glass-wallpaper.css — 界面壁纸开启时的液态玻璃(实验性,C′-c)
+ *
+ * 由 global.css 以 @layer(legacy) 引入,排在 12 片之后:同层内源序最后,
+ * 玻璃材质才盖得住各分片自己的 background/backdrop-filter。
+ *
+ * 默认档 data-background='none' 完全不命中 —— 纯色桌面一字不改。
+ * 只动 background / backdrop-filter / box-shadow / 少数强调按钮的前景色:
+ * 墨色阶梯、圆角、间距、字体、文案沿用项目自己的配方。
+ */
+
+/* WebGL 折射画布:只在玻璃框内有像素,其余全透明。
+   canvas 是 replaced element:只写 inset:0 会用「固有尺寸」(位图尺寸)
+   而不是铺满视口。draw() 又拿 clientWidth 反算位图,于是每帧把
+   固有尺寸放大一倍 —— dpr=2 下实测膨胀到 4800×2400,壁纸纹理被
+   映射到错误范围,在视口里切出一条与 CSS 渐变错位的硬色带。
+   显式 100% 才算把 CSS 尺寸钉在视口上。 */
+.glass-refraction {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+html[data-background]:not([data-background='none']) .library {
+  isolation: isolate;
+}
+
+/* ---------- 三块常驻卡片(同时进 WebGL 的 surfaces 清单) ----------
+   只挑真正有圆角边界的卡片。.lib-sidebar 不在内:它贴着窗口边、整块
+   「不是一张卡」(原设计只隔一根发丝线),玻璃化后 rim 被窗口裁掉,只剩
+   半透明白 tint 把大片区域提亮,与右侧 CSS 壁纸形成一道竖向色差。
+   .lib-sidebar-bottom 同理不能碰:它是 margin-top:auto 的布局容器,窄屏
+   还会 display:contents,加背景会套出直角框把目标卡与 foot 叠成双层边。
+   清单必须与 useGlassRefraction.ts 的 GLASS_SURFACE_SELECTOR 逐字一致。 */
+html[data-background]:not([data-background='none'])
+  :is(.lib-sidebar-goal, .continue-reading, .shelf-search) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter) var(--glass-lens,);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+}
+
+/* ---------- 浮层:统一用「排序下拉」那一套清透玻璃 ----------
+   设置 / ⌘K / 下拉 / 动作菜单 / 云同步全部共用这一条声明,不另设
+   更实的底色 —— 之前给浮层加 82% 实底,连下拉一起变闷了。 */
+html[data-background]:not([data-background='none'])
+  :is(.modal-panel, .dropdown-menu, .action-menu, .sync-drawer, .tag-popover) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+}
+
+/* 遮罩不是玻璃板:暗 dim 保留,10px 糊镜换成轻模糊 + 提亮。 */
+html[data-background]:not([data-background='none']) .modal-overlay {
+  backdrop-filter: var(--glass-wallpaper-veil);
+  -webkit-backdrop-filter: var(--glass-wallpaper-veil);
+}
+
+/* ---------- 按钮:一条控件规则收口 ----------
+   普通按钮中性玻璃 + 轻边缘;主 CTA 用 accent 染色玻璃 + accent 字,
+   免得白字压在浅玻璃上读不出来。active / disabled / 选中态一律不覆盖。 */
+html[data-background]:not([data-background='none'])
+  :is(
+    .shelf-view-toggle,
+    .shelf-tools .dropdown-trigger,
+    .shelf-sort-dir,
+    .shelf-manage:not(.is-active),
+    .settings-tabs button:not(.is-active),
+    .settings-body .btn:not(:disabled),
+    .settings-body .btn-ghost:not(:disabled),
+    .settings-body .chrome-button,
+    .settings-body .dropdown-trigger,
+    .settings-body .ai-presets button,
+    .sync-drawer .btn:not(:disabled),
+    .sync-drawer .btn-ghost:not(:disabled),
+    .sync-drawer .chrome-button,
+    .note-open-book,
+    .stats-page .btn:not(:disabled),
+    .stats-page .goal-chip:not(.is-active):not(:disabled),
+    .stats-page .goal-week-dot:not(.is-read)
+  ) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  /* 按钮坐在更实的浮层上时,只靠 --glass-edge 的发丝边读不出厚度,
+     补两层白高光(深色主题也不过曝)。 */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 55%),
+    inset 0 0 0 1px rgb(255 255 255 / 24%),
+    var(--glass-edge);
+  border-color: color-mix(in srgb, #ffffff 42%, transparent);
+}
+
+html[data-background]:not([data-background='none'])
+  :is(.shelf-import, .continue-reading-go, .btn-primary):not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 22%, var(--glass-wallpaper-bg));
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  color: var(--color-accent);
+}
+
+/* 下拉展开态也要玻璃:之前用 :not(.is-open) 把它排除了,一点开就退回
+   不透明白底。这里补回 .is-open 原有的 accent 光环状态信号。 */
+html[data-background]:not([data-background='none']) .shelf-tools .dropdown-trigger.is-open {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 3px var(--color-accent-soft),
+    var(--glass-edge);
+}
+
+/* ---------- 浮层里的输入框 ----------
+   限定在浮层内,别把阅读器里同名的 .field-input 一起改了。 */
+html[data-background]:not([data-background='none']) :is(.modal-panel, .sync-drawer) .field-input {
+  background: var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  border-color: color-mix(in srgb, #ffffff 48%, transparent);
+}
+
+html[data-background]:not([data-background='none']) .command-input {
+  background: var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+}
+
+/* ---------- 统计 / 设置 / 笔记的内容卡 ----------
+   只走 CSS 玻璃:数量随数据变、位置随滚动变,加进 WebGL surfaces 就得
+   逐帧重画全屏 shader(上一轮首页卡顿的根因)。主题预览卡 .theme-swatch
+   不在此列:它本身就是三个纸色的样本,玻璃化会盖掉要展示的颜色。 */
+html[data-background]:not([data-background='none'])
+  :is(.stats-overview, .settings-group, .note-card, .sync-status) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+  border-color: transparent;
+}
+
+/* WebGL 只接管三块常驻卡片的 backdrop,它们位置稳定、只画一帧。
+   弹窗 / 菜单 / 遮罩 / 按钮仍走原生 backdrop-filter。 */
+html[data-glass='webgl'] :is(.lib-sidebar-goal, .continue-reading, .shelf-search) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---------- 壁纸态:整页入场动画不能带 opacity ----------
+   .notes-page / .stats-page 共用 fade-up(from { opacity: 0 }),而玻璃内容卡
+   是它们的后代。祖先 opacity < 1 会创建新的 Backdrop Root,后代的
+   backdrop-filter 在整段动画里采样不到 .library 的壁纸 —— 卡片先发白,
+   动画结束才「刷」成渐变,就是切页时那一下闪。书架页的书卡不是玻璃,
+   所以只有这两个页面受影响。
+   实测(Chromium,把动画拉到 3s 后取卡片中心 40×40 均值):带 opacity 的
+   中间帧 [148,220,215] vs 稳态 [138,248,241],色差 64;只留 translateY 的
+   位移版中间帧与稳态完全一致。因此保留入场手感,只换 animation-name,
+   duration / easing / fill-mode 沿用各分片原来的值。 */
+@keyframes wallpaper-page-in {
+  from {
+    transform: translateY(14px);
+  }
+}
+
+html[data-background]:not([data-background='none']) :is(.notes-page, .stats-page, .goal-editor) {
+  animation-name: wallpaper-page-in;
+}
+
+/* ---------- 设置页签 ----------
+   容器不加灰条;非选中按钮走上面那条通用清透玻璃(不是白色实心胶囊),
+   active 仍由 sliding-indicator 画实心 accent —— 页签是状态,该留色。 */
+html[data-background]:not([data-background='none']) .settings-tabs {
+  background: transparent;
+}

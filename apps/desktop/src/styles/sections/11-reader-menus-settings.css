@@ -402,6 +402,12 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   color: var(--color-text-tertiary);
 }
 
+/* 「恢复默认键位」正好落在 .settings-body 底部 28px 渐隐里,留白把按钮
+   推到渐隐之上,别让可点的东西半透明。 */
+.keybinding-hint + .modal-actions {
+  padding-bottom: var(--space-24);
+}
+
 /*
  * 设置分区的内容页。
  *
@@ -485,4 +491,106 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);
+}
+
+/* ---------- AI 服务:分组 + 成对的 label/input ----------
+   原来六个 input 全靠 placeholder 当标签,点进去就忘了哪一格是什么;
+   预设八颗 chip 挤成三行也分不出云端与本地。这里只重排展示,状态机
+   (useAiProviders) 与保存/删除逻辑一行不动。 */
+.ai-provider-module {
+  gap: var(--space-16);
+}
+
+.ai-section {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.ai-section-title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.ai-provider-list {
+  gap: var(--space-6);
+  padding: 0;
+  border-bottom: 0;
+}
+
+.ai-provider-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunk);
+}
+
+.ai-provider-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-provider-info strong {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.ai-provider-info > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.ai-field {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-field-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.ai-field-hint {
+  margin-left: 4px;
+  font-style: normal;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.ai-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  flex-wrap: wrap;
+  /* .settings-body 底部有 28px 渐隐;留白免得「保存配置」被渐隐吃掉。 */
+  padding-bottom: var(--space-24);
+}
+
+.ai-form-actions .ai-privacy {
+  flex: 1;
+  min-width: 180px;
+}
+
+/* 连接 / 模型各三格,并排才塞得进 78dvh 的三明治弹窗;窄窗回单列。 */
+.ai-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-16);
+  align-items: start;
+}
+
+@media (max-width: 560px) {
+  .ai-fields-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

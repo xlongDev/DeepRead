@@ -159,6 +159,55 @@ describe('theme tokens', () => {
   })
 })
 
+describe('wallpaper glass tokens', () => {
+  it('gives each dark world its own smoky-glass variant', () => {
+    for (const id of ['dark', 'oled']) {
+      const block =
+        new RegExp(`\\[data-app-theme='${id}'\\]\\s*\\{([\\s\\S]*?)\\n\\}`).exec(cssText)?.[1] ?? ''
+      for (const name of [
+        '--glass-wallpaper-bg',
+        '--glass-wallpaper-sheen',
+        '--glass-wallpaper-edge',
+        '--glass-wallpaper-filter',
+        '--glass-wallpaper-veil',
+      ]) {
+        expect(block, `${id} is missing ${name}`).toContain(name)
+      }
+    }
+  })
+
+  it('keeps the wallpaper filter neutral instead of amplifying colour', () => {
+    // 淡彩壁纸被 saturate(1.8)+brightness(1.06) 推成整块高饱和青绿会晃眼。
+    // 「白一点」靠壁纸侧少放原色,不是靠滤镜加彩度/提亮。
+    const gains = (name: string) =>
+      [
+        ...cssText.matchAll(
+          new RegExp(`--glass-wallpaper-(?:filter|veil):[^;]*${name}\\(([\\d.]+)\\)`, 'g'),
+        ),
+      ].map((match) => Number(match[1]))
+    for (const [name, ceiling] of [
+      ['saturate', 1.2],
+      ['brightness', 1],
+    ] as const) {
+      const values = gains(name)
+      expect(values.length).toBeGreaterThanOrEqual(6) // :root + dark + oled × filter/veil
+      for (const value of values) expect(value).toBeLessThanOrEqual(ceiling)
+    }
+  })
+
+  it('turns wallpaper glass solid under reduced transparency and forced colours', () => {
+    const reduced =
+      /@media \(prefers-reduced-transparency: reduce\)\s*\{([\s\S]*?)\n\}/.exec(cssText)?.[1] ?? ''
+    const forced = /@media \(forced-colors: active\)\s*\{([\s\S]*?)\n\}/.exec(cssText)?.[1] ?? ''
+    expect(reduced).toContain('--glass-wallpaper-bg: var(--color-surface)')
+    expect(forced).toContain('--glass-wallpaper-bg: Canvas')
+    for (const block of [reduced, forced]) {
+      expect(block).toContain('--glass-wallpaper-filter: none')
+      expect(block).toContain('--glass-wallpaper-veil: none')
+    }
+  })
+})
+
 describe('motion tokens', () => {
   it('defines durations and easings consistent with the CSS mirror', () => {
     expect(MOTION.durationFastMs).toBe(150)

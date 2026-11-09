@@ -19,13 +19,16 @@ import { exportSnapshot, importSnapshot, readStorageEstimate } from '../../lib/w
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { useModalFocus } from '../../lib/modal-dialog'
 import { handleTablistKeys } from '../../lib/tablist-keys'
-import { DropdownMenu } from '../../components/DropdownMenu'
+import { DropdownMenu, type DropdownOption } from '../../components/DropdownMenu'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import {
   ACCENT_PRESETS,
+  BACKGROUND_SCHEMES,
   accentPreview,
   MOTION_PREFERENCE_OPTIONS,
+  wallpaperFor,
   type AccentChoice,
+  type BackgroundChoice,
   type MotionPreference,
 } from '@deepread/design-system'
 import { AiProviderForm, useAiProviders } from './AiProviderSettings'
@@ -45,6 +48,12 @@ import {
 const SETTINGS_TABS = ['appearance', 'keys', 'ai', 'data'] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
 
+/** 首项保留纯色桌面:不装壁纸是默认,15 套渐变都是可选装饰。 */
+const BACKGROUND_OPTIONS: readonly DropdownOption<BackgroundChoice>[] = [
+  { value: 'none', label: '纯色桌面' },
+  ...BACKGROUND_SCHEMES.map((scheme) => ({ value: scheme.id, label: scheme.label })),
+]
+
 /** 已忽略的更新版本:同一版本不再提示。 */
 const IGNORED_VERSION_KEY = 'deepread.update.ignored'
 
@@ -61,6 +70,9 @@ interface SettingsDialogProps {
   /** 界面动效:用户意图(system/reduce);系统偏好不在这里,由原生 @media 判定。 */
   readonly motionPreference: MotionPreference
   readonly onMotionChange: (value: MotionPreference) => void
+  /** 界面背景(壁纸):与三世界并列的独立轴,状态归宿主。 */
+  readonly background: BackgroundChoice
+  readonly onBackgroundChange: (value: BackgroundChoice) => void
   /** 恢复备份动了本地库之后,宿主要重读书架。 */
   readonly onRestored: () => void
   readonly onClose: () => void
@@ -77,6 +89,8 @@ export function SettingsDialog({
   onShelfDensity,
   motionPreference,
   onMotionChange,
+  background,
+  onBackgroundChange,
   onRestored,
   onClose,
 }: SettingsDialogProps) {
@@ -494,6 +508,39 @@ export function SettingsDialog({
                   </div>
                   <p className="settings-hint">
                     关闭后按钮、面板与视图切换不再渐变;书的内容与排版不受影响。
+                  </p>
+                </div>
+              </section>
+              {/* 同样是低频项:15 套壁纸不该把常用的书架偏好挤出首屏。 */}
+              <section className="modal-section">
+                <p className="modal-section-label">界面背景</p>
+                <div className="settings-group">
+                  <div className="settings-shelf-columns">
+                    <span className="settings-shelf-columns-label">页面渐变</span>
+                    <DropdownMenu
+                      ariaLabel="页面渐变"
+                      value={background}
+                      options={BACKGROUND_OPTIONS}
+                      onChange={onBackgroundChange}
+                      title="只铺书架等页面的底色,明暗随界面主题切换;卡片与阅读纸色不受影响"
+                    >
+                      <span className="dropdown-value">
+                        <span
+                          className="background-preview"
+                          style={{
+                            background:
+                              wallpaperFor(background, appTheme !== 'pure-white') ??
+                              'var(--surface-page)',
+                          }}
+                          aria-hidden="true"
+                        />
+                        {BACKGROUND_OPTIONS.find((option) => option.value === background)?.label ??
+                          '纯色桌面'}
+                      </span>
+                    </DropdownMenu>
+                  </div>
+                  <p className="settings-hint">
+                    15 套淡彩渐变只作用于页面底色;书页仍用阅读背景,文字与卡片配色不变。
                   </p>
                 </div>
               </section>
