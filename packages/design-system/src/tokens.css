@@ -21,7 +21,7 @@
      压低纸面上三级墨色的对比度)。 */
   --color-bg: oklch(0.948 0.012 var(--ink-hue));
   --color-surface: oklch(0.995 0.002 var(--ink-hue));
-  --color-surface-glass: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  --color-surface-glass: rgba(254, 253, 252, 0.88);
   /* 三级墨色按「写在 page 上」重新校准:旧值 .555 在卡片上是 4.70:1,
      但书卡 FORMAT · SIZE、工具条 hint 都直接坐在纸面上,那里只有 4.16:1,
      低于 AA。整组压深一档,层级间距(primary→secondary→tertiary)不变。 */
@@ -59,7 +59,7 @@
   --surface-card: var(--color-surface);
   /* 「卡内的坑」要比卡片明显低一档:85% 让输入框与进度轨在暖纸上读得出来,
      又不至于变成一块灰补丁。 */
-  --surface-sunk: color-mix(in srgb, var(--color-surface) 85%, var(--color-bg));
+  --surface-sunk: rgb(252, 251, 249);
 
   /* ---------- Glass ----------
      Chrome bars and floating panels wear it; page and card bodies do not.
@@ -73,8 +73,13 @@
      A note on blur: CSS cannot refract, so 2.5px (FlClash's shader value)
      would look like nothing. 18px + high saturation + a real rim is the
      closest honest equivalent. */
-  --glass-tint: color-mix(in srgb, var(--color-surface) 62%, transparent);
-  --glass-sheen: color-mix(in srgb, var(--color-surface) 82%, #ffffff);
+  /* 表面色派生的半透明值一律写字面 rgba,不再用
+     `color-mix(in srgb, var(--color-surface) …)`:自定义属性里的 var() 在
+     **声明它的元素**上就求值,WebKit 会锁在 :root 那份浅色表面上 —— 深色世界
+     里玻璃整片发白(20:22 截图:目标卡、概览卡、浮层)。字面值等于原式的结果,
+     只是不再跨变量求值。改 theme surface 时这四条要一起改。 */
+  --glass-tint: rgba(254, 253, 252, 0.62);
+  --glass-sheen: rgb(245, 243, 240);
   --glass-bg:
     linear-gradient(
       180deg,
@@ -94,14 +99,18 @@
       color-mix(in srgb, var(--glass-sheen) 62%, transparent),
       transparent 58%
     ),
-    color-mix(in srgb, var(--color-surface) 76%, transparent);
+    rgba(254, 253, 252, 0.76);
 
-  /* ---------- 壁纸态玻璃(仅书架屏、仅装了壁纸时) ----------
+  /* ---------- 壁纸态玻璃(仅书架屏、仅装了主题时) ----------
      薄 tint + 提亮滤镜让玻璃从背后的渐变取色;rim 光与 bevel 才是「厚玻璃」
      在平滑壁纸上真正看得见的那一半 —— 纯渐变没有纹理可折射,光靠位移
      采样看不出差别。默认桌面 none 档不读它们,纯色桌面一字不改。墨色、
-     圆角、间距、动效仍归项目自己的配方。 */
-  --glass-wallpaper-bg: color-mix(in srgb, var(--color-surface) 30%, transparent);
+     圆角、间距、动效仍归项目自己的配方。
+
+     30% 是早期值,只在壁纸背后还有大片卡片时勉强可读:主题把整页铺成
+     渐变后,搜索框与按钮上的文字直接坐在彩色上,3:1 都不到。58% 让表面色
+     占主导,渐变退成一层色温;浮层另走 84%(见 13-glass-wallpaper.css)。 */
+  --glass-wallpaper-bg: rgba(254, 253, 252, 0.58);
   --glass-wallpaper-sheen: linear-gradient(
     180deg,
     rgb(255 255 255 / 26%),
@@ -115,6 +124,8 @@
   /* 采样只做柔化,不再放大彩度/亮度:早期 saturate(1.8)+brightness(1.06)
      会把淡彩壁纸推成整块高饱和青绿,叠上 rim 白高光看久了晃眼。
      想要「第一帧那种乳白」,靠壁纸侧少放原色 + 这里不加增益,而不是改实底。 */
+  /* 只做柔化:降饱和会把整片青绿洗成灰绿(22:31 截图变成一层雾)。
+     要「白一点」靠壁纸侧少放原色 + 玻璃底多掺表面色,不靠滤镜。 */
   --glass-wallpaper-filter: blur(var(--blur-glass)) saturate(1.15) contrast(1) brightness(1);
   --glass-wallpaper-veil: blur(12px) saturate(1.15) brightness(1);
 
@@ -328,7 +339,7 @@
   --shadow-color: 0, 0, 0;
   --color-bg: oklch(0.2 0.008 var(--ink-hue));
   --color-surface: oklch(0.245 0.008 var(--ink-hue));
-  --color-surface-glass: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  --color-surface-glass: rgba(34, 32, 28, 0.86);
   --color-text-primary: oklch(0.96 0.004 var(--ink-hue));
   --color-text-secondary: oklch(0.72 0.01 var(--ink-hue));
   --color-text-tertiary: oklch(0.635 0.01 var(--ink-hue));
@@ -346,7 +357,16 @@
   --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
   --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.55);
   /* 深底上的 smoky glass:压暗场景而不是往黑里加白;rim 光也跟着收暗。 */
-  --glass-wallpaper-bg: color-mix(in srgb, var(--color-surface) 24%, transparent);
+  --glass-wallpaper-bg: rgba(34, 32, 28, 0.56);
+  --surface-sunk: rgb(33, 31, 27);
+  /* 上面的字面值按 dark 的 surface 写死;这几条补上同世界的玻璃底,
+     否则深色会继承 :root 的浅色(浮层/顶栏整块发白)。 */
+  --glass-tint: rgba(34, 32, 28, 0.62);
+  --glass-sheen: rgb(75, 73, 70);
+  /* 浮层的顶光也写字面:否则会继承 :root 那条近白 sheen,深色浮层顶部发白。 */
+  --glass-bg: linear-gradient(180deg, rgb(75 73 70 / 55%), transparent 52%), rgba(34, 32, 28, 0.62);
+  --glass-bg-bar:
+    linear-gradient(180deg, rgb(75 73 70 / 62%), transparent 58%), rgba(34, 32, 28, 0.76);
   --glass-wallpaper-sheen: linear-gradient(
     180deg,
     rgb(255 255 255 / 12%),
@@ -367,7 +387,7 @@
   --shadow-color: 0, 0, 0;
   --color-bg: oklch(0 0 0);
   --color-surface: oklch(0.13 0.004 var(--ink-hue));
-  --color-surface-glass: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  --color-surface-glass: rgba(8, 7, 6, 0.88);
   --color-text-primary: oklch(0.97 0.004 var(--ink-hue));
   --color-text-secondary: oklch(0.74 0.01 var(--ink-hue));
   --color-text-tertiary: oklch(0.6 0.01 var(--ink-hue));
@@ -383,7 +403,13 @@
   --shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.9);
   --shadow-cover: 0 1px 2px rgba(0, 0, 0, 0.8), 0 10px 28px rgba(0, 0, 0, 0.6);
   --shadow-cover-hover: 0 2px 6px rgba(0, 0, 0, 0.8), 0 20px 44px rgba(0, 0, 0, 0.7);
-  --glass-wallpaper-bg: color-mix(in srgb, var(--color-surface) 22%, transparent);
+  --glass-wallpaper-bg: rgba(8, 7, 6, 0.54);
+  --surface-sunk: rgb(7, 6, 5);
+  --glass-tint: rgba(8, 7, 6, 0.62);
+  --glass-sheen: rgb(53, 51, 49);
+  --glass-bg: linear-gradient(180deg, rgb(53 51 49 / 55%), transparent 52%), rgba(8, 7, 6, 0.62);
+  --glass-bg-bar:
+    linear-gradient(180deg, rgb(53 51 49 / 62%), transparent 58%), rgba(8, 7, 6, 0.76);
   --glass-wallpaper-sheen: linear-gradient(
     180deg,
     rgb(255 255 255 / 12%),

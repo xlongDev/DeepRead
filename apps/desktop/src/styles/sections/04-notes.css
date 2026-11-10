@@ -12,9 +12,18 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-24);
-  /* 统计图表铺满 1240px 会变成一排宽方块;给页面一个阅读友好的上限。 */
+  /* 统计图表铺满 1240px 会变成一排宽方块;给页面一个阅读友好的上限。
+     margin-inline:auto 不能省 —— 只写 max-width 时页面会贴左,侧栏一
+     折叠右边就空出一条(23:06 截图)。 */
   max-width: 880px;
+  margin-inline: auto;
   animation: fade-up var(--duration-base) var(--ease-out);
+}
+
+/* 侧栏收成 rail 之后主区多出 168px,880 的上限会让内容显得更窄。放宽到
+   1040 再居中,读者看到的是「页面跟着变宽」而不是「右边多一块空白」。 */
+.library.is-sidebar-hidden :is(.notes-page, .stats-page) {
+  max-width: 1040px;
 }
 
 .notes-empty {
@@ -181,21 +190,39 @@
 
 /* 一条批注平时只是"原文 + 时间",鼠标停上去才露出一排动作 ——
    它们不是每条都要用的东西,常显只会把正文挤成配角。 */
+/* 容器只管贴右与间距。淡入交给每个按钮自己 —— 整组一起闪现读不出
+   「这三件事是一起冒出来的」,逐个落位才有方向感。 */
 .note-actions {
   margin-left: auto;
   display: flex;
   gap: var(--space-16);
-  opacity: 0;
-  transform: translateX(4px);
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-base) var(--ease-out);
 }
 
-.note-card:hover .note-actions,
-.note-card:focus-within .note-actions {
+/* 出现:淡入 + 从下 4px 落位,按 45ms 错拍。
+   消失:三条 hover 规则里都不带 delay,所以一起淡出 —— 退场不需要导演。 */
+.note-action {
+  opacity: 0;
+  translate: 0 4px;
+  transition:
+    opacity var(--duration-base) var(--ease-out),
+    translate var(--duration-base) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.note-card:hover .note-action,
+.note-card:focus-within .note-action {
   opacity: 1;
-  transform: translateX(0);
+  translate: 0 0;
+}
+
+.note-card:hover .note-action:nth-of-type(2),
+.note-card:focus-within .note-action:nth-of-type(2) {
+  transition-delay: 45ms;
+}
+
+.note-card:hover .note-action:nth-of-type(3),
+.note-card:focus-within .note-action:nth-of-type(3) {
+  transition-delay: 90ms;
 }
 
 .note-action {
@@ -208,6 +235,8 @@
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  gap: var(--space-6);
+  white-space: nowrap;
   gap: 3px;
 }
 

@@ -18,6 +18,7 @@ import {
   ACCENT_STORAGE_KEY,
   BACKGROUND_STORAGE_KEY,
   MOTION_STORAGE_KEY,
+  backgroundAccent,
   motionAttribute,
   onAccentFor,
   parseAccent,
@@ -311,6 +312,14 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [background, setBackground] = useState<BackgroundChoice>(() =>
     parseBackground(localStorage.getItem(BACKGROUND_STORAGE_KEY)),
   )
+  /**
+   * 换配色主题就是换掉整套配色,所以把强调色交回给主题;唯一例外是手动
+   * 调过的自定义色 —— 那是用户花时间挑的,主题不该悄悄盖掉。
+   */
+  const changeBackground = useCallback((value: BackgroundChoice): void => {
+    setBackground(value)
+    setAccent((prev) => (prev.kind === 'custom' ? prev : { kind: 'auto' }))
+  }, [])
   const glassCanvasRef = useGlassRefraction(background, appTheme !== 'pure-white')
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
@@ -424,19 +433,33 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
 
   useEffect(() => {
     const root = document.documentElement
-    if (accent.kind === 'preset') {
+    if (accent.kind === 'auto') {
+      // 跟随配色主题:只写色相 / 彩度,明度仍归主题块 —— 同一套色相在
+      // 暖纸 / 石墨 / 纯黑下各自拿到正确对比度。内联变量压过 [data-accent]
+      // 预设块,所以属性要一并撤掉;自定义色留下的 --color-accent 同理。
+      const { h, c } = backgroundAccent(background, appTheme !== 'pure-white')
+      root.removeAttribute('data-accent')
+      root.style.removeProperty('--color-accent')
+      root.style.removeProperty('--color-on-accent')
+      root.style.setProperty('--accent-h', String(h))
+      root.style.setProperty('--accent-c', String(c))
+    } else if (accent.kind === 'preset') {
       root.dataset.accent = accent.id
+      root.style.removeProperty('--accent-h')
+      root.style.removeProperty('--accent-c')
       root.style.removeProperty('--color-accent')
       root.style.removeProperty('--color-on-accent')
     } else {
       // 自定义色直接盖 --color-accent;soft / hover 都读这个变量,自动跟随。
       // on-accent 按亮度算,否则浅色底上白字会掉到 3:1 以下。
       root.removeAttribute('data-accent')
+      root.style.removeProperty('--accent-h')
+      root.style.removeProperty('--accent-c')
       root.style.setProperty('--color-accent', accent.hex)
       root.style.setProperty('--color-on-accent', onAccentFor(accent.hex))
     }
     localStorage.setItem(ACCENT_STORAGE_KEY, serializeAccent(accent))
-  }, [accent])
+  }, [accent, background, appTheme])
 
   useEffect(() => {
     document.documentElement.dataset.density = shelfDensity
@@ -1709,7 +1732,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           motionPreference={motionPreference}
           onMotionChange={setMotionPreference}
           background={background}
-          onBackgroundChange={setBackground}
+          onBackgroundChange={changeBackground}
           onRestored={loadBooks}
           onClose={() => setSettingsOpen(false)}
         />

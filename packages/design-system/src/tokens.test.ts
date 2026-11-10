@@ -106,6 +106,22 @@ describe('theme tokens', () => {
     }
   })
 
+  it('玻璃底在每个世界都写字面色,不跨变量求值', () => {
+    // 自定义属性里的 var() 在声明它的元素上就求值;WebKit 会把它锁在 :root
+    // 那份浅色表面上,深色世界的玻璃整片发白(20:22 截图)。三个世界的玻璃
+    // 底因此必须是字面色,不能写 color-mix(… var(--color-surface) …)。
+    for (const theme of ['dark', 'oled']) {
+      const block =
+        new RegExp(`\\[data-app-theme='${theme}'\\]\\s*\\{([\\s\\S]*?)\\n\\}`).exec(cssText)?.[1] ??
+        ''
+      expect(block, `${theme} block missing`).toBeTruthy()
+      expect(block, `${theme} 的玻璃底退回了跨变量派生`).toMatch(/--glass-wallpaper-bg: rgba\(/)
+      expect(block, `${theme} 的浮层底退回了跨变量派生`).toMatch(/--glass-tint: rgba\(/)
+      expect(block, `${theme} 的内凹面退回了跨变量派生`).toMatch(/--surface-sunk: rgb/)
+    }
+    expect(rootVarValues(cssText).get('--glass-wallpaper-bg')).toMatch(/^rgba\(/)
+  })
+
   it('light and dark themes differ in colors but share structure', () => {
     expect(themes.light.colorScheme).toBe('light')
     expect(themes.dark.colorScheme).toBe('dark')
@@ -178,20 +194,19 @@ describe('wallpaper glass tokens', () => {
 
   it('keeps the wallpaper filter neutral instead of amplifying colour', () => {
     // 淡彩壁纸被 saturate(1.8)+brightness(1.06) 推成整块高饱和青绿会晃眼。
-    // 「白一点」靠壁纸侧少放原色,不是靠滤镜加彩度/提亮。
-    const gains = (name: string) =>
-      [
-        ...cssText.matchAll(
-          new RegExp(`--glass-wallpaper-(?:filter|veil):[^;]*${name}\\(([\\d.]+)\\)`, 'g'),
-        ),
-      ].map((match) => Number(match[1]))
-    for (const [name, ceiling] of [
-      ['saturate', 1.2],
-      ['brightness', 1],
-    ] as const) {
-      const values = gains(name)
-      expect(values.length).toBeGreaterThanOrEqual(6) // :root + dark + oled × filter/veil
-      for (const value of values) expect(value).toBeLessThanOrEqual(ceiling)
+    // 提亮必须配降饱和:1.8 饱和 + 1.06 提亮才把壁纸推成高饱和色块;
+    // 0.85 饱和 + 1.05 提亮读成一层干净的冷调,是玻璃该有的样子。
+    const pairs = [...cssText.matchAll(/--glass-wallpaper-(?:filter|veil):([^;]*);/g)].map(
+      (match) => match[1] ?? '',
+    )
+    expect(pairs.length).toBeGreaterThanOrEqual(6) // :root + dark + oled × filter/veil
+    for (const decl of pairs) {
+      const saturate = Number(/saturate\(([\d.]+)\)/.exec(decl)?.[1] ?? 1)
+      const brightness = Number(/brightness\(([\d.]+)\)/.exec(decl)?.[1] ?? 1)
+      expect(saturate, decl).toBeLessThanOrEqual(1.2)
+      expect(brightness, decl).toBeLessThanOrEqual(1.06)
+      if (brightness > 1)
+        expect(saturate, `brightness>1 必须配降饱和:${decl}`).toBeLessThanOrEqual(1)
     }
   })
 

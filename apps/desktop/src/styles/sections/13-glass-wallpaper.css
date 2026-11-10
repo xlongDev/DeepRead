@@ -34,28 +34,43 @@ html[data-background]:not([data-background='none']) .library {
    半透明白 tint 把大片区域提亮,与右侧 CSS 壁纸形成一道竖向色差。
    .lib-sidebar-bottom 同理不能碰:它是 margin-top:auto 的布局容器,窄屏
    还会 display:contents,加背景会套出直角框把目标卡与 foot 叠成双层边。
-   清单必须与 useGlassRefraction.ts 的 GLASS_SURFACE_SELECTOR 逐字一致。 */
+   清单必须与 useGlassRefraction.ts 的 GLASS_SURFACE_SELECTOR 逐字一致。
+
+   不加 backdrop-filter:背后是一整片平滑渐变,模糊没有信息量,却在深色
+   世界会采样失败、把卡片刷成浅灰(20:22 截图里的目标卡)。玻璃感来自
+   半透明底 + sheen + 三层 rim,这三样都不依赖采样。 */
 html[data-background]:not([data-background='none'])
   :is(.lib-sidebar-goal, .continue-reading, .shelf-search) {
   background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
-  backdrop-filter: var(--glass-wallpaper-filter) var(--glass-lens,);
-  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
   box-shadow: var(--glass-wallpaper-edge);
 }
 
-/* ---------- 浮层:统一用「排序下拉」那一套清透玻璃 ----------
-   设置 / ⌘K / 下拉 / 动作菜单 / 云同步全部共用这一条声明,不另设
-   更实的底色 —— 之前给浮层加 82% 实底,连下拉一起变闷了。 */
+/* ---------- 浮层:68% 的玻璃 ----------
+   84% 时整块几乎就是实白,背后的青绿一点也透不出来 —— 读成「白板」而不是
+   玻璃(22:12 截图)。30% 又让正文掉到 3:1 以下。68% 是两者之间:色相透得出
+   来,墨字在浅色世界仍有 ~13:1,深色世界的亮字同理。 */
 html[data-background]:not([data-background='none'])
-  :is(.modal-panel, .dropdown-menu, .action-menu, .sync-drawer, .tag-popover) {
-  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  :is(.modal-panel, .dropdown-menu, .action-menu, .card-menu, .sync-drawer, .tag-popover) {
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
   backdrop-filter: var(--glass-wallpaper-filter);
   -webkit-backdrop-filter: var(--glass-wallpaper-filter);
   box-shadow: var(--glass-wallpaper-edge);
 }
 
-/* 遮罩不是玻璃板:暗 dim 保留,10px 糊镜换成轻模糊 + 提亮。 */
+/* 面板自己多用一道「去彩 + 提亮」的重模糊:背后的青绿是高饱和渐变,直接
+   掺进 76% 的暖白会读成灰绿。先把它揉成一块柔光再混,玻璃才是干净的
+   冷白 —— 遮罩那层不动,免得整个背景跟着褪色。 */
+html[data-background]:not([data-background='none']) .modal-panel {
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+  backdrop-filter: blur(30px) saturate(0.72) brightness(1.1);
+  -webkit-backdrop-filter: blur(30px) saturate(0.72) brightness(1.1);
+}
+
+/* 遮罩不是玻璃板:暗 dim 保留,10px 糊镜换成轻模糊 + 提亮。
+   主题态的遮罩要更淡:面板自己就是玻璃,底下再压 32% 的黑,72% 的白
+   采样过去会读成脏灰绿(22:31 截图)。0.18 仍分得清前后,玻璃却是亮的。 */
 html[data-background]:not([data-background='none']) .modal-overlay {
+  background: rgba(0, 0, 0, 0.18);
   backdrop-filter: var(--glass-wallpaper-veil);
   -webkit-backdrop-filter: var(--glass-wallpaper-veil);
 }
@@ -84,10 +99,8 @@ html[data-background]:not([data-background='none'])
     .stats-page .goal-week-dot:not(.is-read)
   ) {
   background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
-  backdrop-filter: var(--glass-wallpaper-filter);
-  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
   /* 按钮坐在更实的浮层上时,只靠 --glass-edge 的发丝边读不出厚度,
-     补两层白高光(深色主题也不过曝)。 */
+     补两层白高光(深色主题也不过曝)。同样不采样:按钮背后就是页面渐变。 */
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 55%),
     inset 0 0 0 1px rgb(255 255 255 / 24%),
@@ -98,8 +111,6 @@ html[data-background]:not([data-background='none'])
 html[data-background]:not([data-background='none'])
   :is(.shelf-import, .continue-reading-go, .btn-primary):not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 22%, var(--glass-wallpaper-bg));
-  backdrop-filter: var(--glass-wallpaper-filter);
-  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
   box-shadow: var(--glass-wallpaper-edge);
   border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
   color: var(--color-accent);
@@ -114,30 +125,78 @@ html[data-background]:not([data-background='none']) .shelf-tools .dropdown-trigg
     var(--glass-edge);
 }
 
-/* ---------- 浮层里的输入框 ----------
-   限定在浮层内,别把阅读器里同名的 .field-input 一起改了。 */
-html[data-background]:not([data-background='none']) :is(.modal-panel, .sync-drawer) .field-input {
-  background: var(--glass-wallpaper-bg);
-  backdrop-filter: var(--glass-wallpaper-filter);
-  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
-  border-color: color-mix(in srgb, #ffffff 48%, transparent);
-}
-
-html[data-background]:not([data-background='none']) .command-input {
-  background: var(--glass-wallpaper-bg);
-  backdrop-filter: var(--glass-wallpaper-filter);
-  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
-}
-
-/* ---------- 统计 / 设置 / 笔记的内容卡 ----------
-   只走 CSS 玻璃:数量随数据变、位置随滚动变,加进 WebGL surfaces 就得
-   逐帧重画全屏 shader(上一轮首页卡顿的根因)。主题预览卡 .theme-swatch
-   不在此列:它本身就是三个纸色的样本,玻璃化会盖掉要展示的颜色。 */
+/* ---------- 浮层内部:玻璃上的玻璃 ----------
+   设置 / 云同步面板里的分组卡、记录卡如果还是实心白,整块就退回一张白纸 ——
+   外面那层玻璃白做了。它们改走同一套 58% 玻璃:叠出来更亮、带 rim,读成
+   「一层玻璃上浮着几块玻璃」。 */
 html[data-background]:not([data-background='none'])
-  :is(.stats-overview, .settings-group, .note-card, .sync-status) {
+  :is(.modal-panel, .sync-drawer)
+  :is(.settings-group, .sync-status) {
+  /* 比面板实一档:面板 76% 透出背景,卡片 88% 收住正文。两层叠出来的
+     明度差就是层次 —— 都做 58% 会叠成一块实白,都做实底又会糊成一张纸。 */
+  background:
+    var(--glass-wallpaper-sheen), color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+  border-color: transparent;
+}
+
+/* 输入框也走玻璃,但**边框不动**:暖纸的玻璃底只比面板深两点,边界全靠
+   那根 color-border 发丝线。上一版把边框刷成白色 48%,在浅色面板上等于
+   把输入框整个抹掉(22:09 截图:只剩占位文字飘着)。
+   高光只给未聚焦态,别压掉 :focus 的 accent 环。 */
+html[data-background]:not([data-background='none']) :is(.modal-panel, .sync-drawer) .field-input {
   background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
   backdrop-filter: var(--glass-wallpaper-filter);
   -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+}
+
+html[data-background]:not([data-background='none'])
+  :is(.modal-panel, .sync-drawer)
+  .field-input:not(:focus) {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 45%);
+}
+
+html[data-background]:not([data-background='none']) .command-input {
+  background: var(--surface-sunk);
+}
+
+/* 批量操作条:浮在书架上的一条玻璃。 */
+html[data-background]:not([data-background='none']) .shelf-bulk:not(.is-hidden) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
+  backdrop-filter: var(--glass-wallpaper-filter);
+  -webkit-backdrop-filter: var(--glass-wallpaper-filter);
+  box-shadow: var(--glass-wallpaper-edge);
+  border-color: transparent;
+}
+
+/* 封面上的圆钮:半透明深底 + 双白高光。**不加 blur** —— 每张书卡两个,
+   一屏十几本全开背景模糊就是滚动掉帧的经典原因;背后是封面图,不带模糊
+   反而更像一块压上去的玻璃。 */
+html[data-background]:not([data-background='none']) .book-quick-btn {
+  /* 52% 而不是 42%:封面多半是浅色,底再透气白图标就糊在圆里了。
+     玻璃感靠上面那两层白高光,不靠把底做薄。 */
+  background: color-mix(in srgb, var(--cover-ink) 52%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 48%),
+    inset 0 0 0 1px rgb(255 255 255 / 22%),
+    0 2px 8px -2px rgb(0 0 0 / 30%);
+}
+
+html[data-background]:not([data-background='none']) .book-quick-btn:hover {
+  background: color-mix(in srgb, var(--cover-ink) 68%, transparent);
+}
+
+/* ---------- 概览卡 / 笔记卡:要玻璃,但不要 blur ----------
+   它们躺在渐变页面上,是「浮起来的一层卡片」,所以该有玻璃质感(半透明
+   底 + 顶部 sheen + 三层 rim)。但**不加 backdrop-filter**:背后是一整片
+   平滑渐变,模糊没有信息量,却会在深色世界的入场动画里采样失败,闪出一块
+   浅灰(20:22 截图)。玻璃感来自边缘光和半透明,不来自模糊。
+
+   概览卡自己声明的 70% 半透明底也要一起盖掉,否则会叠成两层。 */
+html[data-background]:not([data-background='none']) :is(.stats-overview, .note-card) {
+  background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
   box-shadow: var(--glass-wallpaper-edge);
   border-color: transparent;
 }

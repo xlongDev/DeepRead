@@ -9,13 +9,14 @@ import {
 } from './accents'
 
 describe('强调色偏好', () => {
-  it('空值与脏值回落默认品牌蓝', () => {
-    expect(parseAccent(null)).toEqual({ kind: 'preset', id: ACCENT_DEFAULT })
-    expect(parseAccent('custom:not-a-color')).toEqual({ kind: 'preset', id: ACCENT_DEFAULT })
-    expect(parseAccent('neon')).toEqual({ kind: 'preset', id: ACCENT_DEFAULT })
+  it('空值与脏值都是「跟随配色主题」', () => {
+    expect(parseAccent(null)).toEqual({ kind: 'auto' })
+    expect(parseAccent('auto')).toEqual({ kind: 'auto' })
+    expect(parseAccent('custom:not-a-color')).toEqual({ kind: 'auto' })
+    expect(parseAccent('neon')).toEqual({ kind: 'auto' })
   })
 
-  it('预设与自定义都能往返', () => {
+  it('预设、自定义与自动都能往返', () => {
     for (const preset of ACCENT_PRESETS) {
       const choice = { kind: 'preset' as const, id: preset.id }
       expect(parseAccent(serializeAccent(choice))).toEqual(choice)
@@ -23,6 +24,8 @@ describe('强调色偏好', () => {
     const custom = { kind: 'custom' as const, hex: '#3a7d8c' }
     expect(parseAccent(serializeAccent(custom))).toEqual(custom)
     expect(parseAccent('custom:#3A7D8C')).toEqual(custom)
+    const auto = { kind: 'auto' as const }
+    expect(parseAccent(serializeAccent(auto))).toEqual(auto)
   })
 
   it('自定义色的文字按亮度翻墨色/近白', () => {

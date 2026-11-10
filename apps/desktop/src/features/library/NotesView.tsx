@@ -10,7 +10,15 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, Copy, DownloadSimple, NoteBlank, PencilSimple, X } from '@phosphor-icons/react'
+import {
+  BookOpen,
+  Check,
+  Copy,
+  DownloadSimple,
+  NoteBlank,
+  PencilSimple,
+  X,
+} from '@phosphor-icons/react'
 import type { NoteEntry } from '@deepread/shared'
 import {
   excerptPreview,
@@ -254,13 +262,21 @@ export function NotesView({
                                     className="note-action"
                                     onClick={() => copyOne(entry)}
                                   >
+                                    {copied === entry.id ? (
+                                      <Check size={14} weight="bold" aria-hidden />
+                                    ) : (
+                                      <Copy size={14} weight="regular" aria-hidden />
+                                    )}
                                     {copied === entry.id ? '已复制' : '复制'}
                                   </button>
+                                  {/* 三个动作都带图标:只有「编辑」有笔、另外两个
+                                      是裸文字时,一行读起来是「一个按钮 + 两段文字」。 */}
                                   <button
                                     type="button"
                                     className="note-action"
                                     onClick={() => onOpenNote(entry)}
                                   >
+                                    <BookOpen size={14} weight="regular" aria-hidden />
                                     跳到原文
                                   </button>
                                 </span>

@@ -7,7 +7,7 @@
  * 隐藏 file input —— 它只服务这里的「从备份恢复」)。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
@@ -22,11 +22,13 @@ import { handleTablistKeys } from '../../lib/tablist-keys'
 import { DropdownMenu, type DropdownOption } from '../../components/DropdownMenu'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import {
+  ACCENT_DEFAULT,
   ACCENT_PRESETS,
   BACKGROUND_SCHEMES,
   accentPreview,
+  backgroundAccent,
+  backgroundSwatch,
   MOTION_PREFERENCE_OPTIONS,
-  wallpaperFor,
   type AccentChoice,
   type BackgroundChoice,
   type MotionPreference,
@@ -47,12 +49,6 @@ import {
  *  阅读目标不住这里 —— 它住统计页(目标与进度是同一件事)。 */
 const SETTINGS_TABS = ['appearance', 'keys', 'ai', 'data'] as const
 type SettingsTab = (typeof SETTINGS_TABS)[number]
-
-/** 首项保留纯色桌面:不装壁纸是默认,15 套渐变都是可选装饰。 */
-const BACKGROUND_OPTIONS: readonly DropdownOption<BackgroundChoice>[] = [
-  { value: 'none', label: '纯色桌面' },
-  ...BACKGROUND_SCHEMES.map((scheme) => ({ value: scheme.id, label: scheme.label })),
-]
 
 /** 已忽略的更新版本:同一版本不再提示。 */
 const IGNORED_VERSION_KEY = 'deepread.update.ignored'
@@ -94,6 +90,26 @@ export function SettingsDialog({
   onRestored,
   onClose,
 }: SettingsDialogProps) {
+  const dark = appTheme !== 'pure-white'
+  /**
+   * 配色主题下拉。首项是纯色桌面:不装主题是默认,15 套渐变都是可选方案。
+   * 每项带自己的色标 —— 十四个中文名字读下来记不住谁是青绿谁是靛蓝,
+   * 一条渐变直接说清楚,也顺手把「选主题 = 整套换色」这件事说出来。
+   * 色标按明暗换一套:深色浮层上浅色档会亮成一排小灯。
+   */
+  const backgroundOptions = useMemo<readonly DropdownOption<BackgroundChoice>[]>(
+    () => [
+      { value: 'none', label: '纯色桌面', swatch: 'var(--surface-card)' },
+      ...BACKGROUND_SCHEMES.map((scheme) => ({
+        value: scheme.id,
+        label: scheme.label,
+        swatch: backgroundSwatch(scheme.id, dark) ?? 'var(--surface-card)',
+      })),
+    ],
+    [dark],
+  )
+  /** 「跟随主题」那颗圆就是主题会给出的强调色本身。 */
+  const themeAccent = backgroundAccent(background, dark)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance')
   /** 分区切换方向:滑入动画从哪边进来(SlidingIndicator 的 key 重建配合)。 */
   const [settingsDir, setSettingsDir] = useState<'forward' | 'back'>('forward')
@@ -385,49 +401,99 @@ export function SettingsDialog({
             <>
               <section className="modal-section">
                 <p className="modal-section-label">界面主题</p>
+                {/* 明暗与配色是同一件事的两半(色相 + 明度),放同一张卡里
+                    两行。分成首尾两处时,用户滚到底才发现另一半。 */}
                 <div className="settings-group">
-                  <div className="theme-grid">
-                    {APP_THEMES.map((theme) => (
-                      <button
-                        key={theme.id}
-                        type="button"
-                        className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
-                        onClick={() => onThemeChange(theme.id)}
-                        aria-pressed={appTheme === theme.id}
-                      >
-                        <span
-                          className="theme-swatch-color"
-                          style={{ background: theme.swatch, color: theme.ink }}
+                  <div className="settings-theme-block">
+                    <span className="settings-shelf-columns-label">明暗</span>
+                    <div className="theme-grid">
+                      {APP_THEMES.map((theme) => (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
+                          onClick={() => onThemeChange(theme.id)}
+                          aria-pressed={appTheme === theme.id}
                         >
                           <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.85 }}
-                          />
-                          <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.55 }}
-                          />
-                          <span
-                            className="theme-swatch-line"
-                            style={{ background: theme.ink, opacity: 0.35 }}
-                          />
-                          {/* 曾经这里有一颗强调色小圆点。十二个主题的强调色
-                              几乎全是同一档蓝,于是十二颗一模一样的点既没
-                              传达「这个主题的强调色」,又因为排在预览页的
-                              视觉重心上,被读成「每张都被选中了」—— 而真正
-                              的选中信号是边框。没有信息量的装饰就是噪声。 */}
-                        </span>
-                        {theme.label}
-                      </button>
-                    ))}
+                            className="theme-swatch-color"
+                            style={{ background: theme.swatch, color: theme.ink }}
+                          >
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.85 }}
+                            />
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.55 }}
+                            />
+                            <span
+                              className="theme-swatch-line"
+                              style={{ background: theme.ink, opacity: 0.35 }}
+                            />
+                            {/* 曾经这里有一颗强调色小圆点。十二个主题的强调色
+                                几乎全是同一档蓝,于是十二颗一模一样的点既没
+                                传达「这个主题的强调色」,又因为排在预览页的
+                                视觉重心上,被读成「每张都被选中了」—— 而真正
+                                的选中信号是边框。没有信息量的装饰就是噪声。 */}
+                          </span>
+                          {theme.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-shelf-columns">
+                    <span className="settings-shelf-columns-label">配色</span>
+                    <DropdownMenu
+                      ariaLabel="配色主题"
+                      value={background}
+                      options={backgroundOptions}
+                      onChange={onBackgroundChange}
+                      title="配色决定页面底色与强调色,明暗由上面的界面主题给"
+                    >
+                      <span className="dropdown-value">
+                        <span
+                          className="background-preview"
+                          style={{ background: backgroundSwatch(background, dark) ?? undefined }}
+                          aria-hidden="true"
+                        />
+                        {backgroundOptions.find((option) => option.value === background)?.label ??
+                          '纯色桌面'}
+                      </span>
+                    </DropdownMenu>
                   </div>
                 </div>
+                <p className="settings-hint">
+                  配色同时决定页面底色与强调色;书页仍用阅读背景,纸色与文字不受影响。
+                </p>
               </section>
               <section className="modal-section">
                 <p className="modal-section-label">强调色</p>
                 <div className="accent-row">
+                  {/* 「跟随主题」只在装了配色主题时出现:纯色桌面上它和品牌蓝
+                      一模一样,两颗同样的圆只会让人猜哪个才是默认。它的色块
+                      就是当前主题的渐变 —— 全行唯一一颗带渐变的圆,点它即
+                      把颜色交回主题。 */}
+                  {background !== 'none' && (
+                    <button
+                      type="button"
+                      className={`accent-swatch accent-auto${accent.kind === 'auto' ? ' is-active' : ''}`}
+                      style={{ background: accentPreview(themeAccent.h, themeAccent.c) }}
+                      onClick={() => onAccentChange({ kind: 'auto' })}
+                      aria-pressed={accent.kind === 'auto'}
+                      aria-label="强调色跟随配色主题"
+                      title="跟随配色主题"
+                    />
+                  )}
                   {ACCENT_PRESETS.map((preset) => {
-                    const active = accent.kind === 'preset' && accent.id === preset.id
+                    // 纯色桌面下 auto 就等于品牌蓝,那颗要显示成选中 ——
+                    // 否则整行没有任何选中项,读成「强调色丢了」。
+                    const active =
+                      accent.kind === 'preset'
+                        ? accent.id === preset.id
+                        : accent.kind === 'auto' &&
+                          background === 'none' &&
+                          preset.id === ACCENT_DEFAULT
                     return (
                       <button
                         key={preset.id}
@@ -454,7 +520,7 @@ export function SettingsDialog({
                   </label>
                 </div>
                 <p className="settings-hint">
-                  作用于按钮、进度与选中标记;自定义色会自动挑可读的文字色。
+                  作用于按钮、进度与选中标记;换配色主题会一并更新,自定义色除外。
                 </p>
               </section>
               <section className="modal-section">
@@ -508,39 +574,6 @@ export function SettingsDialog({
                   </div>
                   <p className="settings-hint">
                     关闭后按钮、面板与视图切换不再渐变;书的内容与排版不受影响。
-                  </p>
-                </div>
-              </section>
-              {/* 同样是低频项:15 套壁纸不该把常用的书架偏好挤出首屏。 */}
-              <section className="modal-section">
-                <p className="modal-section-label">界面背景</p>
-                <div className="settings-group">
-                  <div className="settings-shelf-columns">
-                    <span className="settings-shelf-columns-label">页面渐变</span>
-                    <DropdownMenu
-                      ariaLabel="页面渐变"
-                      value={background}
-                      options={BACKGROUND_OPTIONS}
-                      onChange={onBackgroundChange}
-                      title="只铺书架等页面的底色,明暗随界面主题切换;卡片与阅读纸色不受影响"
-                    >
-                      <span className="dropdown-value">
-                        <span
-                          className="background-preview"
-                          style={{
-                            background:
-                              wallpaperFor(background, appTheme !== 'pure-white') ??
-                              'var(--surface-page)',
-                          }}
-                          aria-hidden="true"
-                        />
-                        {BACKGROUND_OPTIONS.find((option) => option.value === background)?.label ??
-                          '纯色桌面'}
-                      </span>
-                    </DropdownMenu>
-                  </div>
-                  <p className="settings-hint">
-                    15 套淡彩渐变只作用于页面底色;书页仍用阅读背景,文字与卡片配色不变。
                   </p>
                 </div>
               </section>

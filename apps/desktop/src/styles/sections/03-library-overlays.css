@@ -668,6 +668,14 @@
    不再叠阴影。书名比页面标题大,但不做文字墙 —— 长中文书名最多两行、26em 收口。
    整卡可点,右侧唯一的实心 CTA 沿用胶囊形状,和导航/工具条同一种语言。 */
 .continue-reading {
+  /* 掠光要按圆角裁,否则 `inset` 外扩出来的光带会盖到旁边书架的背景上。 */
+  position: relative;
+  overflow: hidden;
+  /* 上面那行 overflow 会把这张卡的「自动最小尺寸」清零(flex 项一旦不是
+     visible,min-height:auto 就解成 0),而 .library-main 是 flex 列:书一多、
+     内容超出视口,剩下的负空间全摊到这张卡上 —— 206px 被压成 42px,书名
+     整行裁没(11-10 截图)。卡片是首屏焦点,不允许被压扁。 */
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-24);
@@ -681,7 +689,10 @@
   font-family: inherit;
   text-align: left;
   cursor: pointer;
+  translate: 0 0;
+  /* 和书卡同一条 400ms 曲线:这是同一排书架里的同一件事。 */
   transition:
+    translate var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94),
     border-color var(--duration-fast) var(--ease-out),
     background-color var(--duration-base) var(--ease-out);
 }
@@ -692,6 +703,37 @@
    两个位移才能叠加而不是互相覆盖。 */
 .continue-reading:hover {
   border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  /* 只抬 3px(书卡是 4px):它比书卡大一圈,同样的位移在视觉上更晃。
+     阴影仍然不加 —— 大卡一浮起来就从「书架里的一本书」变成「浮起的弹窗」。 */
+  translate: 0 -3px;
+}
+
+/* 掠光:和书卡同一个 keyframes 与曲线。宽卡上光要扫得更久,所以用
+   1400ms(书卡 1200ms)—— 同一个速度穿过 880px 才不显得一闪而过。 */
+.continue-reading::after {
+  content: '';
+  position: absolute;
+  inset: -20% -70%;
+  pointer-events: none;
+  /* 纯白的光扫在浅色卡上是白叠白,等于没做。掺 15~20% 的主题色:
+     浅卡上是一道淡青,深色封面上仍是白高光。 */
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    color-mix(in srgb, var(--color-accent) 15%, rgb(255 255 255 / 45%)) 49%,
+    color-mix(in srgb, var(--color-accent) 22%, rgb(255 255 255 / 62%)) 51%,
+    transparent 60%
+  );
+  opacity: 0;
+}
+
+.continue-reading:hover::after,
+.continue-reading:focus-visible::after {
+  animation: cover-sheen 1400ms cubic-bezier(0.45, 0.05, 0.25, 1);
+}
+
+.continue-reading:active {
+  translate: 0 -1px;
 }
 
 .continue-reading:hover .continue-reading-cover {
@@ -703,8 +745,27 @@
   background: color-mix(in srgb, var(--color-accent) 86%, var(--color-text-primary));
 }
 
-.continue-reading:hover .continue-reading-go svg {
-  translate: 2px 0;
+/* 图标不再「向右滑 2px」:那是箭头的语言,而它是一本书。改成一次性的
+   「掀起一角」—— 以左下角为轴轻轻抬起再落回,和卡片掠光是同一套语言
+   (悬停只讲一次,不循环)。16px 的图标做 3D 翻页看不清,2D 倾斜才读得出。 */
+.continue-reading:hover .continue-reading-go svg,
+.continue-reading:focus-visible .continue-reading-go svg {
+  animation: continue-book-open 460ms cubic-bezier(0.45, 0.05, 0.25, 1);
+}
+
+@keyframes continue-book-open {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  42% {
+    transform: translateY(-2px) rotate(-13deg) scale(1.07);
+  }
+  74% {
+    transform: translateY(0) rotate(2deg) scale(1.01);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
 }
 
 /* 书是物件,不是界面表面:2px 硬边 + 1px 描边,保留唯一一层物理阴影。 */
@@ -785,7 +846,8 @@
 }
 
 .continue-reading-go svg {
-  transition: translate var(--duration-fast) var(--ease-out);
+  /* 绕书脊转,不是绕图标中心:前者像翻页,后者像整本书在转。 */
+  transform-origin: 50% 62%;
 }
 
 @media (max-width: 720px) {
@@ -908,11 +970,27 @@
   overflow-y: auto;
   padding: var(--space-16) var(--space-12) var(--space-16) var(--space-16);
   /* 侧栏取页面色、不是一张卡,所以和内容区只隔一根发丝线,不靠阴影或底色
-     切分。窄屏横排时由 04-notes.css 换成 border-bottom,并把这根竖线归零。 */
-  border-right: 1px solid var(--color-border);
-  background: transparent;
+     切分。这根线**不是 border**:整高的 border-right 会从窗口最顶上开始,
+     一路穿过交通灯那一行,在无边框窗口里读成一条多出来的窗口分割线
+     (11-10 截图)。改成 background 画的段线,顶部 40px(标题栏拖拽条)留白,
+     渐变淡入,只在内容区这一侧存在。窄屏横排由 04-notes.css 换成 border-bottom。 */
+  background-color: transparent;
   animation: fade-in var(--duration-base) var(--ease-out);
   transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+/* 展开态:不画线,给侧栏一层「向右侧渐隐」的浅色。侧栏和内容区之间原本只
+   隔一根发丝线,而无边框窗口里那条竖线会被读成第二条窗口分割线(11-10 截图),
+   收进 rail 之后更像一条拖不动的分栏边。改成材质差:左侧是自己的一层浅色,
+   一路淡到内容区,找不到边缘 —— 有分界,没有线。中间**不留平台段**:
+   平台 + 线性淡出会在交界处压出一条「折痕」(马赫带),看起来仍像一条看不见
+   的线。
+   对比度刻意压得很低(52% 表面色):它只该在「扫一眼」时被察觉,不该像一块
+   白板。嫌强弱就调这一个数字。 */
+@media (min-width: 861px) {
+  .library:not(.is-sidebar-hidden) .lib-sidebar {
+    background-image: linear-gradient(90deg, var(--sidebar-wash), transparent);
+  }
 }
 
 /* 收起时**不淡出**:侧栏变成 64px 图标 rail,导航与选中竖条仍在。旧版把
@@ -921,7 +999,11 @@
 
 /* ---------- Context rail (collapsed sidebar) ---------- */
 /* 860px 以下侧栏本来就横排常显(04-notes.css),那里没有「收起」这回事,
-   所以 rail 规则整个限定在宽窗口,不去和横排布局抢。 */
+   所以 rail 规则整个限定在宽窗口,不去和横排布局抢。
+   rail **不画分隔线**:64px 的图标列不是面板,一根竖线和「可以拖动的分栏」
+   太像,而且它恰好从交通灯右边穿下去,和 macOS 自己的侧栏边撞在一起
+   (11-10 截图)。线的选择器已限定 `:not(.is-sidebar-hidden)`,这里不需要再
+   显式清除;图标列靠内边距与内容区自然分开。 */
 @media (min-width: 861px) {
   .lib-sidebar.is-rail {
     padding-inline: var(--space-8);
@@ -1217,7 +1299,8 @@
   margin-right: calc(var(--space-8) * -1);
   margin-left: calc(var(--space-16) * -1);
   padding: var(--space-16) var(--space-8) 0 var(--space-16);
-  border-top: 1px solid var(--color-border);
+  /* 不画横线:云同步 / 设置本来就是「侧栏底部的两个动作」,一根横线把它们
+     切成第三块区域,还把上面的目标卡框成一个盒子。间距已经说明分组。 */
 }
 
 .lib-sidebar-dot {

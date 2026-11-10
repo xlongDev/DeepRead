@@ -6,11 +6,21 @@
  * split is why one preset stays readable in all three worlds without a second
  * palette. A custom sRGB hex overrides `--color-accent` itself from JS; the
  * soft / hover / on-accent derivations all read that variable and follow.
+ *
+ * `auto` is the default: it has no colour of its own and asks the current
+ * 配色主题 for one (see `backgroundAccent`). On the pure desktop it resolves
+ * to `ACCENT_DEFAULT`, so "never picked anything" still renders the brand
+ * blue byte-for-byte. Picking a swatch — or a custom hex — pins the colour and
+ * stops the theme from moving it.
  */
 
 export type AccentPreset = 'brand' | 'teal' | 'terra' | 'forest' | 'ink' | 'plum'
 
-/** 桌面 App logo 的蓝紫是默认强调色;色相取自图标实测像素,见 DESIGN.md。 */
+/**
+ * 桌面 App logo 的蓝紫是默认强调色;色相取自图标实测像素,见 DESIGN.md。
+ * 它同时是 `auto` 在纯色桌面(没有配色主题)下的解 —— `:root` 重复这套
+ * h/c,首帧才不闪旧色,tokens.test.ts 锁着两者。
+ */
 export const ACCENT_DEFAULT: AccentPreset = 'brand'
 
 export const ACCENT_PRESETS: readonly {
@@ -33,25 +43,26 @@ export const ACCENT_PRESETS: readonly {
 export const ACCENT_STORAGE_KEY = 'deepread.accent'
 
 export type AccentChoice =
+  | { readonly kind: 'auto' }
   | { readonly kind: 'preset'; readonly id: AccentPreset }
   | { readonly kind: 'custom'; readonly hex: string }
 
 const HEX = /^#[0-9a-f]{6}$/i
 
+/** 空值、脏值与 'auto' 都是「没选过」:交给配色主题决定,纯色桌面下即品牌蓝。 */
 export function parseAccent(raw: string | null): AccentChoice {
-  if (raw === null) return { kind: 'preset', id: ACCENT_DEFAULT }
+  if (raw === null || raw === 'auto') return { kind: 'auto' }
   if (raw.startsWith('custom:')) {
     const hex = raw.slice('custom:'.length)
-    return HEX.test(hex)
-      ? { kind: 'custom', hex: hex.toLowerCase() }
-      : { kind: 'preset', id: ACCENT_DEFAULT }
+    return HEX.test(hex) ? { kind: 'custom', hex: hex.toLowerCase() } : { kind: 'auto' }
   }
   return ACCENT_PRESETS.some((preset) => preset.id === raw)
     ? { kind: 'preset', id: raw as AccentPreset }
-    : { kind: 'preset', id: ACCENT_DEFAULT }
+    : { kind: 'auto' }
 }
 
 export function serializeAccent(choice: AccentChoice): string {
+  if (choice.kind === 'auto') return 'auto'
   return choice.kind === 'preset' ? choice.id : `custom:${choice.hex.toLowerCase()}`
 }
 

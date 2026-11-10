@@ -7,6 +7,8 @@ export interface DropdownOption<T extends string> {
   readonly value: T
   readonly label: string
   readonly hint?: string
+  /** 选项前的色样(任意 CSS background 值)。配色主题用它显示整套渐变。 */
+  readonly swatch?: string
 }
 
 interface DropdownMenuProps<T extends string> {
@@ -64,6 +66,13 @@ export function DropdownMenu<T extends string>({
 
   useEffect(() => {
     if (!open) return
+    // 列表可滚(配色主题有 16 项、上限 260px):打开时把当前值带进视野,
+    // 否则选了靠后的方案以后,每次点开都只看到前八项、勾在视野外。
+    // jsdom 没有实现 scrollIntoView,守卫不能省。
+    const checked = menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')
+    if (typeof checked?.scrollIntoView === 'function') {
+      checked.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target as Node
       // 菜单已 portal 出去,rootRef 不再包含它 —— 两个容器都要查,
@@ -92,7 +101,14 @@ export function DropdownMenu<T extends string>({
       items[next]?.focus()
     }
     // 容器滚动(设置面板自己可滚)时菜单不跟着走会脱节,直接收。
-    const onScrollOrResize = (): void => setOpen(false)
+    // 但菜单**自己**的滚动不算:配色主题有 16 项,列表一滚就关菜单的话,
+    // 后面那几项永远够不到(max-height + overflow 等于白写)。
+    const onScrollOrResize = (event: Event): void => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target) === true) {
+        return
+      }
+      setOpen(false)
+    }
     window.addEventListener('pointerdown', onPointerDown)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('scroll', onScrollOrResize, true)
@@ -131,6 +147,13 @@ export function DropdownMenu<T extends string>({
           }}
         >
           <span className="dropdown-option-label">
+            {option.swatch !== undefined && (
+              <span
+                className="dropdown-option-swatch"
+                style={{ background: option.swatch }}
+                aria-hidden
+              />
+            )}
             {option.label}
             {option.hint && <span className="dropdown-hint">{option.hint}</span>}
           </span>

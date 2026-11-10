@@ -14,6 +14,10 @@
   /* 侧栏 + 内容两列。
      minmax(0, 1fr) 是必需的:少了它,长书名会把网格撑破。 */
   --sidebar-w: 232px;
+  /* 侧栏与书架的分界不画线,靠一块「向右侧渐隐的浅色带」:线在无边框窗口里
+     会读成第二条窗口分割线,而渐变带读成侧栏自己的材质。58% 处开始淡出,
+     淡到内容区时已经没有边缘可指认。 */
+  --sidebar-wash: color-mix(in srgb, var(--color-surface) 52%, transparent);
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   /* 侧栏从窗口最顶部开始(deepseek 那种一整块,而不是被一条窗口条切开),
      交通灯是原生控件、浮在它的上面。 */
@@ -33,6 +37,14 @@
 
 .library.is-sidebar-hidden {
   grid-template-columns: 64px minmax(0, 1fr);
+}
+
+/* 深色世界把浅色带压到 38%:同一块浅色叠在暗底上放大得比亮底厉害,52% 在
+   石墨 / 纯黑里会读成一条发灰的带子,还把主题的色相压掉一截。两个世界各给
+   一个数字,比只调一个全局值更稳。 */
+[data-app-theme='dark'] .library,
+[data-app-theme='oled'] .library {
+  --sidebar-wash: color-mix(in srgb, var(--color-surface) 38%, transparent);
 }
 
 /* 侧栏顶部条:是侧栏的一部分(同一块面板从窗口顶开始),交通灯浮在它上面。
@@ -406,16 +418,57 @@
   padding: var(--space-16);
   box-shadow: 0 1px 3px rgba(var(--shadow-color), 0.08);
   transform: translateY(0);
+  /* 上浮要「抬起来再停住」,不是弹一下:400ms 的慢出曲线(先急后缓),
+     比 250ms 的 spring 更沉。spring 留给按下,悬停不该有回弹。 */
   transition:
-    transform var(--duration-base) var(--ease-spring),
-    box-shadow var(--duration-base) var(--ease-out);
+    transform var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    box-shadow var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
-/* 一张卡只讲一个 hover 故事:上浮 + 阴影加深。扫光、封面放大、描边变色
-   都删了 —— 每个都单看有理,叠在一起就是"热闹"。 */
+/* 一张卡只讲一个 hover 故事:上浮 + 阴影加深,再加一道掠过的光。
+   光扫只走一次(1.2s),不是循环的呼吸灯 —— 它说「这本书在等你翻开」,
+   循环闪烁就变成装饰。封面放大、描边变色仍然不做。 */
 .book-cover:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 24px -8px rgba(var(--shadow-color), 0.3);
+}
+
+/* 掠光:一条 100° 的窄高光从左上扫到右下。inset 外扩是为了让高光在
+   边界处也是斜的,而不是被裁成一条竖线;.book-cover 已有 overflow:hidden
+   与圆角,所以不会漏出封面。 */
+.book-cover::after {
+  content: '';
+  position: absolute;
+  inset: -20% -70%;
+  pointer-events: none;
+  /* 掺 12~18% 主题色:纯白光在白封面上看不见,带一点青在浅底上也有痕迹,
+     深色封面上仍读成白光。 */
+  background: linear-gradient(
+    100deg,
+    transparent 38%,
+    color-mix(in srgb, var(--color-accent) 12%, rgb(255 255 255 / 50%)) 49%,
+    color-mix(in srgb, var(--color-accent) 18%, rgb(255 255 255 / 70%)) 51%,
+    transparent 62%
+  );
+  opacity: 0;
+}
+
+.book-card:hover .book-cover::after,
+.book-card:focus-within .book-cover::after {
+  /* 1.2s:比上浮更长,光要「扫过去」而不是「闪一下」。曲线两端都缓,
+     中段才是匀速的,像一道真的光。 */
+  animation: cover-sheen 1200ms cubic-bezier(0.45, 0.05, 0.25, 1);
+}
+
+@keyframes cover-sheen {
+  from {
+    transform: translateX(-115%);
+    opacity: 0.9;
+  }
+  to {
+    transform: translateX(115%);
+    opacity: 0;
+  }
 }
 
 .book-cover:active {
@@ -548,6 +601,8 @@
 
 /* 封面上的两颗玻璃按钮(星标 + ⋯):悬浮才出现,竖排贴右上角。
    底色是压在封面**图像**上的暗色纱,两个主题通用(封面内容不随主题变)。 */
+/* 容器只管落位与命中。淡入交给每个按钮 —— 和批注动作行同一套语言:
+   整组一起闪现读不出「这两个是一起冒出来的」。 */
 .book-quick {
   position: absolute;
   top: 8px;
@@ -555,19 +610,12 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  opacity: 0;
-  transform: translateX(4px);
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
 }
 
 .book-card:hover .book-quick,
 .book-card:focus-within .book-quick,
 .book-quick:focus-within {
-  opacity: 1;
-  transform: translateX(0);
   pointer-events: auto;
 }
 
@@ -584,9 +632,33 @@
   background: color-mix(in srgb, var(--cover-ink) 62%, transparent);
   color: var(--cover-fg);
   cursor: pointer;
+  /* 出现:从右 6px 滑入 + 从 0.92 长到原尺寸,和封面上浮同一条 400ms 曲线。
+     用 translate / scale 两个独立属性,别用 transform —— 全局
+     `button:active{transform:scale(.97)}` 会把它压掉。 */
+  opacity: 0;
+  translate: 6px 0;
+  scale: 0.92;
   transition:
+    opacity var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    translate var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    scale var(--duration-slow) cubic-bezier(0.25, 0.46, 0.45, 0.94),
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);
+}
+
+.book-card:hover .book-quick-btn,
+.book-card:focus-within .book-quick-btn,
+.book-quick:focus-within .book-quick-btn {
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+}
+
+/* 错拍 60ms:上面那颗先到,⋯ 跟上来。退场不带 delay,一起淡出。 */
+.book-card:hover .book-quick-btn + .book-quick-btn,
+.book-card:focus-within .book-quick-btn + .book-quick-btn,
+.book-quick:focus-within .book-quick-btn + .book-quick-btn {
+  transition-delay: 60ms;
 }
 
 .book-quick-btn:hover {
@@ -678,9 +750,14 @@
   animation: scale-pop var(--duration-fast) var(--ease-spring);
 }
 
+/* 菜单不许比封面宽:它是「这本书」的动作,撑出封面就成了一张浮在白纸上的
+   独立菜单,和它标注的那本书失去联系。right/bottom 已经贴着封面内缘,
+   max-width 用父级(书卡)的宽度减掉两侧各 8px。 */
 .card-menu.is-card {
   right: 8px;
   bottom: 52px;
+  min-width: 0;
+  max-width: calc(100% - 16px);
 }
 
 .card-menu.is-row {

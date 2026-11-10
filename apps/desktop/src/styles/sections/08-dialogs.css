@@ -168,6 +168,14 @@ dialog.modal-panel {
 }
 
 /* Theme swatches: each previews its own world in miniature. */
+/* 「界面主题」卡里的「明暗」块:小标签 + 三张预览同占一行组。
+   明暗与配色是同一件事的两半,同卡两行,靠 .settings-group 的发丝线分开。 */
+.settings-theme-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));

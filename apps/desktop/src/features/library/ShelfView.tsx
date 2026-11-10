@@ -403,7 +403,7 @@ export function ShelfView({
           type="button"
           className="continue-reading"
           onClick={() => onOpenBook(continueBook)}
-          title={`打开《${shelfTitle(continueBook)}》`}
+          aria-label={`打开《${shelfTitle(continueBook)}》`}
         >
           {(() => {
             const cover = covers.get(continueBook.hash) ?? null
@@ -511,7 +511,11 @@ export function ShelfView({
                             : () => onOpenBook(book)
                       }
                       aria-pressed={selecting ? isSelected : undefined}
-                      title={
+                      /* 用 aria-label 而不是 title:书名已经印在封面下方,原生
+                         tooltip 只是把同一句话再飘一遍,而且会盖住刚冒出来的
+                         星标 / ⋯ 两个按钮(11-10 截图)。可访问名仍然说明
+                         「会打开哪一本」,只是不再有那层浮字。 */
+                      aria-label={
                         selecting
                           ? isSelected
                             ? '取消选择'

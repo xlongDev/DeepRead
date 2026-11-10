@@ -552,7 +552,11 @@ describe('LibraryScreen 书架渲染', () => {
 
   it('封面按钮把选中书交给阅读器,并说明自己会打开哪一本', async () => {
     const { onOpenBook } = await renderLibrary()
-    fireEvent.click(screen.getByTitle('打开《夜航书》'))
+    const cover = screen.getByLabelText('打开《夜航书》')
+    // 书名已经印在封面下方:再挂 title 就是同一句话飘一遍,还会盖住刚冒出来
+    // 的星标 / ⋯(11-10 截图)。可访问名留在 aria-label 上,原生 tooltip 不留。
+    expect(cover).not.toHaveAttribute('title')
+    fireEvent.click(cover)
     expect(onOpenBook).toHaveBeenCalledTimes(1)
     expect(onOpenBook.mock.calls[0]?.[0]).toMatchObject({ bookId: HASH_A, format: 'epub' })
   })
@@ -731,7 +735,7 @@ describe('LibraryScreen 批量管理', () => {
 
     // 点卡片是"选中/取消选中",管理态必须留着。管理态下封面的 title 换成
     // 「选择这本书」—— 找它而不是书名,免得断言绑死在别处改过的文案上。
-    fireEvent.pointerDown(screen.getAllByTitle('选择这本书')[0] as HTMLElement)
+    fireEvent.pointerDown(screen.getAllByLabelText('选择这本书')[0] as HTMLElement)
     expect(screen.getByRole('toolbar', { name: '批量操作' })).toBeInTheDocument()
 
     // 点主区空白处才是退出。
@@ -1335,7 +1339,7 @@ describe('LibraryScreen 卡片操作', () => {
     Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() })
 
     await renderLibrary()
-    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
     fireEvent.click(screen.getByRole('menuitem', { name: '导出批注(.md)' }))
     expect(createObjectURL).toHaveBeenCalledTimes(1)
     const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text()
@@ -1347,20 +1351,20 @@ describe('LibraryScreen 卡片操作', () => {
     const menuName = '夜航书 的操作'
 
     // 右键:触屏没有 Shift+F10,鼠标用户也不该被逼着去点小按钮。
-    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
     expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
 
     // 键盘:Shift+F10 是桌面平台约定俗成的右键替代。处理器挂在封面按钮上 ——
     // 它是卡片里真正的交互元素,不是那个非交互的 <li>。
-    fireEvent.keyDown(screen.getByTitle('打开《夜航书》'), { key: 'F10', shiftKey: true })
+    fireEvent.keyDown(screen.getByLabelText('打开《夜航书》'), { key: 'F10', shiftKey: true })
     expect(screen.getByRole('menu', { name: menuName })).toBeInTheDocument()
   })
 
   it('菜单是动作全集:打标签、导出批注、编辑、移除(⋯ 紧凑档的展开全靠它)', async () => {
     await renderLibrary()
-    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
     const menu = screen.getByRole('menu', { name: '夜航书 的操作' })
     expect(
       within(menu)
@@ -1388,7 +1392,7 @@ describe('LibraryScreen 卡片操作', () => {
 
   it('菜单里的移除也要两次点击,确认项直接写明后果', async () => {
     await renderLibrary()
-    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
     fireEvent.click(screen.getByRole('menuitem', { name: '从书架移除' }))
     expect(invokeCommandMock).not.toHaveBeenCalledWith('library.remove', expect.anything())
 
@@ -1413,7 +1417,7 @@ describe('LibraryScreen 编辑书籍信息', () => {
   async function openInfo(): Promise<HTMLElement> {
     await renderLibrary()
     // 编辑入口在 ⋯ 菜单(与右键同一份);标签也在同一张表里。
-    fireEvent.contextMenu(screen.getByTitle('打开《夜航书》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
     fireEvent.click(screen.getByRole('menuitem', { name: '编辑书籍信息' }))
     return screen.findByLabelText('书籍信息')
   }
@@ -1574,7 +1578,7 @@ describe('LibraryScreen 移除与重新导入', () => {
     const first = await renderLibrary([one()])
     await waitFor(() => expect(readMock).toHaveBeenCalledWith(HASH_R))
 
-    fireEvent.contextMenu(screen.getByTitle('打开《长日将尽》'))
+    fireEvent.contextMenu(screen.getByLabelText('打开《长日将尽》'))
     fireEvent.click(screen.getByRole('menuitem', { name: '从书架移除' }))
     fireEvent.click(screen.getByRole('menuitem', { name: '确认移除(进度与批注一并删除)' }))
     await waitFor(() =>
@@ -1594,7 +1598,7 @@ describe('LibraryScreen 卡片标签浮层', () => {
   /** 打标签入口在 ⋯ 菜单里:从菜单进浮层,浮层本身的行为不变。 */
   async function openTagPopover(title: string): Promise<HTMLElement> {
     await renderLibrary()
-    fireEvent.contextMenu(screen.getByTitle(`打开《${title}》`))
+    fireEvent.contextMenu(screen.getByLabelText(`打开《${title}》`))
     fireEvent.click(screen.getByRole('menuitem', { name: '打标签' }))
     return screen.getByRole('dialog', { name: `《${title}》的标签` })
   }

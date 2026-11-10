@@ -116,7 +116,8 @@ export const lightTheme: ThemeTokens = {
   colors: {
     bg: 'oklch(0.948 0.012 var(--ink-hue))',
     surface: 'oklch(0.995 0.002 var(--ink-hue))',
-    surfaceGlass: 'color-mix(in srgb, var(--color-surface) 88%, transparent)',
+    // 字面值:跨变量 color-mix 在 WebKit 里会锁在 :root 的浅色表面(见 tokens.css)。
+    surfaceGlass: 'rgba(254, 253, 252, 0.88)',
     textPrimary: 'oklch(0.24 0.014 var(--ink-hue))',
     textSecondary: 'oklch(0.44 0.012 var(--ink-hue))',
     textTertiary: 'oklch(0.515 0.01 var(--ink-hue))',
@@ -201,7 +202,7 @@ export const darkTheme: ThemeTokens = {
   colors: {
     bg: 'oklch(0.2 0.008 var(--ink-hue))',
     surface: 'oklch(0.245 0.008 var(--ink-hue))',
-    surfaceGlass: 'color-mix(in srgb, var(--color-surface) 86%, transparent)',
+    surfaceGlass: 'rgba(34, 32, 28, 0.86)',
     textPrimary: 'oklch(0.96 0.004 var(--ink-hue))',
     textSecondary: 'oklch(0.72 0.01 var(--ink-hue))',
     textTertiary: 'oklch(0.635 0.01 var(--ink-hue))',

@@ -2218,6 +2218,21 @@ export function ReaderScreen({
     '--reader-fg': theme.theme.foreground,
     '--reader-panel': withAlpha(theme.theme.background, 0.86),
     '--reader-panel-solid': theme.theme.background,
+    /**
+     * 阅读器内的强调色 = 纸的墨色:书签、进度、开关与 focus 环都跟着纸走。
+     * 界面的配色主题不该渗进书页 —— 粉红主题下读书,页码点不该是粉的;
+     * 墨色在纸上的对比度本来就最高,不需要再挑一遍色。
+     *
+     * `--color-accent-soft` 必须一起给:tokens 里它是
+     * `color-mix(… var(--color-accent))`,带 var() 的自定义属性在**声明它的
+     * 元素**上就求值了,子元素继承的是界面那份旧值,覆盖 accent 不会自动重算。
+     */
+    '--color-accent': theme.theme.foreground,
+    '--color-accent-soft': withAlpha(
+      theme.theme.foreground,
+      theme.theme.colorScheme === 'dark' ? 0.16 : 0.1,
+    ),
+    '--color-on-accent': theme.theme.background,
   } as React.CSSProperties
   const liveBookmarks = useMemo(() => bookmarks.filter((b) => !b.deleted), [bookmarks])
   const liveAnnotations = annotations.filter((a) => !a.deleted)

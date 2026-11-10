@@ -47,13 +47,16 @@
     transform: scale(0.982);
   }
 
-  /* 封面玻璃按钮:触屏没有 hover,常显并放大命中区。 */
+  /* 封面玻璃按钮:触屏没有 hover,常显并放大命中区。按钮自己的淡入/
+     位移在这里要一并归位,否则容器放开了它们仍然透明。 */
   .book-quick {
-    opacity: 1;
-    transform: none;
+    pointer-events: auto;
   }
 
   .book-quick-btn {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
     width: 36px;
     height: 36px;
   }

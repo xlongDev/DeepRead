@@ -709,8 +709,11 @@
   text-align: left;
 }
 
+/* hover 回答「你指着哪一行」,不是「哪一项已选中」—— 用中性灰,和命令栏、
+   侧栏导航同一套位置语言。原来用 accent-soft(10%),主题换成青绿 / 琥珀后
+   那点淡染几乎看不见,读起来像没有反馈;状态信号留给选中项的 accent 字色。 */
 .dropdown-option:hover {
-  background: var(--color-accent-soft);
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 }
 
 .dropdown-option.is-active {
@@ -723,6 +726,17 @@
   align-items: baseline;
   gap: 6px;
   min-width: 0;
+}
+
+/* 配色主题的色条。十四个中文名字读下来记不住谁是青绿谁是靛蓝,一条渐变
+   直接把整套色相说完。label 是 baseline 对齐,色块得自己居中。 */
+.dropdown-option-swatch {
+  flex-shrink: 0;
+  align-self: center;
+  width: 22px;
+  height: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
 }
 
 .dropdown-option-label > span:first-child {

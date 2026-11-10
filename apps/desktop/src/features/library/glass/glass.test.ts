@@ -67,14 +67,18 @@ describe('wallpaper glass surface list', () => {
     expect(cssSource).toContain('.continue-reading-go')
   })
 
-  it('gives every floating panel the same clear glass as the sort dropdown', () => {
+  it('gives every floating panel a readable glass, denser than the cards', () => {
     for (const name of ['.modal-panel', '.dropdown-menu', '.action-menu', '.sync-drawer']) {
       expect(cssSource, `${name} must share the dropdown glass`).toContain(name)
     }
-    expect(cssSource).not.toContain('--glass-wallpaper-panel-bg')
     const panelRule = /:is\(\.modal-panel,[\s\S]*?\)\s*\{([^}]*)\}/.exec(cssSource)?.[1] ?? ''
-    expect(panelRule).toContain('var(--glass-wallpaper-bg)')
+    // 浮层带正文:清透档(30%)让设置说明直接坐在渐变上,实测不到 3:1。
+    // 76% 是「透得出色相」和「墨字仍有 13:1」之间的那一档;面板再单独加
+    // 一道去彩重模糊,免得背后的青绿直接掺成灰绿。
+    expect(panelRule).toContain('color-mix(in srgb, var(--color-surface) 76%, transparent)')
     expect(panelRule).toContain('var(--glass-wallpaper-edge)')
+    // 常驻卡 / 按钮用更薄的一档 —— 它们大多不承载长正文。
+    expect(cssSource).toContain('var(--glass-wallpaper-bg)')
   })
 
   it('glasses settings tabs without a grey container bar', () => {
@@ -113,11 +117,19 @@ describe('wallpaper glass surface list', () => {
     }
   })
 
-  it('glasses stats, settings and notes content cards without WebGL', () => {
-    for (const name of ['.stats-overview', '.settings-group', '.note-card', '.command-input']) {
-      expect(cssSource, `CSS is missing wallpaper glass for ${name}`).toContain(name)
-    }
-    // 主题预览卡要展示真实纸色,不能被玻璃盖掉。
+  it('glasses stats and note cards without backdrop sampling', () => {
+    const rule =
+      /html\[data-background\][^{]*:is\(\.stats-overview, \.note-card\)\s*\{([^}]*)\}/.exec(
+        cssSource,
+      )?.[1] ?? ''
+    expect(rule).toContain('var(--glass-wallpaper-bg)')
+    expect(rule).toContain('var(--glass-wallpaper-edge)')
+    // 背后是平滑渐变:模糊没有信息量,却会在深色世界采样失败、把卡片刷白。
+    expect(rule).not.toContain('backdrop-filter')
+    // 设置面板里的分组卡是面板内的第二层玻璃(88% + sheen + rim):
+    // 和面板同档会叠成一块实白,做实底又退回一张纸。
+    expect(cssSource).toContain('.settings-group')
+    // 主题预览卡要展示真实纸色,同样不能被玻璃盖掉。
     expect(cssSource).not.toContain('.theme-swatch,')
     const webglRule = /html\[data-glass='webgl'\][^{]*\{/.exec(cssSource)?.[0] ?? ''
     expect(webglRule).not.toContain('.stats-overview')
