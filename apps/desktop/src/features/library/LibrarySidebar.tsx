@@ -276,16 +276,20 @@ export function LibrarySidebar({
           ))}
 
         <div className="lib-sidebar-foot">
-          <button
-            type="button"
-            className="lib-sidebar-item"
-            aria-label={rail ? '云同步' : undefined}
-            title={rail ? '云同步' : undefined}
-            onClick={onOpenSync}
-          >
-            <Cloud size={16} weight="regular" aria-hidden />
-            <span className="lib-sidebar-text">云同步</span>
-          </button>
+          {/* 云同步 = WebDAV 配置 + 系统钥匙串保管密码,浏览器里两样都没有,
+              点开只会得到一句「运行时不可用」;web 端不摆这个入口。 */}
+          {!web && (
+            <button
+              type="button"
+              className="lib-sidebar-item"
+              aria-label={rail ? '云同步' : undefined}
+              title={rail ? '云同步' : undefined}
+              onClick={onOpenSync}
+            >
+              <Cloud size={16} weight="regular" aria-hidden />
+              <span className="lib-sidebar-text">云同步</span>
+            </button>
+          )}
           <button
             type="button"
             className="lib-sidebar-item"

@@ -65,11 +65,21 @@ page.on('pageerror', (error) => pageErrors.push(String(error).slice(0, 200)))
 const shelf = () =>
   page.evaluate(() => {
     const card = document.querySelector('.book-card')
+    // 读过的书会置顶成「继续阅读」卡,网格里不再重复它 —— 两个都算书架条目。
+    const hero = document.querySelector('.continue-reading')
     const fill = card?.querySelector('.book-progress-fill')
     return {
-      count: document.querySelectorAll('.book-card').length,
-      text: card?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 60) ?? null,
-      progress: fill === null || fill === undefined ? null : getComputedStyle(fill).width,
+      count: document.querySelectorAll('.book-card').length + (hero === null ? 0 : 1),
+      text: (card ?? hero)?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 60) ?? null,
+      title:
+        card?.querySelector('.book-meta-title')?.textContent?.trim() ??
+        hero?.querySelector('.continue-reading-title')?.textContent?.trim() ??
+        null,
+      // 网格卡片是进度条宽度;hero 把进度写成文字(读到 N%)。
+      progress:
+        fill === null || fill === undefined
+          ? (hero?.querySelector('.continue-reading-pct')?.textContent?.trim() ?? null)
+          : getComputedStyle(fill).width,
     }
   })
 
@@ -109,7 +119,8 @@ try {
   }
   await page.waitForTimeout(4000) // 保存是防抖的
   await page.reload({ waitUntil: 'networkidle' })
-  await page.waitForSelector('.book-card', { timeout: 30000 })
+  // 读完再回来,这本书已经变成首屏的「继续阅读」卡(网格不再重复它)。
+  await page.waitForSelector('.book-card, .continue-reading', { timeout: 30000 })
   await page.waitForTimeout(3000)
   const withProgress = await shelf()
   check(
@@ -186,10 +197,8 @@ try {
   await page.waitForTimeout(3000)
   const restored = await shelf()
   check('恢复后书架回来了', restored.count === 1, `count=${restored.count}`)
-  // 卡片上的「读到 N%」是恢复之后才有的 —— 所以不能拿文本做全等比较,
-  // 得先把这段进度文字摘掉再比书名。进度本身单独断言(见下一行)。
-  const withoutProgress = (restored.text ?? '').replace(/读到 \d+% · /, '')
-  check('恢复后书名也对', withoutProgress === imported.text, restored.text ?? '')
+  // 恢复之后这本书带进度,于是它是 hero 而不是网格卡 —— 书名从两处任一取。
+  check('恢复后书名也对', restored.title === imported.title, restored.title ?? '')
   check(
     '恢复后进度也回来了(备份把进度一起带过来了)',
     restored.progress !== null && restored.progress !== '0px',

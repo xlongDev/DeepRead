@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { MagnifyingGlass } from '@phosphor-icons/react'
 import { APP_THEMES, type AppTheme } from '@deepread/design-system'
 import { useModalFocus } from '../lib/modal-dialog'
+import { isTauriRuntime } from '../lib/ipc'
 import { shelfTitle, type LibraryView, type ShelfBook } from '../features/library/shelf-view'
 
 interface Command {
@@ -77,7 +78,10 @@ export function CommandBar({
         group: '操作',
         run: onSettings,
       },
-      { id: 'sync', label: '云同步', hint: 'WebDAV', group: '操作', run: onSync },
+      // 云同步要 WebDAV 配置 + 系统钥匙串,浏览器两样都没有。
+      ...(isTauriRuntime()
+        ? [{ id: 'sync', label: '云同步', hint: 'WebDAV', group: '操作', run: onSync }]
+        : []),
       ...APP_THEMES.map((theme) => ({
         id: `theme-${theme.id}`,
         label: `外观:${theme.label}`,

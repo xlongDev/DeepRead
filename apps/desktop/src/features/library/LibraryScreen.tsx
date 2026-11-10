@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Plus } from '@phosphor-icons/react'
+import { BookOpenText, Plus } from '@phosphor-icons/react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
@@ -112,13 +112,22 @@ function needsMetaFor(book: ShelfBook): boolean {
 
 /** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
+/** 只看「最后一次 morph」,见 withViewTransition 收尾处的说明。 */
+let vtToken = 0
+
 /**
  * 视图切换包一层 View Transition:旧态与新态自动交叉淡入(网格↔列表的整排
  * 重排、书架↔笔记的整页换装都吃这个)。不支持的引擎瞬间切换,功能不变。
+ *
+ * `morph` = 同一页内的几何变化(收/展侧栏:排数从 5 变 6)。这类过渡**不要**
+ * root 的整体 cross-fade(页面本身没换,淡一遍只会让整页暗一下),要的是每张
+ * 卡片按自己的名字补间到新列 —— 名字由卡片内联给,`html[data-vt='morph']`
+ * 负责关掉 root 与 grid 的过渡(见 12-a11y-stats.css)。壁纸态的早退不适用于
+ * 它:那条早退是为了不让上一页的文字透过新页玻璃,同页内没有这个问题。
  */
-function withViewTransition(apply: () => void): void {
+function withViewTransition(apply: () => void, morph = false): void {
   const doc = document as Document & {
-    startViewTransition?: (update: () => void) => void
+    startViewTransition?: (update: () => void) => { finished: Promise<void> } | void
   }
   const root = document.documentElement
   // 原生 VT 动画不吃 CSS 里的全局 reduced-motion 兜底,所以在入口就别拍快照。
@@ -131,14 +140,26 @@ function withViewTransition(apply: () => void): void {
   // 壁纸态内容区是半透明玻璃:root 快照的 cross-fade 会让淡出的上一页文字
   // 透过新页玻璃,还会先白一帧再显出渐变。直接换 DOM,由真实页面连续绘制。
   const wallpapered = root.dataset.background !== undefined && root.dataset.background !== 'none'
-  if (doc.startViewTransition === undefined || reduced || wallpapered) {
+  if (doc.startViewTransition === undefined || reduced || (wallpapered && !morph)) {
     apply()
     return
   }
-  doc.startViewTransition(() => {
+  if (morph) root.dataset.vt = 'morph'
+  const token = ++vtToken
+  const transition = doc.startViewTransition(() => {
     // 不 flushSync 的话,快照拍到的还是旧 DOM,过渡就是空转。
     flushSync(apply)
   })
+  // 属性留着会让下一次普通切页也丢掉补间,收尾必须摘掉(被跳过时也走这里)。
+  // 连点两下开关会起第二次过渡并把第一次跳过,那个更早的 finished 不能把属性
+  // 摘掉 —— 否则第二次 morph 退回默认的整体交叉淡入,卡片重新出现双重影。
+  // 另外别假设 startViewTransition 一定有返回值:测试替身就只执行回调。
+  const done = (): void => {
+    if (morph && token === vtToken) delete root.dataset.vt
+  }
+  const finished = transition?.finished
+  if (finished === undefined) done()
+  else void finished.finally(done)
 }
 
 interface LibraryScreenProps {
@@ -320,7 +341,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     setBackground(value)
     setAccent((prev) => (prev.kind === 'custom' ? prev : { kind: 'auto' }))
   }, [])
-  const glassCanvasRef = useGlassRefraction(background, appTheme !== 'pure-white')
   /** Hash waiting for the second click — removing a book drops its progress and annotations. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   /** 正在编辑书籍信息的那一本;null = 弹窗关闭。 */
@@ -346,20 +366,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   // 书架搜索框仍可直接点,但书与命令的入口收敛到同一个地方。
   // 键位来自设置(改键即时生效)。
   const keybindings = useKeybindings()
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey)) return
-      if (keybindings.sidebar !== '' && event.key === keybindings.sidebar) {
-        event.preventDefault()
-        setSidebarOpen((isOpen) => !isOpen)
-      } else if (keybindings.search !== '' && event.key === keybindings.search) {
-        event.preventDefault()
-        setCommandOpen(true)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [keybindings])
   /** 侧栏「我的分组」;与标签筛选叠加生效。 */
   const [smartFilter, setSmartFilter] = useState<SmartFilter>('all')
   const [tagDraft, setTagDraft] = useState('')
@@ -368,12 +374,47 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [view, setView] = useState<LibraryView>('shelf')
 
   /**
+   * 收/展侧栏。差的不只是宽度:内容区一变,书架从 5 列变 6 列(每本卡还同时
+   * 变窄)。交给 View Transition 让每张卡各自补间到新格子,而不是「啪」地跳过去
+   * —— 网格列数没法用 CSS transition 插值,这是唯一能让它连续的方式。
+   * 只有书架页值得拍快照:笔记/统计页没有会换列的东西,那里的 morph 是空转。
+   */
+  const toggleSidebar = useCallback((): void => {
+    withViewTransition(() => setSidebarOpen((isOpen) => !isOpen), view === 'shelf')
+  }, [view])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (keybindings.sidebar !== '' && event.key === keybindings.sidebar) {
+        event.preventDefault()
+        toggleSidebar()
+      } else if (keybindings.search !== '' && event.key === keybindings.search) {
+        event.preventDefault()
+        setCommandOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [keybindings, toggleSidebar])
+
+  /**
    * 视图切换走 View Transition:旧态与新态自动交叉淡入,网格↔列表的整排
    * 重排也有了个过渡。不支持的引擎(旧 WKWebView)瞬间切换,功能不变。
    */
   const changeView = (next: LibraryView): void => {
     withViewTransition(() => setView(next))
   }
+
+  // 折射画布要跟着「哪些玻璃卡在场」重画:切页面(继续阅读卡没了)、侧栏收起
+  // (目标卡变窄)都得重画一次,否则画布留着上一帧的玻璃块 —— 在笔记/统计页
+  // 上就是凭空多出一块浅色(11-10 截图)。依赖放在这里的另一个原因:view /
+  // sidebarOpen 在这里才声明完。
+  const glassCanvasRef = useGlassRefraction(
+    background,
+    appTheme !== 'pure-white',
+    `${view}:${sidebarOpen ? 'open' : 'rail'}`,
+  )
 
   const [stats, setStats] = useState<ReadingStats | null>(null)
   /** 读取失败不是「读了 0 秒」:错误必须与空数据分开,否则统计页在撒谎。 */
@@ -410,7 +451,12 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [notesLoaded, setNotesLoaded] = useState(false)
   const [notesError, setNotesError] = useState<string | null>(null)
 
-  useEffect(() => {
+  // 明暗必须**在布局阶段**落地,不能等 useEffect:壁纸折射画布
+  // (useGlassRefraction)在被动 effect 里用 getComputedStyle 读
+  // `--surface-page` 重画纹理 —— 那会儿若 data-app-theme 还是旧世界,纹理就
+  // 会拿到浅色底,玻璃卡在暗色主题下变成一大块发白的色块(11-10 截图,
+  // 切主题后滚动尤其明显:每次 frame() 都在用那张错的纹理重绘)。
+  useLayoutEffect(() => {
     document.documentElement.dataset['appTheme'] = appTheme
     localStorage.setItem('deepread.app-theme', appTheme)
   }, [appTheme])
@@ -627,7 +673,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
               ) {
                 // 书里什么都没有:下次进书架再试一遍(可能是文件当时不可读)。
                 metaAttempted.delete(book.hash)
-              } else if (isTauriRuntime()) {
+              } else {
+                // 两个平台同一条命令;web 端由 web-handlers 落 IndexedDB,
+                // 不落库的话每次进书架都要重新解析一遍整本书的元数据。
                 try {
                   const response = await invokeCommand('library.info.set', {
                     bookHash: book.hash,
@@ -638,8 +686,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
                 } catch {
                   metaAttempted.delete(book.hash)
                 }
-              } else {
-                metaPatches.set(book.hash, { ...book, ...patch })
               }
             } catch {
               // 单本解析失败不拖垮整批;解除标记,下一轮书架重建会再试。
@@ -956,21 +1002,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   /**
    * 笔记页改批注文字。原地替换、不重排 —— 列表按「新→旧」排,编辑过的条目
    * 严格说该浮到最上,但那样卡片会在用户眼皮底下跳走;下次进笔记页自然归位。
+   * 两个平台同一条命令(浏览器端落 IndexedDB),别只在内存里改。
    */
   const saveNoteEdit = async (entry: NoteEntry, text: string): Promise<void> => {
-    const normalize = (value: string): string | null => {
-      const trimmed = value.trim()
-      return trimmed === '' ? null : trimmed
-    }
-    if (!isTauriRuntime()) {
-      const updated: NoteEntry = {
-        ...entry,
-        note: normalize(text),
-        updatedAt: new Date().toISOString(),
-      }
-      setNotes((current) => current.map((item) => (item.id === entry.id ? updated : item)))
-      return
-    }
     try {
       const response = await invokeCommand('reader.note.update', {
         noteId: entry.id,
@@ -1024,8 +1058,9 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
 
   // 挂载时也取一次批注:书架卡片的「导出批注」图标与侧栏的笔记计数都靠它,
   // 不能等到进笔记页才有数(笔记页进入时下面的 effect 会再刷新一遍)。
+  // 两个平台同一条命令(浏览器端读 IndexedDB),所以不再按运行时早退 ——
+  // 早退的后果是 web 端侧栏笔记计数永远是空的。
   useEffect(() => {
-    if (!isTauriRuntime()) return
     let cancelled = false
     void loadNotes()
       .then((loaded) => {
@@ -1184,7 +1219,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
 
   /** 标签是整组替换:两个平台都落库(桌面 SQLite / 浏览器 IndexedDB)。 */
   const saveTags = async (book: ShelfBook, tags: readonly string[]): Promise<ShelfBook> => {
-    if (!isTauriRuntime()) return { ...book, tags: [...tags] }
     const response = await invokeCommand('library.tag.set', {
       bookHash: book.hash,
       tags: [...tags],
@@ -1340,12 +1374,10 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           publisher: next.publisher === '' ? null : next.publisher,
           language: next.language === '' ? null : next.language,
         }
-        if (isTauriRuntime()) {
-          const response = await invokeCommand('library.info.set', payload)
-          saved = response.book
-        } else {
-          saved = { ...saved, ...payload, displayName: payload.displayName ?? saved.displayName }
-        }
+        // 两个平台同一条命令:浏览器端由 web-handlers 落 IndexedDB,
+        // 只在内存里改的话,刷新一次手填的书名/作者就退回下载站文件名。
+        const response = await invokeCommand('library.info.set', payload)
+        saved = response.book
       }
       if (draft.tags.join('\u0000') !== book.tags.join('\u0000')) {
         saved = await saveTags(saved, draft.tags)
@@ -1440,21 +1472,36 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         跳到主要内容
       </a>
 
-      {/* 没有系统标题栏:这一条盖住窗口顶部,是唯一的拖拽把手 —— 侧栏收起时它还在。 */}
-      <div className="window-drag" data-tauri-drag-region />
+      {/* 没有系统标题栏:这一条盖住窗口顶部,是唯一的拖拽把手 —— 侧栏收起时它还在。
+          浏览器里没有窗口可拖,它只是一条 40px 高的透明遮罩,会吃掉顶栏头 8px 的
+          点击,所以只在桌面端渲染。 */}
+      {isTauriRuntime() && <div className="window-drag" data-tauri-drag-region />}
 
       {/* 开关钉在交通灯右侧(Codex 式),桌面专用;web 端没有交通灯,
-          开关住进品牌行右侧(LibrarySidebar),收起后这里浮一个在左上角。 */}
+          开关住进品牌行右侧(LibrarySidebar),收起后这里浮一枚:**平时是项目
+          logo,悬浮/聚焦才变成折叠图标**(ChatGPT 收起态的同一个动作),所以
+          收起后 chrome 上只剩「我在读什么」,不剩一个随时喊「点我」的控件。 */}
       {(isTauriRuntime() || !sidebarOpen) && (
         <button
           type="button"
           className={`sidebar-toggle${isTauriRuntime() ? '' : ' is-web-float'}`}
-          onClick={() => setSidebarOpen((isOpen) => !isOpen)}
+          onClick={toggleSidebar}
           aria-label={sidebarOpen ? '收起侧栏' : '展开侧栏'}
           aria-expanded={sidebarOpen}
           title={sidebarOpen ? '收起侧栏' : '展开侧栏'}
         >
-          <SidebarToggleIcon expanded={sidebarOpen} />
+          {isTauriRuntime() ? (
+            <SidebarToggleIcon expanded={sidebarOpen} />
+          ) : (
+            <>
+              <span className="library-mark sidebar-toggle-mark" aria-hidden>
+                <BookOpenText size={16} weight="fill" />
+              </span>
+              <span className="sidebar-toggle-glyph" aria-hidden>
+                <SidebarToggleIcon expanded={sidebarOpen} />
+              </span>
+            </>
+          )}
         </button>
       )}
 
@@ -1475,7 +1522,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         onOpenSettings={() => {
           setSettingsOpen(true)
         }}
-        onToggleSidebar={() => setSidebarOpen((isOpen) => !isOpen)}
+        onToggleSidebar={toggleSidebar}
         sidebarOpen={sidebarOpen}
       />
 

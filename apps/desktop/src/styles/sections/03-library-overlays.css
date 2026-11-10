@@ -1010,11 +1010,11 @@
     align-items: stretch;
   }
 
-  /* web 收起后展开钮浮在左上角 (14,24);那边没有交通灯空档(40px 的
-     .lib-sidebar-top 被 is-web 隐藏),不给 rail 补回这段留白,浮钮就会
-     压在第一颗导航图标上。桌面端空档本来就还在,不需要。 */
+  /* web 收起后浮钮是 rail 顶部那颗 48×40 的格子(见 02-library.css 的
+     is-web-float):占 8..48,这里留到 56 才让第一颗导航图标起来 —— 正好
+     8px 间距,和图标之间 4px 的节奏同源。桌面端没有交通灯空档问题就不同了。 */
   .library.is-web .lib-sidebar.is-rail {
-    padding-top: 48px;
+    padding-top: 56px;
   }
 
   /* 品牌行(含 web 端内嵌开关)、分组、标签、目标卡在 rail 里没有意义。

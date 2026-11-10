@@ -14,7 +14,10 @@
   gap: var(--space-24);
   /* 统计图表铺满 1240px 会变成一排宽方块;给页面一个阅读友好的上限。
      margin-inline:auto 不能省 —— 只写 max-width 时页面会贴左,侧栏一
-     折叠右边就空出一条(23:06 截图)。 */
+     折叠右边就空出一条(23:06 截图)。
+     width:100% 同样不能省:列向 flex 的 auto 外边距会让元素收缩到
+     fit-content,实测笔记页只剩 490px / 统计页 629px 的居中窄条。 */
+  width: 100%;
   max-width: 880px;
   margin-inline: auto;
   animation: fade-up var(--duration-base) var(--ease-out);

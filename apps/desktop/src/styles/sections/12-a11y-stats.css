@@ -1039,6 +1039,53 @@ button.parallel-divider:active:not(:disabled) {
   view-transition-name: library-rail;
 }
 
+/* ---------- 「换列」morph:收/展侧栏时的 5 列 ↔ 6 列 ---------- */
+/* 网格列数没法插值(5 条 track 和 6 条之间没有中点),只能让每张卡按自己的
+   view-transition-name(内联在 .book-card 上)从旧格补间到新格。三条约束:
+   ① `.library` 的 grid-template-columns 过渡关掉 —— 否则新快照拍到的是过渡
+      起点(旧宽度),卡片会按错的格子补间;
+   ② root 快照:新的直接顶上、旧的完全不画。整页交叉淡入会让没命名的工具条标题
+      在两个位置各留一个半透明影子;页面本身没换,只需要一次「原地换新」;
+   ③ 侧栏不参与:232 → 64 当成 group 补间会把旧侧栏压扁(文字挤进 64px 里),
+      比直接到位难看得多。撤掉名字让它跟着 root 快照一次到位 —— 换列的主角是
+      书,不是 chrome。 */
+:root[data-vt='morph'] .library {
+  transition: none;
+}
+
+:root[data-vt='morph'] .lib-sidebar {
+  view-transition-name: none;
+}
+
+:root[data-vt='morph']::view-transition-old(root) {
+  animation: none;
+  opacity: 0;
+}
+
+:root[data-vt='morph']::view-transition-new(root) {
+  animation: none;
+}
+
+/* 卡片自己的交叉淡入要**快**:旧快照是同一张卡在旧位置上的复制品,淡得慢就是
+   双重影。110ms 换完,剩下的时间交给位移,读起来是「这张卡自己滑过去」。
+   (不能把 old 直接 `display: none`:Chrome 的 new 快照走 plus-lighter 混合,
+   少了 old 当底会整片发白。)
+   时长跟 `--duration-base` 走;缓动改不动 —— Chrome 的 UA keyframes 里是
+   linear,`animation-timing-function` 覆盖不了。 */
+:root[data-vt='morph']::view-transition-old(*),
+:root[data-vt='morph']::view-transition-new(*) {
+  animation-duration: 110ms;
+}
+
+:root[data-vt='morph']::view-transition-group(*) {
+  animation-duration: var(--duration-base);
+}
+
+/* 焦点卡（继续阅读）也在换列:它没有 hash,给一个固定名字。 */
+.continue-reading {
+  view-transition-name: shelf-continue;
+}
+
 /* ---------- W4: 高对比偏好与强制颜色(组件级) ---------- */
 /* **变量覆盖必须写在 unlayered 的 tokens.css**:这里属于 legacy 层,层顺序
    优先于特异性,同一 :root 在 layer 里永远压不过 unlayered 的声明(项目踩过

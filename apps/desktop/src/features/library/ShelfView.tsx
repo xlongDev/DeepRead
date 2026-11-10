@@ -484,7 +484,13 @@ export function ShelfView({
                 <li
                   key={book.hash}
                   className={`book-card${isSelected ? ' is-selected' : ''}`}
-                  style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
+                  /* 收/展侧栏时换列:每本书起一个自己的 view-transition 名字,
+                     浏览器才会把它从旧格子补间到新格子(见 withViewTransition
+                     的 morph 分支)。名字用 hash,唯一且跨渲染稳定。 */
+                  style={{
+                    animationDelay: `${Math.min(index, 8) * 40}ms`,
+                    viewTransitionName: `book-${book.hash}`,
+                  }}
                 >
                   <div className="book-cover-shell">
                     <button

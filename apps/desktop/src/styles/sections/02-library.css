@@ -109,13 +109,63 @@
   position: relative;
   z-index: 5;
   margin-left: auto;
+  /* 基类是 fixed + top/left;relative 下两者变成相对偏移,会把按钮整个推出
+     侧栏右缘(overflow:hidden 直接裁掉 —— 这就是 web 端「没有折叠按钮」)。
+     回到 auto,位置交给 flex 的 margin-left。 */
+  top: auto;
+  left: auto;
 }
 
+/* 收起态浮钮:与 rail 的图标列**同一条轴线**。rail 宽 64、padding-inline 8、
+   条目 48 宽居中 → 图标中心 x=32;这颗也是 48 宽的方块,left 取同一个 8。
+   以前写 left:14 + 30 宽(中心 29),并且顶到第一颗图标上 —— 看着像歪了
+   一格(ChatGPT 的 rail 顶部也是这个 48 的格子)。 */
 .sidebar-toggle.is-web-float {
-  /* 收起后浮钮的中心(y 38)与品牌行里那颗的中心完全一致 —— 实测校准,
-     切换展开/收起时按钮不上下跳。 */
-  top: 24px;
-  left: 14px;
+  top: 8px;
+  left: var(--space-8);
+  width: 48px;
+  height: 40px;
+  border-radius: var(--radius-control);
+  /* 两个图层叠在同一格:logo 与折叠图标互相换,位置不动。 */
+  display: grid;
+  place-items: center;
+}
+
+/* 收起态的常态 = 项目 logo(与品牌行里那颗同一个 mark),悬浮/聚焦才露出
+   折叠图标。两层都用 opacity + scale,不给 display 切换 —— 那是硬的,
+   中间没有过渡。 */
+.sidebar-toggle-mark,
+.sidebar-toggle-glyph {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    scale var(--duration-fast) var(--ease-out);
+}
+
+.sidebar-toggle-glyph {
+  opacity: 0;
+  scale: 0.85;
+}
+
+.sidebar-toggle.is-web-float:hover .sidebar-toggle-mark,
+.sidebar-toggle.is-web-float:focus-visible .sidebar-toggle-mark {
+  opacity: 0;
+  scale: 0.85;
+}
+
+.sidebar-toggle.is-web-float:hover .sidebar-toggle-glyph,
+.sidebar-toggle.is-web-float:focus-visible .sidebar-toggle-glyph {
+  opacity: 1;
+  scale: 1;
+}
+
+/* logo 自己带一层渐变底 + 阴影,悬浮时不该跟着按钮再深一档;只让图标那颗
+   读按钮的底色,和 rail 里的导航项同一套反馈。 */
+.sidebar-toggle.is-web-float:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
 }
 
 .library.is-web .lib-sidebar-top {

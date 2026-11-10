@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react'
 import type { BackgroundChoice } from '@deepread/design-system'
-import { createRefraction, type GlassSurface } from './refract.js'
+import { createRefraction, type GlassRefraction, type GlassSurface } from './refract.js'
 import { paintWallpaper } from './wallpaper-canvas'
 
 /** 与 13-glass-wallpaper.css 的三块常驻卡片逐字一致;refract.js 最多画 8 块。 */
@@ -13,12 +13,20 @@ export const GLASS_SURFACE_SELECTOR = '.lib-sidebar-goal, .continue-reading, .sh
  * 静态壁纸只画一帧。滚动期间绝不逐帧重画全屏 shader:surfaces() 里的
  * getBoundingClientRect + getComputedStyle 会触发强制同步布局,叠加 WebGL
  * 绘制正是首页卡顿的来源。滚动停下来后合并成一次 frame() 补齐位置。
+ *
+ * `surfaceKey` 变了(切页面 / 开合侧栏 —— 玻璃卡换了位置甚至整批消失)就重画:
+ * 画布不会自己擦掉,旧的一帧会留在原地,在笔记/统计页上表现为「继续阅读卡
+ * 那么大的一块浅色」(11-10 截图)。滚动会顺带补一次,但只在滚动位置真的变了
+ * 的时候 —— 别指望它。
  */
 export function useGlassRefraction(
   choice: BackgroundChoice,
   dark: boolean,
+  surfaceKey: string,
 ): RefObject<HTMLCanvasElement | null> {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  /** 当前那一份折射实例:换页时只让它重画一帧,不用重编译 shader。 */
+  const refractionRef = useRef<GlassRefraction | null>(null)
 
   useEffect(() => {
     const root = document.documentElement
@@ -71,6 +79,7 @@ export function useGlassRefraction(
       return
     }
     root.dataset.glass = 'webgl'
+    refractionRef.current = refraction
     refraction.setEnabled(true)
     refraction.frame()
 
@@ -93,9 +102,21 @@ export function useGlassRefraction(
       window.removeEventListener('resize', onResize)
       window.removeEventListener('scroll', onScroll, true)
       refraction.setEnabled(false)
+      refractionRef.current = null
       root.removeAttribute('data-glass')
     }
   }, [choice, dark])
+
+  // 玻璃卡换位置了(切页面 / 侧栏收起展开):画布不会自己擦,旧的一帧会留在
+  // 原地 —— 在笔记/统计页上就是凭空一块「继续阅读卡」形状的浅色。滚动会顺带
+  // 补一次,但只在滚动位置真的变了的时候,别指望它。
+  // 记下已经画过的 key,挂载那次不必再补一帧。
+  const paintedKey = useRef<string | null>(null)
+  useEffect(() => {
+    if (paintedKey.current === surfaceKey) return
+    paintedKey.current = surfaceKey
+    refractionRef.current?.frame()
+  }, [surfaceKey])
 
   return canvasRef
 }

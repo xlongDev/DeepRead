@@ -122,19 +122,28 @@ function notFound(what: string): AppError {
   return new AppError(ErrorCodes.systemValidation, what, { retryable: false })
 }
 
-/** 进度是 states join 出来的,不落 books —— 两处存同一个事实迟早会不一致。 */
+/** 进度与「上次在读」都从 states 现算,不落 books —— 与 Rust 的 LEFT JOIN 同构。
+ *  `lastReadAt` 取 `state.updatedAt`(Rust 侧是 `progress.updated_at`);缺了它
+ *  书架永远挑不出「继续阅读」那本。 */
+function stateColumns(
+  state: ReaderStatePayload | undefined,
+): Pick<LibraryBook, 'progress' | 'lastReadAt'> {
+  return {
+    progress: state?.progress?.fraction ?? null,
+    lastReadAt: state?.progress === null || state?.progress === undefined ? null : state.updatedAt,
+  }
+}
+
 async function withProgress(book: StoredBook): Promise<LibraryBook> {
   const state = await getStoredState(book.hash)
-  return { ...book, progress: state?.progress?.fraction ?? null }
+  return { ...book, ...stateColumns(state) }
 }
 
 async function listBooks(): Promise<LibraryBook[]> {
   const [books, states] = await Promise.all([listStoredBooks(), listStoredStates()])
-  const fractionByHash = new Map(
-    states.map((state) => [state.hash, state.progress?.fraction ?? null]),
-  )
+  const stateByHash = new Map(states.map((state) => [state.hash, state]))
   return books
-    .map((book) => ({ ...book, progress: fractionByHash.get(book.hash) ?? null }))
+    .map((book) => ({ ...book, ...stateColumns(stateByHash.get(book.hash)) }))
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt))
 }
 

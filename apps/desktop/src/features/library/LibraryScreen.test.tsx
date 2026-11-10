@@ -343,6 +343,36 @@ describe('LibraryScreen 外壳契约', () => {
     }
   })
 
+  it('收/展侧栏走 morph:拍快照、挂 data-vt,过渡结束摘掉', async () => {
+    let finish: () => void = () => {}
+    const startViewTransition = vi.fn((update: () => void) => {
+      update()
+      return {
+        finished: new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+      }
+    })
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: startViewTransition,
+    })
+    try {
+      await renderLibrary()
+      fireEvent.click(screen.getByLabelText('收起侧栏'))
+      expect(startViewTransition).toHaveBeenCalledTimes(1)
+      // 属性必须在过渡期间挂着:12-a11y-stats.css 靠它关掉 root 交叉淡入。
+      expect(document.documentElement.dataset['vt']).toBe('morph')
+      finish()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      // 留着的话,下一次普通切页会连拍子带 grid 过渡一起丢掉。
+      expect(document.documentElement.dataset['vt']).toBeUndefined()
+    } finally {
+      Reflect.deleteProperty(document, 'startViewTransition')
+      delete document.documentElement.dataset['vt']
+    }
+  })
+
   it('skip link 是第一个可聚焦元素,落点是主内容', async () => {
     await renderLibrary()
     const link = document.querySelector('.skip-link')
