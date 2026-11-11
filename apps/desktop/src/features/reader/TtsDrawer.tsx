@@ -384,7 +384,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     // 桌面悬浮条(第二个 webview)没有 60ms ticker:句内进度的实时比例在
     // 这里留一份镜像,状态快照时推给它。
     barPosRef.current = fraction
-    if (miniFillRef.current) miniFillRef.current.style.width = `${fraction * 100}%`
+    if (miniFillRef.current) miniFillRef.current.style.transform = `scaleX(${fraction})`
     if (seekInputRef.current) seekInputRef.current.value = String(Math.round(fraction * 1000))
     const cps = CHARS_PER_SECOND * settingsRef.current.rate
     if (elapsedClockRef.current)
@@ -968,107 +968,136 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           ? '全书结束'
           : `${settings.timerMinutes} 分钟`
 
-  // 迷你播放条:悬浮在底栏上方,不打断阅读。快捷键位:上一句 / 播放(强调) /
-  // 下一句 / 展开完整播放器 / 最小化到桌面 / 停止关闭。合成中第二行给波形
-  // 动画,出错给错误行,平时是进度条。点击整体区域展开。
+  // 迷你条第二行与桌面悬浮条同一句:章节 · 状态/剩余时间。
+  let miniStatus: string
+  if (phase === 'idle') miniStatus = '按 ▶ 开始朗读'
+  else if (phase === 'loading' || booting) miniStatus = '合成中'
+  else if (phase === 'playing') miniStatus = `剩余 ${formatClock(remaining)}`
+  else miniStatus = `已暂停 · ${formatClock(remaining)}`
+
+  // 迷你播放条:落在书页下留白里(见 .tts-mini-float),形状并进顶栏的 chrome
+  // 家族(44px / 34px 按钮 / 16px 图标 / .chrome-group 分组)。圆盘封面 +
+  // 书名/章节·剩余两行,进度是贴底边的发丝。点封面或文字展开。
   if (shown === 'mini') {
     return (
       <section
         className={`tts-mini tts-mini-float${leaving ? ' is-leaving' : ''}`}
         aria-label="朗读迷你条"
       >
-        {coverUrl ? (
-          <img src={coverUrl} className="tts-mini-cover" alt="" />
-        ) : (
-          <span className="tts-mini-cover tts-cover-fallback" aria-hidden>
-            {bookTitle.charAt(0)}
-          </span>
+        {/* 旧的波形带着「正在合成语音」的 live 标签,换成文字状态行后留一个
+            等价的播报点,别让读屏用户只看到「合成中」却没有通知。 */}
+        {(phase === 'loading' || booting) && (
+          <output className="visually-hidden">正在合成语音</output>
         )}
-        <button type="button" className="tts-mini-open" onClick={onExpand} title="展开播放器">
-          <span className="tts-mini-title">{bookTitle}</span>
-          {error !== null ? (
-            <span className="tts-mini-error">{error}</span>
-          ) : phase === 'loading' || booting ? (
-            <span className="tts-mini-wave" aria-label="正在合成语音" aria-live="polite">
-              <span aria-hidden />
-              <span aria-hidden />
-              <span aria-hidden />
-            </span>
-          ) : (
-            <span className="tts-mini-progress">
-              <span
-                ref={miniFillRef}
-                className="tts-mini-progress-fill"
-                style={{ width: `${sentenceProgress * 100}%` }}
-              />
-            </span>
-          )}
-        </button>
+        {/* 第一组也挂 .chrome-group:与顶栏共用「组间 8px + 18px 发丝线」,
+            不再手画一条 .tts-mini-divider。 */}
         <button
           type="button"
-          className="tts-mini-btn"
-          onClick={() => jumpSentences(-1)}
-          disabled={phase === 'idle'}
-          title="上一句"
-          aria-label="上一句"
-        >
-          <CaretLeft size={14} weight="bold" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="tts-mini-btn tts-mini-play"
-          onClick={toggle}
-          title={phase === 'playing' ? '暂停' : phase === 'paused' ? '继续' : '播放'}
-          aria-label={phase === 'playing' ? '暂停' : '播放'}
-        >
-          {phase === 'playing' ? (
-            <Pause size={16} weight="fill" aria-hidden />
-          ) : (
-            <Play size={16} weight="fill" aria-hidden />
-          )}
-        </button>
-        <button
-          type="button"
-          className="tts-mini-btn"
-          onClick={() => jumpSentences(1)}
-          disabled={phase === 'idle'}
-          title="下一句"
-          aria-label="下一句"
-        >
-          <CaretRight size={14} weight="bold" aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="tts-mini-btn"
+          className="tts-mini-open chrome-group"
           onClick={onExpand}
-          title="展开完整播放器"
-          aria-label="展开完整播放器"
+          title="展开播放器"
         >
-          <CornersOut size={14} weight="regular" aria-hidden />
+          {coverUrl ? (
+            <img src={coverUrl} className="tts-mini-cover" alt="" />
+          ) : (
+            <span className="tts-mini-cover tts-cover-fallback" aria-hidden>
+              {bookTitle.charAt(0)}
+            </span>
+          )}
+          <span className="tts-mini-text">
+            <span className="tts-mini-title">{bookTitle}</span>
+            <span className="tts-mini-sub">
+              {error !== null ? (
+                <span className="tts-mini-error">{error}</span>
+              ) : (
+                <>
+                  <span className="tts-mini-section">{sectionLabel ?? '当前章节'}</span>
+                  <span className="tts-mini-dot" aria-hidden>
+                    ·
+                  </span>
+                  <span className="tts-mini-clock">{miniStatus}</span>
+                </>
+              )}
+            </span>
+          </span>
         </button>
-        {/* 最小化到桌面:主窗口退下去,听书交给桌面悬浮条 —— 悬浮条的去留
-            由 desktop-bar 的 tick 接管(最小化即出现,回来即退场)。浏览器
-            运行时没有窗口可最小化,按钮干脆不画。 */}
-        {isTauriRuntime() && (
+        <div className="chrome-group">
           <button
             type="button"
             className="tts-mini-btn"
-            onClick={minimizeToDesktop}
-            title="最小化到桌面"
-            aria-label="最小化到桌面"
+            onClick={() => jumpSentences(-1)}
+            disabled={phase === 'idle'}
+            title="上一句"
+            aria-label="上一句"
           >
-            <PictureInPicture size={14} weight="regular" aria-hidden />
+            <CaretLeft size={16} weight="bold" aria-hidden />
           </button>
-        )}
-        <button
-          type="button"
-          className="tts-mini-btn"
-          onClick={onClose}
-          title="停止并关闭"
-          aria-label="停止并关闭"
-        >
-          <X size={14} weight="regular" aria-hidden />
-        </button>
+          <button
+            type="button"
+            className="tts-mini-btn tts-mini-play"
+            onClick={toggle}
+            title={phase === 'playing' ? '暂停' : phase === 'paused' ? '继续' : '播放'}
+            aria-label={phase === 'playing' ? '暂停' : '播放'}
+          >
+            {phase === 'playing' ? (
+              <Pause size={16} weight="fill" aria-hidden />
+            ) : (
+              <Play size={16} weight="fill" aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
+            className="tts-mini-btn"
+            onClick={() => jumpSentences(1)}
+            disabled={phase === 'idle'}
+            title="下一句"
+            aria-label="下一句"
+          >
+            <CaretRight size={16} weight="bold" aria-hidden />
+          </button>
+        </div>
+        <div className="chrome-group">
+          <button
+            type="button"
+            className="tts-mini-btn"
+            onClick={onExpand}
+            title="展开完整播放器"
+            aria-label="展开完整播放器"
+          >
+            <CornersOut size={16} weight="regular" aria-hidden />
+          </button>
+          {/* 最小化到桌面:主窗口退下去,听书交给桌面悬浮条 —— 悬浮条的去留
+              由 desktop-bar 的 tick 接管(最小化即出现,回来即退场)。浏览器
+              运行时没有窗口可最小化,按钮干脆不画。 */}
+          {isTauriRuntime() && (
+            <button
+              type="button"
+              className="tts-mini-btn"
+              onClick={minimizeToDesktop}
+              title="最小化到桌面"
+              aria-label="最小化到桌面"
+            >
+              <PictureInPicture size={16} weight="regular" aria-hidden />
+            </button>
+          )}
+          <button
+            type="button"
+            className="tts-mini-btn"
+            onClick={onClose}
+            title="停止并关闭"
+            aria-label="停止并关闭"
+          >
+            <X size={16} weight="regular" aria-hidden />
+          </button>
+        </div>
+        {/* 句内进度走 60ms ticker 直写 transform,贴胶囊底边,不占文字行。 */}
+        <span className="tts-mini-rail" aria-hidden>
+          <span
+            ref={miniFillRef}
+            className="tts-mini-rail-fill"
+            style={{ transform: `scaleX(${sentenceProgress})` }}
+          />
+        </span>
       </section>
     )
   }

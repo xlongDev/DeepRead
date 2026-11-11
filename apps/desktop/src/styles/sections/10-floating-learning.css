@@ -71,22 +71,46 @@
 }
 
 /* ---------- 应用内的迷你播放条(信息胶囊) ---------- */
-/* 阅读器里悬浮的信息胶囊:盖在底栏上方、不打断阅读(激活时底栏让位,见
-   文末 .reader.tts-mini-active 规则),书籍排版零改动(无收缩、无重排)。
-   与桌面悬浮条共用 .tts-mini 基座,定位与内部布局是这一使用方专属的,
-   全部收在本作用域里。 */
+/* 阅读器里的「正在播放」条:**贴窗口底边 16px,即原底栏的位置**。
+   内核给书页留了 72px 上下边距(engine.ts 的 paginator margin),胶囊 44px
+   高 → 顶边距底 60px,整条都落在留白里,一个字都盖不住;旧的 bottom:64px
+   + 58px 高把顶边推到 122px,正文最后两行正被压在玻璃下面。
+   激活时底栏让位(见文末 .reader.tts-mini-active 规则),书籍排版零改动
+   (无收缩、无重排)。
+
+   形状与顶栏同家族(11-11):44px = 34px 按钮 + 上下 5px padding,组间 8px
+   与组内 2px 走 .chrome-group,组间 18px 发丝线由它自动画;边缘用
+   --glass-edge 三层边而不是 --shadow-floating 软投影 —— 顶栏是「贴在纸上的
+   玻璃」,迷你条不该像一块浮起来的牌。所有手术只落在本作用域,共用基座
+   .tts-mini 留给桌面悬浮条。 */
 .tts-mini-float {
   position: fixed;
   left: 50%;
-  bottom: 64px;
+  bottom: max(16px, env(safe-area-inset-bottom));
   /* 居中走 translate 独立属性:scale-pop 等动画写在 transform 上,两套
      属性互不覆盖 —— 入场动画期间胶囊不会跳回「左缘贴中线」。 */
   translate: -50% 0;
   z-index: 12;
-  gap: 6px;
-  padding: 8px 10px;
-  max-width: min(620px, calc(100vw - 32px));
+  gap: var(--space-8);
+  min-height: 44px;
+  padding: 5px;
+  /* 边缘交给 --glass-edge 画(内含 0 0 0 1px 发丝),不再叠一层 border box。 */
+  border: 0;
+  box-shadow: var(--glass-edge);
+  max-width: min(560px, calc(100vw - 32px));
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* 触屏下按钮放到 42px(12-a11y-stats.css),整条长到 52px,顶边 68px
+   仍在 72px 留白内。reduced-transparency 下用纸的实色,不是 app 主题的
+   --color-surface(夜间纸 + 浅色界面会白底白字);--glass-edge 在 tokens
+   里已换成实发丝线,这一档仍保留可见边缘。 */
+@media (prefers-reduced-transparency: reduce) {
+  .tts-mini-float {
+    background: var(--reader-panel-solid, var(--color-surface));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 /* 完整播放器 → 迷你条(或反向):旧形态退场,新形态靠自身的 scale-pop 接棒。
@@ -104,50 +128,66 @@
   }
 }
 
-/* 内部布局:封面在左,右列「书名 + 进度/波形/错误」两行 —— 比桌面悬浮条
-   (封面与文字横排)信息密度更高的一版,留给阅读器内。 */
+/* 内部布局与桌面悬浮条同构:圆盘封面 + 「书名 / 章节·剩余」两行文字,
+   整块是展开播放器的按钮,同时挂 .chrome-group 当第一组(与顶栏共用分组
+   发丝线)。圆盘比 30×40 的方书封矮 10px;书封在 30px 上本来就只作识别,
+   裁成唱片不丢信息。gap 8px 要写在这里压住 .chrome-group 的组内 2px。 */
 .tts-mini-float .tts-mini-open {
-  flex-direction: column;
-  gap: 4px;
-  padding: 2px 6px 2px 2px;
+  flex-direction: row;
+  gap: 8px;
+  padding: 0 6px 0 0;
 }
 
 .tts-mini-float .tts-mini-cover {
   width: 30px;
-  height: 40px;
-  border-radius: 4px;
-  border: 1px solid var(--color-border);
-}
-
-.tts-mini-float .tts-mini-title {
-  max-width: 300px;
-}
-
-.tts-mini-float .tts-mini-error {
-  color: var(--color-text-tertiary);
-  max-width: 300px;
-}
-
-/* 走带按钮:30px 幽灵圆,播放/暂停是唯一的强调位(大一号实心圆)。 */
-.tts-mini-float .tts-mini-btn {
-  width: 30px;
   height: 30px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 18%, transparent);
+}
+
+/* 书名与顶栏 .reader-title 同为 13px;副行是一行注脚,不另起一档字号。 */
+.tts-mini-float .tts-mini-title {
+  max-width: 200px;
+  font-size: var(--font-size-sm);
+}
+
+/* 副行是 11px 小字:基座的 60% 前景色在浅纸上只有 ~3.4:1,过不了 AA。
+   按纸的墨色重算,不跟 app 主题走(夜间纸 + 浅色界面是合法组合)。 */
+.tts-mini-float .tts-mini-sub {
+  color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 78%, transparent);
+}
+
+/* 错误行也按纸的墨色走:app 主题的 tertiary 在「夜间纸 + 浅色界面」下
+   会变成深灰字落在深玻璃上。文案本身说明问题,不靠红色再喊一遍。 */
+.tts-mini-float .tts-mini-error {
+  color: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 88%, transparent);
+  max-width: 220px;
+}
+
+/* 走带按钮与顶栏 .chrome-button 同尺寸(34px)、同 hover(淡底 + accent 字)。
+   播放/暂停仍是唯一的强调位,但只靠实心填充,不靠比邻居大一圈 —— 层级走
+   颜色,和底栏「两档墨色不用字号」是同一句话。 */
+.tts-mini-float .tts-mini-btn {
+  width: 34px;
+  height: 34px;
   opacity: 1;
 }
 
 .tts-mini-float .tts-mini-btn:hover:not(:disabled) {
-  background: transparent;
-  filter: brightness(1.08);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
-/* 播放键的强调底色不能被上面的通用 hover 透明掉。 */
+/* 播放键的实心底不能被上面的通用 hover 淡掉。 */
 .tts-mini-float .tts-mini-btn.tts-mini-play:hover:not(:disabled) {
   background: var(--color-accent);
+  color: var(--color-on-accent);
+  filter: brightness(1.06);
 }
 
 .tts-mini-float .tts-mini-btn.tts-mini-play {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   margin: 0;
   box-shadow: none;
 }
@@ -157,58 +197,14 @@
   background: transparent;
 }
 
-/* 进度条:3px 发丝;合成中换成三根呼吸的声波(与完整播放器同一语言)。 */
-.tts-mini-progress {
-  display: block;
-  width: 100%;
-  height: 3px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 15%, transparent);
-  overflow: hidden;
+/* 进度贴胶囊底边(桌面悬浮条的 .tts-mini-rail 同一句):2px 发丝,不再占
+   文字第二行 —— 那一行让给章节与剩余时间。60ms ticker 直写 transform,
+   再挂桌面条的 240ms 过渡只会一路追不上,这里关掉。 */
+.tts-mini-float .tts-mini-rail-fill {
+  transition: none;
 }
 
-.tts-mini-progress-fill {
-  display: block;
-  height: 100%;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-  transition: width var(--duration-slow) var(--ease-out);
-}
-
-.tts-mini-wave {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 12px;
-  padding: 1px 0;
-}
-
-.tts-mini-wave span {
-  width: 3px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent);
-  animation: tts-mini-bounce 0.9s ease-in-out infinite;
-}
-
-.tts-mini-wave span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.tts-mini-wave span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes tts-mini-bounce {
-  0%,
-  100% {
-    height: 30%;
-  }
-  50% {
-    height: 100%;
-  }
-}
-
-/* 迷你条激活时隐藏阅读底栏,避免堆叠。 */
+/* 迷你条在场时底栏让出自己的位置:两条居中胶囊绝不叠在正文里。 */
 .reader.tts-mini-active .reader-bottom {
   display: none;
 }

@@ -534,8 +534,9 @@ export function ReaderScreen({
    */
   const ttsMounted = openPanel === 'tts' || ttsActive || ttsSession
   /** mini 播放条(信息胶囊)此刻在场吗(会话活着、且没展开成完整面板)。
-   *  与传给抽屉的 minimized 是同一个式子 —— 两者严格同帧。胶囊悬浮在
-   *  底栏上方(见 global.css .tts-mini-float),不为它收缩或重排书页。 */
+   *  与传给抽屉的 minimized 是同一个式子 —— 两者严格同帧。胶囊落在书页
+   *  下留白里、占原底栏的位置(见 .tts-mini-float),不为它收缩或重排书页;
+   *  tts-mini-active 必须跟着这个值走,否则底栏和胶囊会叠成一摞。 */
   const ttsMiniVisible = ttsMounted && (ttsMinimized || openPanel !== 'tts')
   const [ttsCoverUrl, setTtsCoverUrl] = useState<string | null>(
     () => ttsCoverCache.get(book.hash) ?? null,
@@ -2312,7 +2313,7 @@ export function ReaderScreen({
       <div
         className={`reader${pane === undefined ? '' : ' reader-embedded'}${
           chromeVisible || openPanel !== null ? ' chrome-visible' : ''
-        }${ttsActive && ttsMinimized ? ' tts-mini-active' : ''}`}
+        }${ttsMiniVisible ? ' tts-mini-active' : ''}`}
         onPointerDown={() => {
           showChrome()
           // 一栏里任何一次按下都切换活动栏:与「窗口聚焦」同一个直觉,

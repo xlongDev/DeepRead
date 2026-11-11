@@ -97,6 +97,10 @@ if (isTauriRuntime()) {
   // 事件桥)listen 会 reject —— void 掉的 rejection 会以 unhandled error
   // 的形式把 vitest 整轮判红,监听失败本身不值得让应用炸。
   void listen<TtsBarControl>(BAR_CONTROL_EVENT, (event) => {
+    // 「停止并关闭」在控制入口这一侧就收窗:事件还要转给 TtsDrawer 的
+    // onClose,而 onClose 会同帧卸掉 TtsDrawer —— 窗口的去留不能指望它
+    // 那个 sessionLive effect 恰好跑一帧 idle。点 × 必须立刻见效。
+    if (event.payload === 'stop') desktopBarWatch(false)
     onControl?.(event.payload)
   }).catch(() => {})
   void listen(BAR_READY_EVENT, () => {
@@ -152,7 +156,15 @@ async function closeBar(): Promise<void> {
   const current = bar
   bar = null
   if (current === null) return
-  await current.close().catch(() => {})
+  try {
+    await current.close()
+  } catch {
+    // close 被权限/窗口状态拒绝时原来只是 .catch(() => {}) —— 条会赖在
+    // 桌面上,而且引用已丢,再也关不掉。至少先隐藏,并把引用放回去,
+    // 下次起播复用(同名 label 不能建第二个窗口)。
+    await current.hide().catch(() => {})
+    bar ??= current
+  }
 }
 
 async function tick(): Promise<void> {
@@ -181,6 +193,11 @@ export function desktopBarWatch(active: boolean): void {
   wanted = active
   if (!active) {
     dismissed = false
+    // 会话没了就别再每 400ms 轮询窗口状态;卸载点也未必会再跑一次 tick。
+    if (ticker !== null) {
+      clearInterval(ticker)
+      ticker = null
+    }
     void closeBar()
     return
   }

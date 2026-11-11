@@ -101,6 +101,7 @@ beforeEach(() => {
   h.win.show.mockClear()
   h.win.hide.mockClear()
   h.win.close.mockClear()
+  h.win.close.mockImplementation(async () => {})
   h.win.isVisible.mockClear()
   h.win.isVisible.mockImplementation(async () => false)
   h.win.setPosition.mockClear()
@@ -183,6 +184,39 @@ describe('桌面悬浮条接线', () => {
 
     expect(h.win.close).toHaveBeenCalledTimes(1)
     expect(h.win.hide).not.toHaveBeenCalled()
+  })
+
+  it('点「停止并关闭」:控制事件一到达就收窗,不等 TtsDrawer 卸载', async () => {
+    main.isMinimized.mockImplementation(async () => true)
+    desktopBarWatch(true)
+    await flush()
+    expect(h.instances).toHaveLength(1)
+
+    // stop 是悬浮条 × 发出的;onClose 会同帧卸掉 TtsDrawer,窗口去留不能
+    // 依赖它那个 sessionLive effect 跑一帧 idle。
+    events.listeners.get(BAR_CONTROL_EVENT)?.({ payload: 'stop' })
+    await flush()
+
+    expect(h.win.close).toHaveBeenCalledTimes(1)
+    // ticker 也停了:主窗口仍最小化时不会把条又 show 回来。
+    await flush()
+    expect(h.win.show).toHaveBeenCalledTimes(1)
+  })
+
+  it('close 被拒绝了也要从桌面消失,且不能丢掉窗口引用', async () => {
+    main.isMinimized.mockImplementation(async () => true)
+    desktopBarWatch(true)
+    await flush()
+    h.win.close.mockRejectedValueOnce(new Error('core:window:allow-close missing'))
+
+    desktopBarWatch(false)
+    await flush()
+
+    expect(h.win.hide).toHaveBeenCalledTimes(1)
+    // 同名 label 不能建第二个窗口:下次起播复用隐藏的那个。
+    desktopBarWatch(true)
+    await flush()
+    expect(h.instances).toHaveLength(1)
   })
 
   it('「收起」只是这一次不打扰:主窗口回来后还能再来', async () => {
