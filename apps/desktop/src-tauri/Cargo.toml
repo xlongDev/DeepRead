@@ -23,18 +23,18 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 # Already in the lock file (transitive); cover bytes travel as base64 over IPC.
-base64 = "0.22"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+base64 = "0.23"
+keyring = "4"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1", features = ["time", "net", "macros", "rt"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 # 0.42 起底层换成 libsqlite3-sys 0.40:RUSTSEC-2026-0459(C SQLite
 # CVE-2026-119375)要求 >=0.39,0.37 那代的 ^0.35 无法单独升级。
 rusqlite = { version = "0.42", features = ["bundled", "backup"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-quick-xml = { version = "0.41.0", default-features = false }
+quick-xml = { version = "0.42.0", default-features = false }
 ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }

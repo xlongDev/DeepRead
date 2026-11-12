@@ -781,15 +781,15 @@ fn propfind_hrefs(body: &str) -> Vec<String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(tag)) => {
-                current = (tag.local_name().as_ref() == b"href").then(String::new);
+                current = (tag.local_name().as_ref() == "href").then(String::new);
             }
             Ok(Event::Text(text)) => {
-                if let (Some(buf), Ok(decoded)) = (current.as_mut(), text.xml10_content()) {
-                    buf.push_str(&decoded);
+                if let Some(buf) = current.as_mut() {
+                    buf.push_str(&text.xml10_content());
                 }
             }
             Ok(Event::GeneralRef(reference)) => {
-                let name = String::from_utf8_lossy(reference.as_ref()).into_owned();
+                let name = reference.as_ref().to_owned();
                 let decoded = quick_xml::escape::unescape(&format!("&{name};"))
                     .map(|decoded| decoded.into_owned());
                 if let Some(buf) = current.as_mut() {
@@ -798,7 +798,7 @@ fn propfind_hrefs(body: &str) -> Vec<String> {
             }
             Ok(Event::CData(text)) => {
                 if let Some(buf) = current.as_mut() {
-                    buf.push_str(&String::from_utf8_lossy(text.as_ref()));
+                    buf.push_str(text.as_ref());
                 }
             }
             Ok(Event::End(_)) => {

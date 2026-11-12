@@ -129,16 +129,12 @@ describe('PdfScrollStrip', () => {
     expect(iframes[0]!.getAttribute('scrolling')).toBe('no')
 
     // load 之后:iframe 按缩放尺寸撑开、onZoom 拿到同一缩放、页文档交给上层。
-    const doc = document.implementation.createHTMLDocument()
-    for (const iframe of iframes) {
-      Object.defineProperty(iframe, 'contentDocument', { configurable: true, value: doc })
-      iframe.dispatchEvent(new Event('load'))
-    }
+    for (const iframe of iframes) iframe.dispatchEvent(new Event('load'))
     expect(onZoom.mock.calls.map(([arg]) => arg.scale)).toEqual([1.94, 3.88, 0.97])
     expect(onPageMounted.mock.calls.map(([d, i]) => [d, i])).toEqual([
-      [doc, 0],
-      [doc, 1],
-      [doc, 2],
+      [iframes[0]!.contentDocument, 0],
+      [iframes[1]!.contentDocument, 1],
+      [iframes[2]!.contentDocument, 2],
     ])
     expect(iframes[0]!.style.width).toBe('776px')
     expect(iframes[0]!.style.height).toBe('1164px')

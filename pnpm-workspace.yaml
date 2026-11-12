@@ -8,8 +8,8 @@ allowBuilds:
   esbuild: true
 
 minimumReleaseAgeExclude:
-  - marked@18.1.1
-  - '@tauri-apps/plugin-updater@2.14.0'
+  - marked@18.2.0
+  - '@tauri-apps/plugin-updater@2.14.1'
 
 overrides:
   ansi-regex: ^6.1.0

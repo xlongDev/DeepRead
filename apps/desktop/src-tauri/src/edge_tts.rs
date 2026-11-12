@@ -731,13 +731,16 @@ async fn synthesize(text: &str, voice: &str, lang: &str) -> Result<EdgeClip, App
     // on the way to the speaker, so one clip serves every rate (see `timeStretch`).
     let (config, ssml_frame) =
         handshake_messages(&ssml_for(text, voice, lang, 1.0), &request_id(), seconds);
-    socket.send(Message::Text(config)).await.map_err(|err| {
-        AppError::new(ErrorCode::TtsProviderError, "Edge TTS 握手发送失败")
-            .with_cause(err)
-            .retryable()
-    })?;
     socket
-        .send(Message::Text(ssml_frame))
+        .send(Message::Text(config.into()))
+        .await
+        .map_err(|err| {
+            AppError::new(ErrorCode::TtsProviderError, "Edge TTS 握手发送失败")
+                .with_cause(err)
+                .retryable()
+        })?;
+    socket
+        .send(Message::Text(ssml_frame.into()))
         .await
         .map_err(|err| {
             AppError::new(ErrorCode::TtsProviderError, "Edge TTS 请求发送失败")
