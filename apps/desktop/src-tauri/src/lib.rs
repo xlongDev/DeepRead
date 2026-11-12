@@ -185,11 +185,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             // 关窗 = 收进托盘(ADR-0013):听书与后台同步跨窗口存活;
             // 真退出走托盘菜单「退出」或 macOS ⌘Q。
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![

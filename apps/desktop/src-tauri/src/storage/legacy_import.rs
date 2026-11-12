@@ -171,10 +171,10 @@ fn import_reader_states(conn: &Connection, base: &Path) -> Result<(), AppError> 
         let Some(hash) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
             continue;
         };
-        if crate::state::is_book_hash(&hash) {
-            if let Some(value) = read_json(&path)? {
-                import_one_reader_state(conn, &hash, &value)?;
-            }
+        if crate::state::is_book_hash(&hash)
+            && let Some(value) = read_json(&path)?
+        {
+            import_one_reader_state(conn, &hash, &value)?;
         }
         retire(&path);
     }
@@ -268,20 +268,32 @@ fn import_ai_indexes(conn: &Connection, base: &Path) -> Result<(), AppError> {
         let Some(hash) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
             continue;
         };
-        if crate::state::is_book_hash(&hash) {
-            if let Some(value) = read_json(&path)? {
-                conn.execute(
-                    "INSERT OR REPLACE INTO ai_index (book_hash, chunks, embedding_model, created_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        hash,
-                        value.get("chunks").map(|c| c.to_string()).unwrap_or_default(),
-                        value.get("embeddingModel").and_then(|v| v.as_str()).unwrap_or_default(),
-                        value.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
-                    ],
-                )
-                .map_err(|err| AppError::new(ErrorCode::StorageCorrupt, "legacy index import failed").with_cause(err))?;
-            }
+        if crate::state::is_book_hash(&hash)
+            && let Some(value) = read_json(&path)?
+        {
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_index (book_hash, chunks, embedding_model, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    hash,
+                    value
+                        .get("chunks")
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                    value
+                        .get("embeddingModel")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                    value
+                        .get("createdAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                ],
+            )
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageCorrupt, "legacy index import failed")
+                    .with_cause(err)
+            })?;
         }
         retire(&path);
     }
@@ -311,29 +323,29 @@ fn import_ai_artifacts(conn: &Connection, base: &Path) -> Result<(), AppError> {
         let Some((hash, kind)) = stem.split_once('-') else {
             continue;
         };
-        if crate::state::is_book_hash(hash) {
-            if let Some(value) = read_json(&path)? {
-                conn.execute(
-                    "INSERT OR REPLACE INTO ai_artifacts (book_hash, kind, payload, created_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        hash,
-                        kind,
-                        value
-                            .get("payload")
-                            .map(|p| p.to_string())
-                            .unwrap_or_else(|| "{}".into()),
-                        value
-                            .get("createdAt")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default(),
-                    ],
-                )
-                .map_err(|err| {
-                    AppError::new(ErrorCode::StorageCorrupt, "legacy artifact import failed")
-                        .with_cause(err)
-                })?;
-            }
+        if crate::state::is_book_hash(hash)
+            && let Some(value) = read_json(&path)?
+        {
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_artifacts (book_hash, kind, payload, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    hash,
+                    kind,
+                    value
+                        .get("payload")
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "{}".into()),
+                    value
+                        .get("createdAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                ],
+            )
+            .map_err(|err| {
+                AppError::new(ErrorCode::StorageCorrupt, "legacy artifact import failed")
+                    .with_cause(err)
+            })?;
         }
         retire(&path);
     }
