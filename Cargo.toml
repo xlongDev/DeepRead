@@ -6,7 +6,8 @@ members = ["apps/desktop/src-tauri"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.85"
+# rusqlite 0.42(libsqlite3-sys 0.40,RUSTSEC-2026-0459 修复版)要求 1.89。
+rust-version = "1.89"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

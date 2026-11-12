@@ -39,14 +39,19 @@ jobs:
 
   rust:
     name: Rust (fmt / clippy / test)
-    runs-on: ubuntu-latest
+    # 固定 24.04:ubuntu-latest 已切到 26.04,其 mirror+file apt 源在 CI 上
+    # 出现过 DNS 解析失败 + 部分包 404,装 180+ 个 webkit 依赖会拖到 20min
+    # 后 exit 100。24.04 是 Tauri 2 官方支持的 LTS,libwebkit2gtk-4.1-dev 齐备。
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Tauri system dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          # --no-install-recommends:只要编译/链接必需的头文件,gstreamer 插件等
+          # recommends 会把下载量翻一倍,也放大 apt 源故障面。
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

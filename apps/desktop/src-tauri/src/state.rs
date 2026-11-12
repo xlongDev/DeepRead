@@ -580,7 +580,8 @@ pub struct NotesListResponse {
 /// 混进来只会让笔记页多一半空行。
 // ponytail: 一次全取 + LIMIT,超过这个量级再谈分页。
 pub fn list_notes(conn: &Connection) -> Result<Vec<NoteEntry>, AppError> {
-    const MAX_NOTES: usize = 2000;
+    // rusqlite 0.42 起 usize 不再实现 ToSql(平台宽度不确定),LIMIT 参数一律给 i64。
+    const MAX_NOTES: i64 = 2000;
     let mut statement = conn
         .prepare(
             "SELECT a.id, a.book_hash, b.display_name, b.file_name, a.cfi, a.color,
@@ -652,7 +653,7 @@ pub fn list_book_stats(conn: &Connection, limit: usize) -> Result<Vec<BookReadin
             AppError::new(ErrorCode::StorageIo, "failed to query per-book stats").with_cause(err)
         })?;
     let rows = statement
-        .query_map([limit], |row| {
+        .query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
             Ok(BookReadingStat {
                 book_hash: row.get(0)?,
                 display_name: row.get(1)?,
