@@ -50,9 +50,8 @@ const isSeparator = (item: ActionMenuItem): item is { readonly separator: true }
  * 动作菜单(⋯):与 DropdownMenu 的分工是 **选值 vs 执行**。
  * 语义用 `role="menu"` + `role="menuitem"`,开关型动作带 `aria-checked`。
  *
- * 为什么要抽成组件而不是继续平铺按钮:阅读器顶栏一度平铺了 12 颗同权图标,
- * 一次扫描要在 12 个位置里找一个 —— 收进菜单的低频动作换来的是剩下那颗
- * 高频动作能被一眼找到。
+ * 通用原语,留给需要把一批执行型动作收进触发器的密集工具栏。阅读器顶栏
+ * 现在把动作全部铺出来(不折叠),已不再使用它。
  */
 export function ActionMenu({
   ariaLabel,

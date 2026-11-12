@@ -7,7 +7,6 @@ import {
   CaretRight,
   Columns,
   CornersOut,
-  DotsThree,
   GraduationCap,
   Headphones,
   List,
@@ -68,7 +67,6 @@ import {
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
 import { keyHint, useKeybindings } from '../../lib/keybindings'
 import { handleTablistKeys } from '../../lib/tablist-keys'
-import { ActionMenu, type ActionMenuItem } from '../../components/ActionMenu'
 import {
   buildFontFacesCss,
   FONT_FAMILY_OPTIONS,
@@ -473,9 +471,6 @@ export function ReaderScreen({
     proposals: readonly RepairChange[]
     accepted: ReadonlySet<string>
   } | null>(null)
-  // ⋯ 菜单开着时顶栏不能自己溜走:菜单是 portal 出去的,顶栏一隐就只剩
-  // 一块浮在半空的菜单。下面 chrome 自动隐藏的判据要带上它。
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   // 阅读器的面板互斥:同一时刻最多一个浮层(目录/阅读设置/AI/朗读/学习/对照)。
   const [openPanel, setOpenPanel] = useState<OpenPanel | null>(() => {
     // dev 辅助:?open=…&panel=toc|settings|… 直接开着面板进阅读器,
@@ -1132,7 +1127,6 @@ export function ReaderScreen({
     if (
       !chromeVisible ||
       openPanel !== null ||
-      moreMenuOpen ||
       selection !== null ||
       activeAnnotation !== null ||
       noteDraft !== null
@@ -1155,7 +1149,7 @@ export function ReaderScreen({
       clearTimeout(timer)
       window.removeEventListener('pointermove', onActivity)
     }
-  }, [chromeVisible, openPanel, moreMenuOpen, selection, activeAnnotation, noteDraft])
+  }, [chromeVisible, openPanel, selection, activeAnnotation, noteDraft])
 
   /**
    * 翻页动画分两条路:
@@ -2237,53 +2231,6 @@ export function ReaderScreen({
   } as React.CSSProperties
   const liveBookmarks = useMemo(() => bookmarks.filter((b) => !b.deleted), [bookmarks])
   const liveAnnotations = annotations.filter((a) => !a.deleted)
-  /**
-   * 顶栏「⋯」里的动作:一年开不到五次的那些。判据是**频率**,不是重要性 ——
-   * 全屏有 F11、阅读尺开一次就一直开着、学习与对照阅读是按需进去的独立场景。
-   * 它们仍要可达,但不该和「目录」「搜索」抢同一条扫描路径。
-   */
-  const moreMenuItems: readonly ActionMenuItem[] = [
-    {
-      label: '全屏阅读',
-      hint: 'F11',
-      icon: <CornersOut size={16} weight="regular" />,
-      active: fullscreen,
-      onSelect: () => void toggleFullscreen(),
-    },
-    {
-      label: '阅读尺',
-      hint: '聚焦当前行',
-      icon: <Ruler size={16} weight="regular" />,
-      active: rulerActive,
-      disabled: !rulerSupported,
-      title: rulerSupported
-        ? '聚焦当前行、淡化其他行(滚轮 / ↑↓ 移尺,滚动排版下当前行居中)'
-        : '阅读尺暂不支持固定排版(PDF / 漫画)与竖排',
-      onSelect: toggleRuler,
-    },
-    { separator: true },
-    {
-      label: '学习',
-      hint: '卡片 / 测验 / 错题本',
-      icon: <GraduationCap size={16} weight="regular" />,
-      active: openPanel === 'learning',
-      onSelect: () => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning')),
-    },
-    ...(onOpenParallel !== undefined && pane === undefined
-      ? [
-          {
-            label: '对照阅读',
-            hint: '两本书并排',
-            icon: <Columns size={16} weight="regular" />,
-            active: openPanel === 'parallel',
-            onSelect: () => {
-              setOpenPanel((panel) => (panel === 'parallel' ? null : 'parallel'))
-              setChromeVisible(true)
-            },
-          },
-        ]
-      : []),
-  ]
   /** 当前点中的那条划线(CFI 是内核回传的锚点;墓碑不算数,否则刚删完的
    *  划线会在工具条上残留一帧「还在编辑」的假象)。 */
   const activeRecord = annotations.find((a) => a.cfi === activeAnnotation && !a.deleted)
@@ -2365,10 +2312,10 @@ export function ReaderScreen({
           </div>
         )}
 
-        {/* 三组,不是十二颗同权图标。分组依据是读者此刻在做什么:
-            定位(在哪一页)/ 外观(这页长什么样)/ 工具(让机器参与)。
-            组内 2px、组间一条发丝线 —— 眼睛先找到组,再找到键;
-            平铺时要在 12 个等距位置里逐个辨认,所以那 12 个键合起来读作「一堆」。
+        {/* 三组,全部铺开不折叠 —— 低频动作也各有自己的位置,不再藏进 ⋯。
+            分组依据是读者此刻在做什么:定位(在哪一页)/ 外观(这页怎么显示)/
+            场景(让机器或第二本书参与)。组内 2px、组间一条发丝线:眼睛先
+            找到组,再找到键;十二颗等距图标合成一条会读作「一堆」。
 
             分组只做视觉:不挂 role="group"(会触发 prefer-tag-over-role,
             而 fieldset 进 flex 胶囊有布局风险)。读屏本来就是逐个 Tab 过去
@@ -2440,6 +2387,29 @@ export function ReaderScreen({
             >
               <TextAa size={16} weight="regular" aria-hidden />
             </button>
+            <button
+              type="button"
+              className={`chrome-button${fullscreen ? ' is-active' : ''}`}
+              onClick={() => void toggleFullscreen()}
+              title="全屏阅读(F11)"
+              aria-pressed={fullscreen}
+            >
+              <CornersOut size={16} weight="regular" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={`chrome-button${rulerActive ? ' is-active' : ''}`}
+              onClick={toggleRuler}
+              disabled={!rulerSupported}
+              title={
+                rulerSupported
+                  ? '阅读尺(聚焦当前行、淡化其他行;滚轮 / ↑↓ 移尺,滚动排版下当前行居中)'
+                  : '阅读尺(暂不支持固定排版(PDF / 漫画)与竖排)'
+              }
+              aria-pressed={rulerActive}
+            >
+              <Ruler size={16} weight="regular" aria-hidden />
+            </button>
           </div>
           <div className="chrome-group">
             <button
@@ -2458,15 +2428,29 @@ export function ReaderScreen({
             >
               <Headphones size={16} weight="regular" aria-hidden />
             </button>
-            <ActionMenu
-              ariaLabel="更多"
-              triggerTitle="更多(全屏 / 阅读尺 / 学习 / 对照阅读)"
-              trigger={<DotsThree size={16} weight="bold" aria-hidden />}
-              triggerActive={moreMenuOpen || openPanel === 'learning' || openPanel === 'parallel'}
-              onOpenChange={setMoreMenuOpen}
-              themeVars={readerVars}
-              items={moreMenuItems}
-            />
+            <button
+              type="button"
+              className={`chrome-button${openPanel === 'learning' ? ' is-active' : ''}`}
+              onClick={() => setOpenPanel((panel) => (panel === 'learning' ? null : 'learning'))}
+              title="学习(卡片 / 测验 / 错题本)"
+              aria-pressed={openPanel === 'learning'}
+            >
+              <GraduationCap size={16} weight="regular" aria-hidden />
+            </button>
+            {onOpenParallel !== undefined && pane === undefined && (
+              <button
+                type="button"
+                className={`chrome-button${openPanel === 'parallel' ? ' is-active' : ''}`}
+                onClick={() => {
+                  setOpenPanel((panel) => (panel === 'parallel' ? null : 'parallel'))
+                  setChromeVisible(true)
+                }}
+                title="对照阅读(两本书并排)"
+                aria-pressed={openPanel === 'parallel'}
+              >
+                <Columns size={16} weight="regular" aria-hidden />
+              </button>
+            )}
           </div>
         </header>
 

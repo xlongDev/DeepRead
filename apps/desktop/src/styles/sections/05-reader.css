@@ -432,10 +432,15 @@
   color: var(--color-accent);
 }
 
-/* 面板开着的开关按钮:accent 淡底 + accent 图标 —— 与侧栏/页签同一套「选中 =
-   徽记」语言。比 hover 的 12% 深一档(18%),所以「开着」和「正被划过」分得开。 */
+/* 面板开着的开关按钮:别画成一整块 18% 的实心灰圆 —— 在 44px 的玻璃胶囊
+   里它是唯一的实色块,又是唯一的正圆,而图标色没变(阅读器内 accent 就是
+   墨色),读起来像「被按住」而不是「这个面板开着」。改成与 hover 同浓度的
+   淡底、收成与胶囊同族的圆角方,再补一圈 16% 发丝线(分组线那支墨):
+   开着 / 划过由形状和边界区分,不再靠底色浓度抢注意力。 */
 .chrome-button.is-active {
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 16%, transparent);
   color: var(--color-accent);
 }
 
@@ -451,8 +456,9 @@
   width: fit-content;
   max-width: calc(100% - 32px);
   margin-inline: auto;
-  /* 按钮是 flex-shrink:0 的固定热区,窄栏里内容会比盒子宽。先让它在盒内
-     横向可滚,别把按钮画到栏外;W3 按宽度把低频项收进 ⋯ 后即可删掉这条。 */
+  /* 按钮是 flex-shrink:0 的固定热区,十二键全铺后窄栏内容会比盒子宽。
+     先让它在盒内横向可滚,别把按钮画到栏外 —— 不折叠是硬要求,窄栏用
+     滚动兜底,而不是再藏一批进菜单。 */
   overflow-x: auto;
   scrollbar-width: none;
   display: flex;

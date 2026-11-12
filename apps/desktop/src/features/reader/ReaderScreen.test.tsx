@@ -122,11 +122,10 @@ function respond(command: string): unknown {
   }
 }
 
-/** 顶栏三组 9 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。
-    频次低、且有别的入口的四个动作(全屏 / 阅读尺 / 学习 / 对照阅读)收在
-    「更多」菜单里 —— 平铺时 12 颗同权图标连成一条,读者得逐个辨认。
-    排版与显示两页合成一个「阅读设置」:两个都叫设置的面板并排,读者分不清
-    哪个装了什么,而它们本来问的是同一件事 —— 这个阅读界面该怎么长。 */
+/** 顶栏 11 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。
+    全屏 / 阅读尺 / 学习全部铺出来,不再收进「更多」菜单;排版与显示两页合成
+    一个「阅读设置」。对照阅读只在宿主给了 onOpenParallel 时出现,是第 12 键。
+    阅读尺的 title 随版式支持度变,用非对称匹配兜住两种文案。 */
 const TOP_KEYS = [
   '返回书架',
   '在此页添加书签',
@@ -134,27 +133,18 @@ const TOP_KEYS = [
   '目录(⌘B)',
   '阅读背景:点击切换夜间(当前 纸白,在阅读设置中可选)',
   '阅读设置(排版 / 显示)',
+  '全屏阅读(F11)',
+  expect.stringMatching(/^阅读尺\(/),
   'AI 助手',
   '朗读 / 听书',
-  '更多(全屏 / 阅读尺 / 学习 / 对照阅读)',
+  '学习(卡片 / 测验 / 错题本)',
 ] as const
 
-const MORE_KEY = '更多(全屏 / 阅读尺 / 学习 / 对照阅读)'
-
-/** 打开顶栏「更多」菜单,返回菜单容器(portal 到 body,不在 header 里)。 */
-function openMoreMenu(): HTMLElement {
-  fireEvent.click(screen.getByTitle(MORE_KEY))
-  const menu = document.querySelector('.action-menu')
-  if (menu === null) throw new Error('「更多」菜单没有打开')
-  return menu as HTMLElement
-}
-
-/** 点「更多」里的某一项。四项目前都是开关型(menuitemcheckbox):全屏/阅读尺
-    有自己的开态,学习/对照阅读则反映「那个面板正开着」。 */
-function clickMoreItem(name: string | RegExp): HTMLElement {
-  const item = within(openMoreMenu()).getByRole('menuitemcheckbox', { name })
-  fireEvent.click(item)
-  return item
+/** 点顶栏某颗键。title 支持正则:阅读尺随版式支持度有两份文案。 */
+function clickTopKey(name: string | RegExp): HTMLElement {
+  const key = screen.getByTitle(name)
+  fireEvent.click(key)
+  return key
 }
 
 function topKeyTitles(): readonly (string | null)[] {
@@ -274,7 +264,7 @@ describe('开书流程', () => {
 })
 
 describe('顶栏 11 键', () => {
-  it('10 个键按顺序全部在位(历史回归:不要悄悄收进下拉)', async () => {
+  it('11 个键按顺序全部在位(全铺,不折叠)', async () => {
     await renderReader()
     expect(topKeyTitles()).toEqual([...TOP_KEYS])
   })
@@ -298,20 +288,17 @@ describe('顶栏 11 键', () => {
 
   /**
    * 「对照阅读」只在宿主给了 onOpenParallel 时出现(并排中的一栏没有第三栏
-   * 可开,那条分支在 ParallelReader 里就没有这个 prop)。不能加进 TOP_KEYS:
-   * 那 11 键是单本阅读的契约,多一个键会让所有既有用例跟着动。
+   * 可开,那条分支在 ParallelReader 里就没有这个 prop)。它是顶栏第 12 键,
+   * 其余 11 键是单本阅读的契约。
    */
-  it('宿主支持对照阅读时「更多」里多一项「对照阅读」,选完书交给宿主', async () => {
+  it('宿主支持对照阅读时顶栏多一颗「对照阅读」,选完书交给宿主', async () => {
     const onOpenParallel = vi.fn()
     render(<ReaderScreen book={BOOK} onBack={vi.fn()} onOpenParallel={onOpenParallel} />)
     await waitFor(() => expect(document.querySelector('.reader-opening')).toBeNull())
 
-    // 顶栏本身不变(它收在菜单里),菜单里才多出这一项。
-    expect(topKeyTitles()).toEqual([...TOP_KEYS])
-    const menu = openMoreMenu()
-    expect(within(menu).getByRole('menuitemcheckbox', { name: /对照阅读/ })).toBeInTheDocument()
-
-    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /对照阅读/ }))
+    // 不折叠:这一项直接占顶栏第 12 个位置,不再藏在菜单里。
+    expect(topKeyTitles()).toEqual([...TOP_KEYS, '对照阅读(两本书并排)'])
+    fireEvent.click(screen.getByTitle('对照阅读(两本书并排)'))
     const picker = await screen.findByRole('region', { name: '选择对照的书' })
     expect(picker).toBeInTheDocument()
     // 书架上只有这本自己:不该出现在候选里,得说清楚。
@@ -406,10 +393,10 @@ describe('面板开合', () => {
       await waitFor(() => expect(screen.queryByTestId(testId)).not.toBeInTheDocument())
     }
 
-    // 学习在「更多」菜单里(低频:进去就是另一个场景),两次都从菜单开、关。
-    clickMoreItem(/^学习/)
+    // 学习也铺在顶栏上:同一颗键开、关。
+    clickTopKey(/^学习/)
     expect(await screen.findByTestId('learning')).toBeInTheDocument()
-    clickMoreItem(/^学习/)
+    clickTopKey(/^学习/)
     await waitFor(() => expect(screen.queryByTestId('learning')).not.toBeInTheDocument())
   })
 })
@@ -672,7 +659,7 @@ describe('阅读尺与版式互不干涉', () => {
     const { adapter } = await renderReader()
     expect(adapter.setLayout).toHaveBeenCalledWith(expect.objectContaining({ flow: 'paginated' }))
 
-    clickMoreItem(/阅读尺/)
+    clickTopKey(/^阅读尺/)
     await waitFor(() =>
       expect(adapter.setReadingRuler).toHaveBeenCalledWith(
         expect.objectContaining({ focusLines: 1 }),
@@ -682,7 +669,7 @@ describe('阅读尺与版式互不干涉', () => {
       expect.objectContaining({ flow: 'paginated' }),
     )
 
-    clickMoreItem(/阅读尺/)
+    clickTopKey(/^阅读尺/)
     await waitFor(() => expect(adapter.setReadingRuler).toHaveBeenLastCalledWith(null))
     expect(adapter.setLayout).toHaveBeenLastCalledWith(
       expect.objectContaining({ flow: 'paginated' }),
