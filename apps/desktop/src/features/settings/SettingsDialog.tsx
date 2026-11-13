@@ -12,7 +12,7 @@ import { Sparkle, X } from '@phosphor-icons/react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { toAppError } from '@deepread/shared'
+import { toAppError, type OcFerryDiscovery } from '@deepread/shared'
 import { convertFileSrc } from '../../lib/book-import'
 import { downloadText } from '../../lib/download'
 import { exportSnapshot, importSnapshot, readStorageEstimate } from '../../lib/web-store'
@@ -129,8 +129,37 @@ export function SettingsDialog({
     setConfigForm: setAiConfigForm,
     saveProvider: saveAiProvider,
     removeProvider: removeAiProvider,
+    detectOcFerry,
+    adoptOcFerryModel,
     error: aiProviderError,
   } = useAiProviders()
+
+  /** OC Ferry 是本机转发口:探测只拿模型清单,采用由 Rust 落库并存密钥。 */
+  const [ocFerry, setOcFerry] = useState<OcFerryDiscovery | null>(null)
+  const [ocFerryModel, setOcFerryModel] = useState('')
+  const [ocFerryBusy, setOcFerryBusy] = useState(false)
+  const [ocFerryMsg, setOcFerryMsg] = useState<string | null>(null)
+
+  const runDetectOcFerry = async (): Promise<void> => {
+    setOcFerryBusy(true)
+    setOcFerryMsg(null)
+    setOcFerry(null)
+    const found = await detectOcFerry()
+    if (found !== null) {
+      setOcFerry(found)
+      setOcFerryModel(found.models[0] ?? '')
+      setOcFerryMsg(`已连上 OC Ferry，检测到 ${found.models.length} 个可用模型。`)
+    }
+    setOcFerryBusy(false)
+  }
+
+  const runUseOcFerry = async (): Promise<void> => {
+    if (ocFerryModel === '') return
+    setOcFerryBusy(true)
+    const adopted = await adoptOcFerryModel(ocFerryModel)
+    setOcFerryMsg(adopted ? `已启用「${ocFerryModel}」，AI 助手与云端朗读即刻生效。` : null)
+    setOcFerryBusy(false)
+  }
 
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
@@ -615,6 +644,47 @@ export function SettingsDialog({
                       }}
                       error={aiProviderError}
                     />
+                    <div className="ai-section ai-oc-ferry">
+                      <p className="ai-section-title">本机免费模型 · OC Ferry</p>
+                      <div className="ai-oc-ferry-row">
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => void runDetectOcFerry()}
+                          disabled={ocFerryBusy}
+                        >
+                          {ocFerryBusy ? '检测中…' : '检测本地 OC Ferry'}
+                        </button>
+                        {ocFerry !== null && (
+                          <>
+                            <DropdownMenu
+                              value={ocFerryModel}
+                              options={ocFerry.models.map((model) => ({
+                                value: model,
+                                label: model,
+                              }))}
+                              onChange={setOcFerryModel}
+                              ariaLabel="OC Ferry 可用模型"
+                              title="OC Ferry 已判定可用的免费模型，模型名会原样发给本机转发口"
+                            >
+                              <span className="dropdown-value">{ocFerryModel || '选择模型…'}</span>
+                            </DropdownMenu>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={() => void runUseOcFerry()}
+                              disabled={ocFerryBusy || ocFerryModel === ''}
+                            >
+                              使用此模型
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {ocFerryMsg !== null && <p className="ai-privacy">{ocFerryMsg}</p>}
+                      <p className="ai-privacy">
+                        需先启动 OC Ferry 托盘程序；密钥由 Rust 在本机读取，不会进入页面。
+                      </p>
+                    </div>
                     {aiLoaded && providers.length > 0 && (
                       <p className="ai-privacy">
                         配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}

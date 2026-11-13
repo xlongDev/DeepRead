@@ -74,8 +74,10 @@ import type { AiProviderConfig } from './generated/AiProviderConfig'
 import type { AiConfigListResponse } from './generated/AiConfigListResponse'
 import type { AiConfigSaveRequest } from './generated/AiConfigSaveRequest'
 import type { AiConfigSaveResponse } from './generated/AiConfigSaveResponse'
+import type { AiConfigUseOcFerryRequest } from './generated/AiConfigUseOcFerryRequest'
 import type { AiConfigRemoveRequest } from './generated/AiConfigRemoveRequest'
 import type { AiConfigRemoveResponse } from './generated/AiConfigRemoveResponse'
+import type { OcFerryDiscovery } from './generated/OcFerryDiscovery'
 import type { AiChatRequest } from './generated/AiChatRequest'
 import type { AiChatResponse } from './generated/AiChatResponse'
 import type { AiCancelRequest } from './generated/AiCancelRequest'
@@ -147,6 +149,7 @@ export type {
   AiConfigRemoveResponse,
   AiConfigSaveRequest,
   AiConfigSaveResponse,
+  AiConfigUseOcFerryRequest,
   AiEmbedRequest,
   AiEmbedResponse,
   AiIndexChunk,
@@ -216,6 +219,7 @@ export type {
   NoteEntry,
   NotesExportRequest,
   NotesExportResponse,
+  OcFerryDiscovery,
   ReaderNoteUpdateRequest,
   ReaderNoteUpdateResponse,
   ReaderNotesListResponse,
@@ -281,6 +285,8 @@ export const COMMAND = {
   aiConfigList: 'ai.config.list',
   aiConfigSave: 'ai.config.save',
   aiConfigRemove: 'ai.config.remove',
+  aiOcFerryDetect: 'ai.ocFerry.detect',
+  aiOcFerryUse: 'ai.ocFerry.use',
   aiChat: 'ai.chat',
   aiCancel: 'ai.cancel',
   aiEmbed: 'ai.embed',
@@ -420,6 +426,14 @@ export interface CommandMap {
   [COMMAND.aiConfigRemove]: {
     readonly request: AiConfigRemoveRequest
     readonly response: AiConfigRemoveResponse
+  }
+  [COMMAND.aiOcFerryDetect]: {
+    readonly request: undefined
+    readonly response: OcFerryDiscovery
+  }
+  [COMMAND.aiOcFerryUse]: {
+    readonly request: AiConfigUseOcFerryRequest
+    readonly response: AiConfigSaveResponse
   }
   /** ai.chat streams events through a Tauri Channel, not the return value. */
   [COMMAND.aiChat]: { readonly request: AiChatRequest; readonly response: AiChatResponse }
@@ -750,6 +764,13 @@ export const aiConfigSaveRequestSchema = z.object({
 export const aiConfigSaveResponseSchema = z.object({ provider: aiProviderConfigSchema })
 export const aiConfigRemoveRequestSchema = z.object({ id: z.string().min(8).max(64) })
 export const aiConfigRemoveResponseSchema = z.object({ removed: z.boolean() })
+export const ocFerryDiscoverySchema = z.object({
+  baseUrl: z.string().url().max(512),
+  models: z.array(z.string().min(1).max(128)).min(1).max(100),
+})
+export const aiConfigUseOcFerryRequestSchema = z.object({
+  model: z.string().min(1).max(128),
+})
 
 export const aiChatRequestSchema = z.object({
   taskId: z.string().min(8).max(64),
@@ -1028,6 +1049,8 @@ export const responseSchemas = {
   [COMMAND.aiConfigList]: aiConfigListResponseSchema,
   [COMMAND.aiConfigSave]: aiConfigSaveResponseSchema,
   [COMMAND.aiConfigRemove]: aiConfigRemoveResponseSchema,
+  [COMMAND.aiOcFerryDetect]: ocFerryDiscoverySchema,
+  [COMMAND.aiOcFerryUse]: aiConfigSaveResponseSchema,
   [COMMAND.aiChat]: aiChatResponseSchema,
   [COMMAND.aiCancel]: aiCancelResponseSchema,
   [COMMAND.aiEmbed]: aiEmbedResponseSchema,
@@ -1104,6 +1127,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.secretSet]: secretSetRequestSchema,
   [COMMAND.secretDelete]: secretDeleteRequestSchema,
   [COMMAND.aiConfigList]: undefined,
+  [COMMAND.aiOcFerryDetect]: undefined,
+  [COMMAND.aiOcFerryUse]: aiConfigUseOcFerryRequestSchema,
   [COMMAND.cardsList]: cardsListRequestSchema,
   [COMMAND.cardsAdd]: cardsAddRequestSchema,
   [COMMAND.cardsRemove]: cardsRemoveRequestSchema,

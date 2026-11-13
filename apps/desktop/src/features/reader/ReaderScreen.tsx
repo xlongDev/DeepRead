@@ -53,8 +53,6 @@ import {
 } from '@deepread/reader-adapter'
 import type { RepairChange } from '@deepread/reader-adapter'
 import {
-  createSseParser,
-  extractDelta,
   buildChapterRuleMessages,
   buildTranslateMessages,
   parseChapterRuleCandidates,
@@ -64,7 +62,7 @@ import {
   type ChapterRule,
   type ChapterRuleCandidate,
 } from '@deepread/ai-core'
-import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
+import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { keyHint, useKeybindings } from '../../lib/keybindings'
 import { handleTablistKeys } from '../../lib/tablist-keys'
 import {
@@ -117,7 +115,7 @@ import {
 } from './wake-lock'
 import { DisplayPanel } from './DisplayPanel'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
-import { newTaskId } from '../../lib/ai-chat'
+import { collectChatText } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { ParallelPicker } from './ParallelPicker'
@@ -1600,36 +1598,25 @@ export function ReaderScreen({
       error: null,
       loading: true,
     })
-    const taskId = newTaskId()
     let buffer = ''
-    const parser = createSseParser((data) => {
-      const delta = extractDelta(data)
-      if (delta.type !== 'delta') return
-      buffer += delta.text
-      const view = streamTranslationView(buffer)
-      setTranslation((state) =>
-        state === null ? state : { ...state, lang: view.lang, body: view.body },
-      )
-    })
     try {
-      await invokeStreamingCommand(
-        'ai.chat',
-        {
-          taskId,
-          configId: provider.id,
-          messages: [
-            ...buildTranslateMessages({
-              text,
-              targetLang: effectiveTranslateTarget,
-              context: text,
-            }),
-          ],
-        },
-        (event) => {
-          if (event.type === 'chunk') parser.push(event.data)
+      await collectChatText(
+        provider.id,
+        [
+          ...buildTranslateMessages({
+            text,
+            targetLang: effectiveTranslateTarget,
+            context: text,
+          }),
+        ],
+        (delta) => {
+          buffer += delta
+          const view = streamTranslationView(buffer)
+          setTranslation((state) =>
+            state === null ? state : { ...state, lang: view.lang, body: view.body },
+          )
         },
       )
-      parser.end()
       const parsed = parseTranslation(buffer)
       setTranslation((state) =>
         state === null
@@ -2077,25 +2064,15 @@ export function ReaderScreen({
   const inferChapterCandidates = useCallback(async (): Promise<readonly ChapterRuleCandidate[]> => {
     const provider = aiProviders[0]
     if (provider === undefined) return []
-    const taskId = newTaskId()
-    let full = ''
-    const parser = createSseParser((data) => {
-      const delta = extractDelta(data)
-      if (delta.type === 'delta') full += delta.text
-    })
-    await invokeStreamingCommand(
-      'ai.chat',
-      {
-        taskId,
-        configId: provider.id,
-        messages: [...buildChapterRuleMessages(chapterSampleLines, book.name)],
-      },
-      (event) => {
-        if (event.type === 'chunk') parser.push(event.data)
-      },
-    )
-    parser.end()
-    return parseChapterRuleCandidates(full)
+    try {
+      const full = await collectChatText(provider.id, [
+        ...buildChapterRuleMessages(chapterSampleLines, book.name),
+      ])
+      return parseChapterRuleCandidates(full)
+    } catch {
+      // 上游失败不该让「推断章节」面板卡在加载态:给空候选,与旧行为一致。
+      return []
+    }
   }, [aiProviders, book.name, chapterSampleLines])
 
   /** 保存并生效:重建章节 + 刷新目录;旧版 per-book 正则至此被规则接管。 */

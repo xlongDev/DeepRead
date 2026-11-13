@@ -681,7 +681,8 @@
 .ai-head-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  /* 下拉与关闭键要能被看成两颗键:2px 时两个圆角贴成一块,像关闭键被压在下拉里。 */
+  gap: var(--space-8);
   flex-shrink: 0;
   min-width: 0;
 }
@@ -692,7 +693,10 @@
   max-width: 108px;
 }
 
-.ai-head .dropdown-trigger {
+/* 服务名再长也不许把 trigger 撑出父容器盖住关闭键。10-floating-learning.css
+   有一条 `.dropdown-head .dropdown-trigger{max-width:200px}` 同特异性且更靠后,
+   这里用三段选择器压住它。 */
+.ai-head .dropdown-head .dropdown-trigger {
   min-width: 0;
   max-width: 100%;
 }
@@ -705,6 +709,9 @@
 
 .ai-icon-btn {
   flex-shrink: 0;
+  /* 万一上游 trigger 溢出,关闭键仍压在最上层,不会被吃掉点击。 */
+  position: relative;
+  z-index: 1;
   width: 26px;
   height: 26px;
   display: grid;
@@ -727,10 +734,15 @@
   min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 结果卡替换占位卡时别让 scroll anchoring 自己滚一半 —— 那会把「本书洞察」
+     切成只剩最后一颗按钮的残片。滚动由生成结束后的显式 scrollIntoView 接管。 */
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 var(--space-16) var(--space-8);
+  /* 末尾留一点可滚余量:结果卡替换占位卡后要能真正滚到顶部,否则紧贴上方的
+     「发送范围」说明会被切成半行残片(短内容时尤其明显)。 */
+  padding: 0 var(--space-16) var(--space-32);
 }
 
 .ai-drawer-body > * {
@@ -903,6 +915,22 @@
   color: var(--color-accent);
 }
 
+/* 正在生成的那颗键:accent 淡底扫一层微光。文字不动、不转圈 —— 阅读器里
+   安静的进度信号比一个 spinner 合适;同时把 :disabled 的压暗抵回来。 */
+.ai-chip.is-generating {
+  opacity: 1;
+  border-color: transparent;
+  color: var(--color-accent);
+  background: linear-gradient(
+    90deg,
+    var(--color-accent-soft),
+    color-mix(in srgb, var(--color-accent) 18%, var(--color-surface)),
+    var(--color-accent-soft)
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s var(--ease-in-out) infinite;
+}
+
 .ai-chip-ghost {
   flex: 0 1 auto;
   padding: 5px 9px;
@@ -932,6 +960,36 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-surface) 60%, transparent);
   min-width: 0;
+  /* 生成完把占位换成结果时轻轻落位,不是硬闪一下。 */
+  animation: fade-up var(--duration-base) var(--ease-emphasized);
+}
+
+/* 生成中:结果卡的骨架占位,微光与书架骨架共用同一条 keyframes。 */
+.ai-generating-lines {
+  display: grid;
+  gap: var(--space-6);
+  padding: 2px 0;
+}
+
+.ai-generating-lines span {
+  height: 9px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-text-tertiary) 14%, transparent),
+    color-mix(in srgb, var(--color-text-tertiary) 5%, transparent),
+    color-mix(in srgb, var(--color-text-tertiary) 14%, transparent)
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s var(--ease-in-out) infinite;
+}
+
+.ai-generating-lines span:nth-child(2) {
+  width: 88%;
+}
+
+.ai-generating-lines span:nth-child(3) {
+  width: 64%;
 }
 
 .ai-result-label {
@@ -1004,6 +1062,20 @@
   background: var(--color-accent);
   color: var(--color-on-accent);
   border-bottom-right-radius: 6px;
+}
+
+/* 首字未到时那三个点是唯一反馈:轻轻呼吸,不转圈、不推着气泡动。 */
+@keyframes ai-wait-pulse {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ai-waiting-dots {
+  animation: ai-wait-pulse 1.1s var(--ease-in-out) infinite alternate;
 }
 
 .ai-msg-assistant {

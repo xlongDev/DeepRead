@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { appErrorPayloadSchema } from './protocol/errors'
 import {
   aiArtifactGetRequestSchema,
+  aiConfigUseOcFerryRequestSchema,
   appInfoSchema,
   chapterRuleSchema,
   chapterRulesGetResponseSchema,
@@ -11,6 +12,7 @@ import {
   COMMAND,
   librarySearchRequestSchema,
   librarySearchResponseSchema,
+  ocFerryDiscoverySchema,
   readingGoalGetResponseSchema,
   readingGoalSetRequestSchema,
   requestValidators,
@@ -69,6 +71,17 @@ describe('command validators', () => {
   it('request validators exist for commands that take a request', () => {
     expect(requestValidators[COMMAND.systemPing]).toBeDefined()
     expect(requestValidators[COMMAND.appInfo]).toBeUndefined()
+  })
+
+  it('OC Ferry schemas keep the discovery key-free and the model bounded', () => {
+    const found = { baseUrl: 'http://127.0.0.1:41980/v1', models: ['OC · GLM-4.6'] }
+    expect(ocFerryDiscoverySchema.safeParse(found).success).toBe(true)
+    expect(ocFerryDiscoverySchema.safeParse({ ...found, models: [] }).success).toBe(false)
+    expect(aiConfigUseOcFerryRequestSchema.safeParse({ model: found.models[0] }).success).toBe(true)
+    expect(aiConfigUseOcFerryRequestSchema.safeParse({ model: '' }).success).toBe(false)
+    expect(aiConfigUseOcFerryRequestSchema.safeParse({ model: 'x'.repeat(129) }).success).toBe(
+      false,
+    )
   })
 })
 

@@ -94,6 +94,8 @@ vi.mock('../settings/AiProviderSettings', () => ({
     setConfigForm: vi.fn(),
     saveProvider: vi.fn(async (): Promise<void> => undefined),
     removeProvider: vi.fn(async (): Promise<void> => undefined),
+    detectOcFerry: vi.fn(async (): Promise<null> => null),
+    adoptOcFerryModel: vi.fn(async (): Promise<boolean> => true),
     error: null,
   }),
   AiProviderForm: () => <div data-testid="ai-provider-form" />,

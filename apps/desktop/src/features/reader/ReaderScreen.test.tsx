@@ -1207,15 +1207,16 @@ describe('划选翻译', () => {
     streamMock.mockImplementation(((
       _command: string,
       _request: unknown,
-      onEvent: (event: { type: string; data: string }) => void,
+      onEvent: (event: { type: string; data?: string }) => void,
     ) => {
-      const push = (piece: string): void => {
+      // Rust 代理已经剥掉 `data:` 前缀,并按帧发 chunk、用 done 收尾。
+      for (const piece of text.match(/.{1,8}/gs) ?? []) {
         onEvent({
           type: 'chunk',
-          data: `data: ${JSON.stringify({ choices: [{ delta: { content: piece } }] })}\n\n`,
+          data: JSON.stringify({ choices: [{ delta: { content: piece } }] }),
         })
       }
-      for (const piece of text.match(/.{1,8}/gs) ?? []) push(piece)
+      onEvent({ type: 'done' })
       return Promise.resolve(undefined)
     }) as never)
   }

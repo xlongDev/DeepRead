@@ -222,6 +222,8 @@ pub fn run() {
             ai::ai_config_list,
             ai::ai_config_save,
             ai::ai_config_remove,
+            ai::ai_oc_ferry_detect,
+            ai::ai_oc_ferry_use,
             ai::ai_chat,
             ai::ai_cancel,
             ai::ai_embed,

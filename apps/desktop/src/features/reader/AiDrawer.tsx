@@ -50,7 +50,7 @@ import {
   type ConversionRule,
 } from '@deepread/ai-core'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime } from '../../lib/ipc'
-import { newTaskId } from '../../lib/ai-chat'
+import { collectChatText, newTaskId } from '../../lib/ai-chat'
 import { useDrawerFocus } from '../../lib/modal-dialog'
 import { useAiProviders } from '../settings/AiProviderSettings'
 import { GraphView } from './GraphView'
@@ -167,6 +167,8 @@ export function AiDrawer({
   const [citations, setCitations] = useState<ReadonlyMap<number, readonly string[]>>(new Map())
   /** 已写入批注笔记的回答序号:写入后按钮转「已写入」,防重复落笔。 */
   const [savedNotes, setSavedNotes] = useState<ReadonlySet<number>>(() => new Set())
+  /** 概念洞察已转成复习卡的数量;null = 还没转。 */
+  const [savedConceptCards, setSavedConceptCards] = useState<number | null>(null)
   const [summary, setSummary] = useState<SummaryInsight | null>(null)
   const [outline, setOutline] = useState<OutlineInsight | null>(null)
   const [insightPhase, setInsightPhase] = useState<'idle' | 'streaming'>('idle')
@@ -197,6 +199,8 @@ export function AiDrawer({
   const taskIdRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
+  /** 上一次是否真的跑过一次生成:开抽屉时恢复的旧结果不该触发滚动。 */
+  const wasGeneratingRef = useRef(false)
   useDrawerFocus(panelRef)
 
   useEffect(() => {
@@ -310,7 +314,7 @@ export function AiDrawer({
   }, [bookHash])
 
   // Shared streaming helper: run messages through Tauri proxy or mock, return
-  // the full model text.
+  // the full model text. The Tauri branch must wait for the Channel's 'done'.
   const streamChatText = useCallback(
     async (
       chatMessages: readonly {
@@ -321,20 +325,7 @@ export function AiDrawer({
       if (!isTauriRuntime() || !activeId) {
         return streamMockChat(chatMessages, () => {})
       }
-      let full = ''
-      const parser = createSseParser((data) => {
-        const delta = extractDelta(data)
-        if (delta.type === 'delta') full += delta.text
-      })
-      await invokeStreamingCommand(
-        'ai.chat',
-        { taskId: newTaskId(), configId: activeId, messages: [...chatMessages] },
-        (event) => {
-          if (event.type === 'chunk') parser.push(event.data)
-        },
-      )
-      parser.end()
-      return full
+      return collectChatText(activeId, chatMessages)
     },
     [activeId],
   )
@@ -380,6 +371,34 @@ export function AiDrawer({
     prevPhaseRef.current = phase
   }, [phase, messages, persistChat])
 
+  /**
+   * 生成一结束就把结果卡滚到眼前。占位卡(短)换成结果卡(长)时,浏览器自己的
+   * 滚动锚定会只滚一半,把「本书洞察」切成只剩最后一颗按钮的残片;这里显式
+   * 接管。失败时不动 —— 错误文字在下方,别把用户从原来位置带走。
+   */
+  useEffect(() => {
+    if (insightPhase === 'streaming') {
+      wasGeneratingRef.current = true
+      return
+    }
+    if (!wasGeneratingRef.current) return
+    wasGeneratingRef.current = false
+    if (error !== null) return
+    const result = panelRef.current?.querySelector<HTMLElement>(
+      '.ai-drawer-body .ai-result:not([aria-busy])',
+    )
+    if (typeof result?.scrollIntoView !== 'function') return
+    const reduce =
+      (typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches) ||
+      document.documentElement.dataset.motion === 'reduce'
+    result.scrollIntoView({
+      behavior: reduce ? 'auto' : 'smooth',
+      block: 'start',
+      inline: 'nearest',
+    })
+  }, [insightPhase, error])
+
   // Generate a structured insight via the streaming chat path; validates the
   // assembled JSON with zod before persisting (spec §118).
   const generateInsight = useCallback(
@@ -414,6 +433,7 @@ export function AiDrawer({
           const insight = parseConcepts(full)
           await persistArtifact(kind, insight as unknown as Record<string, unknown>)
           setConcepts(insight)
+          setSavedConceptCards(null)
         }
       } catch (insightError) {
         setError(
@@ -428,6 +448,32 @@ export function AiDrawer({
     },
     [insightPhase, persistArtifact, sections, streamChatText, title],
   )
+
+  /**
+   * 概念洞察直接落成复习卡:概念名 → 正面,解释 → 背面,结构已是 Q/A,不再调模型。
+   * id 用内容确定性值,走两端 cards.add 的 INSERT OR IGNORE,重复点不产生重复卡。
+   */
+  const saveConceptsAsCards = async (): Promise<void> => {
+    if (concepts === null || concepts.concepts.length === 0) return
+    setError(null)
+    try {
+      const dueAt = new Date().toISOString()
+      const response = await invokeCommand('cards.add', {
+        bookHash,
+        cards: concepts.concepts.map((concept) => ({
+          id: `concept-${bookHash.slice(0, 16)}-${concept.name}`,
+          front: concept.name,
+          back: concept.explanation,
+          // source 枚举由 Rust CARD_SOURCES 锁死为三种;AI 洞察与 AI 出题同属生成的学习卡。
+          source: 'quiz' as const,
+          dueAt,
+        })),
+      })
+      setSavedConceptCards(response.added)
+    } catch (saveError) {
+      setError(toAppError(saveError).message)
+    }
+  }
 
   const runAiRepair = useCallback(async (): Promise<void> => {
     if (sourceText === null || insightPhase === 'streaming') return
@@ -642,10 +688,6 @@ export function AiDrawer({
         markDone()
         return
       }
-      const parser = createSseParser((data) => {
-        const delta = extractDelta(data)
-        if (delta.type === 'delta') pushDelta(delta.text)
-      })
       await invokeStreamingCommand(
         'ai.chat',
         { taskId, configId: configId ?? '', messages: [...outbound] },
@@ -657,12 +699,14 @@ export function AiDrawer({
             setError(`${event.data.code}:${event.data.message}`)
             taskIdRef.current = null
           } else {
-            parser.push(event.data)
+            // Rust already stripped the `data:` prefix; parse the frame itself.
+            const delta = extractDelta(event.data)
+            if (delta.type === 'delta') pushDelta(delta.text)
           }
         },
       )
-      // The channel keeps emitting after the invoke resolves; the parser is
-      // closed by 'done'/error events above.
+      // The channel keeps emitting after the invoke resolves; the turn is
+      // closed by the 'done'/error events above.
     } catch (chatError) {
       setPhase('error')
       setError(toAppError(chatError).message)
@@ -825,7 +869,7 @@ export function AiDrawer({
                   <button
                     key={chip.kind}
                     type="button"
-                    className={`ai-chip${done ? ' is-done' : ''}`}
+                    className={`ai-chip${done ? ' is-done' : ''}${busy ? ' is-generating' : ''}`}
                     onClick={() => {
                       if (chip.kind === 'characters') void generateCharacters()
                       else void generateInsight(chip.kind)
@@ -874,6 +918,17 @@ export function AiDrawer({
             </p>
           </section>
         )}
+        {/* 生成可能几十秒:给一张会呼吸的占位卡,而不是让整排按钮灰着等。 */}
+        {insightPhase === 'streaming' && (
+          <article className="ai-result" aria-busy="true" aria-live="polite">
+            <p className="ai-result-label">AI 正在生成内容…</p>
+            <div className="ai-generating-lines" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          </article>
+        )}
         {summary !== null && (
           <article className="ai-result">
             <p className="ai-result-label">内容摘要</p>
@@ -919,6 +974,23 @@ export function AiDrawer({
                 <span className="ai-citation">概念</span> {concept.explanation}
               </p>
             ))}
+            {concepts.concepts.length > 0 &&
+              (savedConceptCards === null ? (
+                <div className="ai-chip-row">
+                  <button
+                    type="button"
+                    className="ai-chip ai-chip-ghost"
+                    onClick={() => void saveConceptsAsCards()}
+                    title="把这批概念做成间隔复习卡片"
+                  >
+                    做成复习卡({concepts.concepts.length})
+                  </button>
+                </div>
+              ) : (
+                <p className="ai-privacy">
+                  本次新增 {savedConceptCards} 张复习卡,可在「学习」里复习。
+                </p>
+              ))}
           </article>
         )}
         {characters !== null && (
@@ -1027,7 +1099,8 @@ export function AiDrawer({
           {messages.map((message, index) => (
             <div key={index} className={`ai-msg-wrap ai-msg-wrap-${message.role}`}>
               <div className={`ai-msg ai-msg-${message.role}`}>
-                {message.content || (message.streaming ? '…' : '')}
+                {message.content ||
+                  (message.streaming ? <span className="ai-waiting-dots">…</span> : '')}
               </div>
               {message.role === 'assistant' && citations.get(index) !== undefined && (
                 <div className="ai-citations">

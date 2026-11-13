@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use rusqlite::Connection;
@@ -213,6 +214,193 @@ pub fn ai_config_remove(
         crate::secrets::delete_secret(&secrets, &base, &key)?;
     }
     Ok(AiConfigRemoveResponse { removed })
+}
+
+/// What a running OC Ferry bridge offers. The bearer key is deliberately absent:
+/// ADR-0010 keeps plaintext secrets out of the webview, so `ai.ocFerry.use`
+/// reads it again on the Rust side instead.
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OcFerryDiscovery {
+    pub base_url: String,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AiConfigUseOcFerryRequest {
+    pub model: String,
+}
+
+/// One fixed slot for the bridge: re-detecting or switching models updates this
+/// row instead of piling up near-identical providers.
+const OC_FERRY_PROVIDER_ID: &str = "oc-ferry-local";
+
+fn oc_ferry_base_url() -> String {
+    let port = std::env::var("FERRY_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(41980);
+    format!("http://127.0.0.1:{port}/v1")
+}
+
+/// OC Ferry's per-user data directory: macOS `~/Library/Application Support/OC
+/// Ferry`, Windows `%APPDATA%\OC Ferry`, Linux `$XDG_CONFIG_HOME/OC Ferry`.
+/// `FERRY_DATA_DIR` overrides all three, as it does for OC Ferry itself.
+fn oc_ferry_data_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("FERRY_DATA_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    if cfg!(target_os = "macos") {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("Library/Application Support/OC Ferry"))
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("OC Ferry"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| PathBuf::from(home).join(".config").into_os_string())
+            })
+            .map(|base| PathBuf::from(base).join("OC Ferry"))
+    }
+}
+
+fn read_oc_ferry_key() -> Result<String, AppError> {
+    let data_dir = oc_ferry_data_dir().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::AiProviderError,
+            "找不到 OC Ferry 的数据目录，请确认它已安装",
+        )
+    })?;
+    let key = std::fs::read_to_string(data_dir.join("api-key"))
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::AiProviderError,
+                "找不到 OC Ferry 的 api-key，请确认它已启动过一次",
+            )
+        })?
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            "OC Ferry 的 api-key 为空，请确认它已启动过一次",
+        ));
+    }
+    Ok(key)
+}
+
+/// Model ids go to `/chat/completions` verbatim, so an overlong one cannot be
+/// saved (the provider wire type caps it at 128) — skip it instead of truncating.
+fn parse_oc_ferry_models(body: &Value) -> Vec<String> {
+    body.get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|id| !id.is_empty() && id.chars().count() <= 128)
+                .take(100) // matches ocFerryDiscoverySchema's upper bound
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn validate_oc_ferry_model(model: &str) -> Result<&str, AppError> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 128 {
+        return Err(AppError::new(
+            ErrorCode::SystemValidation,
+            "OC Ferry 模型名不合法",
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// OC Ferry refuses requests carrying an `Origin` header, so probing it from the
+/// webview would always fail — this runs in Rust, with the key added here too.
+async fn fetch_oc_ferry_models(base_url: &str, api_key: &str) -> Result<Vec<String>, AppError> {
+    let response = crate::http()
+        .get(format!("{base_url}/models"))
+        .bearer_auth(api_key)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::new(
+                ErrorCode::AiProviderError,
+                format!("连不上本机 OC Ferry（{base_url}）：{err}。请确认托盘程序正在运行"),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            format!(
+                "OC Ferry 返回 {}，请确认它已启动且未被占用",
+                response.status()
+            ),
+        ));
+    }
+    let body: Value = response.json().await.map_err(|err| {
+        AppError::new(
+            ErrorCode::AiProviderError,
+            format!("OC Ferry 的响应无法解析：{err}"),
+        )
+    })?;
+    let models = parse_oc_ferry_models(&body);
+    if models.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            "OC Ferry 已连上，但暂未判定出可用模型（可能还在检测，或免费池为空）",
+        ));
+    }
+    Ok(models)
+}
+
+/// `ai.ocFerry.detect` — list the free models a running OC Ferry has vetted.
+#[tauri::command(rename = "ai.ocFerry.detect")]
+pub async fn ai_oc_ferry_detect() -> Result<OcFerryDiscovery, AppError> {
+    let base_url = oc_ferry_base_url();
+    let models = fetch_oc_ferry_models(&base_url, &read_oc_ferry_key()?).await?;
+    Ok(OcFerryDiscovery { base_url, models })
+}
+
+/// `ai.ocFerry.use` — adopt one of those models as the active provider.
+///
+/// The key never leaves Rust: it is read from OC Ferry's data dir and written
+/// into the secret store under the fixed provider id, exactly as `ai.config.save`
+/// would. `ai.chat` later resolves it by that id.
+#[tauri::command(rename = "ai.ocFerry.use")]
+pub fn ai_oc_ferry_use(
+    app: tauri::AppHandle,
+    secrets: State<'_, SecretStore>,
+    db: tauri::State<'_, crate::storage::Db>,
+    request: AiConfigUseOcFerryRequest,
+) -> Result<AiConfigSaveResponse, AppError> {
+    let model = validate_oc_ferry_model(&request.model)?;
+    let api_key = read_oc_ferry_key()?;
+    let provider = AiProviderConfig {
+        id: OC_FERRY_PROVIDER_ID.to_string(),
+        name: "OC Ferry(本机)".to_string(),
+        base_url: oc_ferry_base_url(),
+        model: model.to_string(),
+        embedding_model: None,
+        tts_model: None,
+    };
+    let base = data_dir(&app)?;
+    let conn =
+        db.0.lock()
+            .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    upsert_provider(&conn, &provider)?;
+    let key = format!("ai.key.{}", provider.id);
+    crate::secrets::set_secret(&secrets, &base, &key, &api_key)?;
+    Ok(AiConfigSaveResponse { provider })
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -637,6 +825,37 @@ fn find_event_boundary(buffer: &str) -> Option<(usize, usize)> {
     None
 }
 
+/// Bridges such as OC Ferry report mid-stream failures as `data: {"error":…}`
+/// under HTTP 200. Left alone, the webview sees an empty answer and blames its
+/// own JSON parser instead of the upstream failure.
+fn sse_error_message(data: &str) -> Option<String> {
+    let payload: Value = serde_json::from_str(data).ok()?;
+    if payload.get("choices").is_some() {
+        return None;
+    }
+    let error = payload.get("error")?;
+    error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .map(str::to_string)
+}
+
+fn forward_sse_data(
+    data: String,
+    on_chunk: &(dyn Fn(String) + Send + Sync),
+) -> Result<(), AppError> {
+    if let Some(message) = sse_error_message(&data) {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            format!("AI 服务返回错误：{message}"),
+        )
+        .retryable());
+    }
+    on_chunk(data);
+    Ok(())
+}
+
 /// Stream one chat completion, forwarding raw SSE bytes through the channel.
 /// Public so the integration test can drive it against a local mock server
 /// without a Tauri runtime.
@@ -685,7 +904,7 @@ pub async fn stream_chat(
                     let event = buffer[..start].to_string();
                     buffer.drain(..start + len);
                     if let Some(data) = extract_sse_data(&event) {
-                        on_chunk(data);
+                        forward_sse_data(data, on_chunk)?;
                     }
                 }
             }
@@ -700,7 +919,7 @@ pub async fn stream_chat(
     // 流结束冲刷残留缓冲:有的服务器最后一个事件不带分隔符就关流
     // (与前端 createSseParser#end 同语义)。
     if let Some(data) = extract_sse_data(&buffer) {
-        on_chunk(data);
+        forward_sse_data(data, on_chunk)?;
     }
     Ok(())
 }
@@ -848,6 +1067,53 @@ pub async fn ai_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sse_error_frames_become_upstream_errors() {
+        assert_eq!(
+            sse_error_message(
+                r#"{"error":{"message":"Model request timed out","code":"timeout"}}"#
+            ),
+            Some("Model request timed out".to_string())
+        );
+        assert_eq!(
+            sse_error_message(r#"{"error":"bad envelope"}"#),
+            Some("bad envelope".to_string())
+        );
+        assert_eq!(
+            sse_error_message(r#"{"choices":[{"delta":{"content":"ok"}}]}"#),
+            None
+        );
+        assert_eq!(sse_error_message("[DONE]"), None);
+    }
+
+    #[test]
+    fn oc_ferry_models_are_kept_verbatim_and_filtered() {
+        let body = json!({
+            "object": "list",
+            "data": [
+                { "id": "OC · GLM-4.6" },
+                { "id": "  " },
+                { "name": "no id" },
+                { "id": "x".repeat(129) }
+            ]
+        });
+        assert_eq!(
+            parse_oc_ferry_models(&body),
+            vec!["OC · GLM-4.6".to_string()]
+        );
+        assert!(parse_oc_ferry_models(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn oc_ferry_model_is_trimmed_and_bounded() {
+        assert_eq!(
+            validate_oc_ferry_model("  OC · GLM-4.6  ").unwrap(),
+            "OC · GLM-4.6"
+        );
+        assert!(validate_oc_ferry_model("  ").is_err());
+        assert!(validate_oc_ferry_model(&"x".repeat(129)).is_err());
+    }
 
     #[test]
     fn chat_endpoint_appends_path() {

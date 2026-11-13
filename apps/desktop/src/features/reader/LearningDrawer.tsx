@@ -408,6 +408,15 @@ export function LearningDrawer({
                     })}
                   </div>
                 )}
+                <div className="mistake-actions">
+                  <button
+                    type="button"
+                    onClick={() => void removeCard(reviewCard.id)}
+                    title="从复习和错题库中删除这张卡片"
+                  >
+                    删除卡片
+                  </button>
+                </div>
               </>
             )}
           </section>

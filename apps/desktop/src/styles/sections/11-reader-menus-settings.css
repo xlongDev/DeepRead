@@ -581,6 +581,19 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   min-width: 180px;
 }
 
+/* OC Ferry 一键接入:表单之外的一行动作,发丝线与上面的配置分开。 */
+.ai-oc-ferry {
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--color-border);
+}
+
+.ai-oc-ferry-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
 /* 连接 / 模型各三格,并排才塞得进 78dvh 的三明治弹窗;窄窗回单列。 */
 .ai-fields-grid {
   display: grid;

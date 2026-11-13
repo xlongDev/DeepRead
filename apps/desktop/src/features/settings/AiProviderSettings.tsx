@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { X } from '@phosphor-icons/react'
 import { DropdownMenu } from '../../components/DropdownMenu'
-import { toAppError, type AiProviderConfig } from '@deepread/shared'
+import { toAppError, type AiProviderConfig, type OcFerryDiscovery } from '@deepread/shared'
 import { invokeCommand, isTauriRuntime } from '../../lib/ipc'
 import { resolveActiveProvider, writeActiveProviderId } from '../../lib/ai-active-provider'
 
@@ -123,6 +123,36 @@ export function useAiProviders() {
     }
   }, [])
 
+  /** OC Ferry 的探测与采用都走 Rust:密钥不进页面(ADR-0010)。 */
+  const detectOcFerry = useCallback(async (): Promise<OcFerryDiscovery | null> => {
+    try {
+      const found = await invokeCommand('ai.ocFerry.detect', undefined)
+      setError(null)
+      return found
+    } catch (detectError) {
+      setError(toAppError(detectError).message)
+      return null
+    }
+  }, [])
+
+  const adoptOcFerryModel = useCallback(async (model: string): Promise<boolean> => {
+    try {
+      const response = await invokeCommand('ai.ocFerry.use', { model })
+      setProviders((current) => [
+        response.provider,
+        ...current.filter((provider) => provider.id !== response.provider.id),
+      ])
+      setActiveId(response.provider.id)
+      // 与 saveProvider 同一条规则:采用即生效,并跨会话记住。
+      writeActiveProviderId(response.provider.id)
+      setError(null)
+      return true
+    } catch (useError) {
+      setError(toAppError(useError).message)
+      return false
+    }
+  }, [])
+
   const reload = useCallback((): Promise<void> => {
     if (!isTauriRuntime()) {
       setLoaded(true)
@@ -160,6 +190,8 @@ export function useAiProviders() {
     setConfigForm,
     saveProvider,
     removeProvider,
+    detectOcFerry,
+    adoptOcFerryModel,
     reload,
     error,
   }
