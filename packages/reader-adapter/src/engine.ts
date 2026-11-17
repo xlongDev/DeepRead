@@ -20,6 +20,10 @@ import {
   type BookFormat,
   type BookMetadata,
   type BookSource,
+  type EngineAnchoring,
+  type EngineReadableText,
+  type EngineTextEditing,
+  type EngineTtsBridge,
   type ReaderEngine,
   type ReaderLayout,
   type ReaderOpenInit,
@@ -959,6 +963,24 @@ export class FoliateAdapter implements ReaderEngine {
       this.#hostObserver = new ResizeObserver(this.#onHostResize)
       this.#hostObserver.observe(host)
     }
+  }
+
+  // 契约域能力:方法都在本类上,域接口直接暴露自身 —— 新内核按域选择性
+  // 实现,UI 只认 ReaderEngine 上的可空域,不再认识 FoliateAdapter。
+  get readableText(): EngineReadableText {
+    return this
+  }
+
+  get textEditing(): EngineTextEditing {
+    return this
+  }
+
+  get anchoring(): EngineAnchoring {
+    return this
+  }
+
+  get ttsBridge(): EngineTtsBridge {
+    return this
   }
 
   #onRulerWheel(event: WheelEvent): void {

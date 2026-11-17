@@ -19,6 +19,7 @@ import type {
   TocItem,
   ZhConvertVariant,
 } from './types'
+import type { ChapterRule } from '@deepread/shared'
 
 export interface BookCharStats {
   /** 全书字数(CJK 字数 + 西文词数)。 */
@@ -135,7 +136,74 @@ export interface ReaderEngine {
    */
   flipLeafLayers?(): readonly Element[]
 
+  /**
+   * 契约外的域能力(可选域)。核心方法任何内核都必须有;下面几域只在支持
+   * 的内核上出现(如 FoliateAdapter),调用方判空使用 —— “内核可换”不再
+   * 要求每个内核长成 foliate 的形状,宿主对缺域降级或隐藏入口即可。
+   */
+
+  /** 可朗读正文数据面:TTS 断句、章字数、章节跳转共用。 */
+  readonly readableText?: EngineReadableText
+  /** TXT/MD 直修数据面:适配层从纯文本自建的书才支持(文内修整/章节重建)。 */
+  readonly textEditing?: EngineTextEditing
+  /** 划线锚定:已存划线在宿主窗口坐标里的选区框。 */
+  readonly anchoring?: EngineAnchoring
+  /** TTS 词级高亮桥:听书时把当前朗读词染色的唯一通道。 */
+  readonly ttsBridge?: EngineTtsBridge
+
+  /**
+   * 向书籍文档注入 @font-face 规则(内置 + 用户导入)。open() 的
+   * init.fontFaces 是开书初值;这是运行中的重注入(用户导入字体后立即生效,
+   * 不重开书)。不支持时静默跳过。
+   */
+  setFontFaces?(css: string): Promise<void>
+
   destroy(): Promise<void>
+}
+
+/**
+ * 可朗读正文数据面。**不是** `body.textContent` —— 实现要保证块级元素
+ * 之间有虚拟换行(标题/段落/列表项各自成句),且按 index 取文时等目标
+ * section 实际挂载(宁等,也不读错章)。
+ */
+export interface EngineReadableText {
+  /** 章节(spine)总数。 */
+  getSectionCount(): Promise<number>
+  /** 可朗读纯文本;省略 index 读当前挂载的第一节。 */
+  getSectionText(index?: number): Promise<string>
+  /** 按章节序号跳转,并等目标 section 实际挂载(后续 getSectionText 读到对的章)。 */
+  goToSection(index: number): Promise<void>
+}
+
+/** TXT/MD 直修数据面。 */
+export interface EngineTextEditing {
+  /** 适配层构建的原始文本;内核自己解析的书(EPUB/PDF 等)返回 null。 */
+  getSourceText(): string | null
+  /** 适配层构建格式;null = 非适配层构建。 */
+  getAdapterBuiltFormat(): 'txt' | 'md' | null
+  /** 用修整后的文本重建书并回到首节。 */
+  replaceSource(text: string): Promise<void>
+  /**
+   * 按章节规则重建 TXT 的分节(null = 只用内置规则),返回分节数。
+   * 规则形状见 ai-core 的 `ChapterRule`(与 wire 协议同构)。
+   */
+  rebuildChapters(rules: readonly ChapterRule[] | null): Promise<number>
+}
+
+/** 划线锚定:把已存划线的 CFI 解回选区框(宿主窗口坐标系,工具条贴靠用)。 */
+export interface EngineAnchoring {
+  /** 解不出、或所在 section 未挂载(翻去别的章)时返回 null,调用方自行回退。 */
+  rectOfAnnotation(cfi: string): {
+    readonly top: number
+    readonly left: number
+    readonly height: number
+  } | null
+}
+
+/** TTS 词级高亮桥。重排格式走内核 overlayer,fixed-layout 由实现自选等价物。 */
+export interface EngineTtsBridge {
+  setTTSHighlightByOffset(charStart: number, charEnd: number, color: string): Promise<void>
+  clearTTSHighlight(): Promise<void>
 }
 
 export interface ReadingRulerOptions {

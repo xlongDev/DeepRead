@@ -31,6 +31,7 @@ import {
 } from '@deepread/shared'
 import type {
   AnnotationStyle,
+  ReaderEngine,
   ReaderLayout,
   TocItem,
   ZhConvertVariant,
@@ -307,7 +308,7 @@ export function ReaderScreen({
   onOpenParallel,
 }: ReaderScreenProps) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const adapterRef = useRef<FoliateAdapter | null>(null)
+  const adapterRef = useRef<ReaderEngine | null>(null)
   const callbacksRef = useRef<EngineCallbacks>({})
   const handleReaderKeyRef = useRef<(event: KeyboardEvent) => void>(() => {})
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -654,7 +655,7 @@ export function ReaderScreen({
   const countSectionChars = useCallback((sectionIndex: number): void => {
     const token = charCountTokenRef.current + 1
     charCountTokenRef.current = token
-    void adapterRef.current
+    void adapterRef.current?.readableText
       ?.getSectionText(sectionIndex)
       .then((text) => {
         if (token === charCountTokenRef.current) setSectionChars(countChars(text))
@@ -724,7 +725,7 @@ export function ReaderScreen({
         setSelection(null)
         setActiveAnnotation(cfi)
         // 点中的是已有划线:没有伴随选区,锚点由内核把 CFI 解回 Range 现测。
-        setActiveAnnotationRect(adapterRef.current?.rectOfAnnotation(cfi) ?? null)
+        setActiveAnnotationRect(adapterRef.current?.anchoring?.rectOfAnnotation(cfi) ?? null)
         showChromeRef.current()
       },
     }
@@ -766,7 +767,7 @@ export function ReaderScreen({
   useEffect(() => {
     // 内核就绪前注入无效(adapter 还是 null),所以等进入阅读态再刷一次。
     if (phase !== 'reading') return
-    void adapterRef.current?.setFontFaces(
+    void adapterRef.current?.setFontFaces?.(
       buildFontFacesCss(customFonts.map((font) => ({ name: font.name, path: font.path }))),
     )
   }, [customFonts, phase])
@@ -967,7 +968,7 @@ export function ReaderScreen({
       .getText()
       .then((text) => {
         setAiContext(text.slice(0, 2000))
-        const source = adapter.getSourceText()
+        const source = adapter.textEditing?.getSourceText() ?? null
         if (source !== null) {
           setSourceText(source)
           setRagSections(chapterSections(source))
@@ -1482,17 +1483,17 @@ export function ReaderScreen({
   const ttsGetSectionText = useCallback(async (): Promise<string> => {
     const adapter = adapterRef.current
     if (!adapter) return ''
-    return adapter.getSectionText(sectionIndexRef.current)
+    return (await adapter.readableText?.getSectionText(sectionIndexRef.current)) ?? ''
   }, [])
 
   /** TTS 听书:按 ±1 跳转章节;越界返回 false。 */
   const ttsJumpSection = useCallback(async (delta: number): Promise<boolean> => {
     const adapter = adapterRef.current
     if (!adapter) return false
-    const count = await adapter.getSectionCount()
+    const count = (await adapter.readableText?.getSectionCount()) ?? 0
     const next = sectionIndexRef.current + delta
     if (next < 0 || next >= count) return false
-    await adapter.goToSection(next)
+    await adapter.readableText?.goToSection(next)
     sectionIndexRef.current = next
     return true
   }, [])
@@ -2006,7 +2007,7 @@ export function ReaderScreen({
   }, [])
 
   const startRepair = (): void => {
-    const source = adapterRef.current?.getSourceText()
+    const source = adapterRef.current?.textEditing?.getSourceText() ?? null
     if (source === null || source === undefined) return
     const review = reviewRepair(source)
     setRepairReview({
@@ -2019,10 +2020,10 @@ export function ReaderScreen({
     const adapter = adapterRef.current
     const review = repairReview
     if (!adapter || !review) return
-    const source = adapter.getSourceText()
+    const source = adapter.textEditing?.getSourceText() ?? null
     if (source === null) return
     const repaired = applyRepair(source, [...review.accepted])
-    await adapter.replaceSource(repaired)
+    await adapter.textEditing?.replaceSource(repaired)
     setToc(await adapter.getTableOfContents())
     setRepairReview(null)
     setNotice({ text: `已应用 ${review.accepted.size} 处排版修复。`, danger: false })
@@ -2048,7 +2049,7 @@ export function ReaderScreen({
   const toggleRebuildPanel = useCallback((): void => {
     setRebuildOpen((open) => {
       if (open) return false
-      const source = adapterRef.current?.getSourceText() ?? ''
+      const source = adapterRef.current?.textEditing?.getSourceText() ?? ''
       setChapterSampleLines(
         source
           .split('\n')
@@ -2080,7 +2081,7 @@ export function ReaderScreen({
     async (rules: readonly ChapterRule[]): Promise<void> => {
       const adapter = adapterRef.current
       if (!adapter) return
-      const count = await adapter.rebuildChapters(rules)
+      const count = await adapter.textEditing?.rebuildChapters(rules)
       setToc(await adapter.getTableOfContents())
       // 规则已落库成为唯一事实来源,旧键再留着只会造成"改了两处"的错觉。
       localStorage.removeItem(`deepread.chapterPattern.${book.hash}`)
@@ -2645,8 +2646,8 @@ export function ReaderScreen({
             onReplaceSource={async (text) => {
               const adapter = adapterRef.current
               if (!adapter) return
-              await adapter.replaceSource(text)
-              const source = adapter.getSourceText()
+              await adapter.textEditing?.replaceSource(text)
+              const source = adapter.textEditing?.getSourceText() ?? null
               if (source !== null) {
                 setSourceText(source)
                 setRagSections(chapterSections(source))
@@ -2789,10 +2790,10 @@ export function ReaderScreen({
                 const adapter = adapterRef.current
                 if (!adapter) return
                 if (highlight === null) {
-                  void adapter.clearTTSHighlight()
+                  void adapter.ttsBridge?.clearTTSHighlight()
                   return
                 }
-                void adapter.setTTSHighlightByOffset(
+                void adapter.ttsBridge?.setTTSHighlightByOffset(
                   highlight.start,
                   highlight.end,
                   highlight.color,

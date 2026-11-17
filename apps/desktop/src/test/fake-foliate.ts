@@ -96,6 +96,21 @@ export class FakeFoliateAdapter {
   readonly setReadingRuler = vi.fn<(options: ReadingRulerOptions | null) => void>()
   readonly moveReadingRuler = vi.fn<(direction: -1 | 1) => Promise<void>>()
 
+  // 契约域能力:真内核暴露自身,替身同形 —— UI 经 ReaderEngine 的可选域
+  // 取用,不然测试里域跳转全被可选链吞掉、路径静默变空操作。
+  get readableText(): FakeFoliateAdapter {
+    return this
+  }
+  get textEditing(): FakeFoliateAdapter {
+    return this
+  }
+  get anchoring(): FakeFoliateAdapter {
+    return this
+  }
+  get ttsBridge(): FakeFoliateAdapter {
+    return this
+  }
+
   constructor(host: HTMLElement, callbacks: EngineCallbacks = {}, options?: FakeFoliateOptions) {
     this.host = host
     this.callbacks = callbacks
