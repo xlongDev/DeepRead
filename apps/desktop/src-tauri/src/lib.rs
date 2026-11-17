@@ -17,6 +17,7 @@ pub mod error;
 mod events;
 mod fonts;
 pub mod library;
+mod opds;
 mod secrets;
 pub mod state;
 pub mod storage;
@@ -247,6 +248,8 @@ pub fn run() {
             tts_export::tts_export_start,
             tts_export::tts_export_status,
             tts_export::tts_export_cancel,
+            opds::opds_fetch,
+            opds::opds_download,
             fonts::command_fonts_list,
             fonts::command_fonts_import,
             fonts::command_fonts_remove,

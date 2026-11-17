@@ -1334,3 +1334,47 @@
   align-items: center;
   gap: var(--space-8);
 }
+
+/* OPDS 书源抽屉(plan B9.2):沿用 sync-drawer 骨架,条目列表是增量。 */
+.opds-entries {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opds-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.opds-entry-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.opds-entry-title {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opds-entry-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.opds-next {
+  align-self: center;
+}

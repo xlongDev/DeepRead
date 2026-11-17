@@ -40,6 +40,7 @@ import { fetchExportStatuses, type TtsExportTaskEntry } from '../../lib/tts-expo
 import { useKeybindings } from '../../lib/keybindings'
 import { CommandBar } from '../../components/CommandBar'
 import { SyncDrawer } from './SyncDrawer'
+import { OpdsDrawer } from './OpdsDrawer'
 import { BookInfoDialog, type BookInfoDraft } from './BookInfoDialog'
 import { LibrarySidebar, SidebarToggleIcon } from './LibrarySidebar'
 import { NotesView } from './NotesView'
@@ -293,6 +294,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [shelfDensity, setShelfDensity] = useState<ShelfDensity>(densityFromStorage)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [syncOpen, setSyncOpen] = useState(false)
+  const [opdsOpen, setOpdsOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
   // 外观四条轴(主题/强调色/壁纸/动效)收进 hook:状态、持久化与 <html> 的
@@ -1584,6 +1586,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
                   onFavoriteSelected={() => void favoriteSelected()}
                   onImport={triggerImport}
                   onRemoveBook={(book) => void removeFromLibrary(book.hash)}
+                  onOpenOpds={() => setOpdsOpen(true)}
                   tagDraft={tagDraft}
                   onTagDraft={setTagDraft}
                   onTagSelected={() => void tagSelected()}
@@ -1655,6 +1658,10 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
 
       {syncOpen && (
         <SyncDrawer onRestored={() => void loadBooks()} onClose={() => setSyncOpen(false)} />
+      )}
+
+      {opdsOpen && (
+        <OpdsDrawer onImported={() => void loadBooks()} onClose={() => setOpdsOpen(false)} />
       )}
 
       {editBook !== null && (

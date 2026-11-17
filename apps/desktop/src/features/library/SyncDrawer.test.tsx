@@ -83,7 +83,9 @@ describe('SyncDrawer', () => {
     fireEvent.click(await screen.findByRole('button', { name: '备份数据库' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('磁盘满了'))
     // busy 复位:动作按钮重新可点。
-    expect(screen.getByRole('button', { name: '备份数据库' }).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '备份数据库' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    )
   })
 
   it('自动同步开关落 localStorage,与书架侧静默同步读同一个键', async () => {

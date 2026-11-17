@@ -19,6 +19,7 @@ import {
   MagnifyingGlass,
   PencilSimple,
   Plus,
+  Rss,
   SquaresFour,
   Star,
   Tag,
@@ -91,6 +92,8 @@ export interface ShelfViewProps {
   /** 导出这本书的批注(.md)。 */
   readonly onExportNotes: (book: ShelfBook) => void | Promise<void>
   readonly onImport: () => void
+  /** 打开「添加书源」(OPDS)抽屉。 */
+  readonly onOpenOpds: () => void
   /** 移除一本书(进度与批注一并删除;两击确认在 ConfirmButton 里)。 */
   readonly onRemoveBook: (book: ShelfBook) => void
   readonly tagDraft: string
@@ -133,6 +136,7 @@ export function ShelfView({
   onTagPreset,
   onExportNotes,
   onImport,
+  onOpenOpds,
   onRemoveBook,
   tagDraft,
   onTagDraft,
@@ -394,6 +398,9 @@ export function ShelfView({
           >
             <CheckSquare size={14} weight={selecting ? 'fill' : 'regular'} aria-hidden />
             {selecting ? '完成' : '管理'}
+          </button>
+          <button type="button" className="shelf-import" onClick={onOpenOpds} aria-label="添加书源">
+            <Rss size={14} weight="bold" aria-hidden /> 书源
           </button>
           <button type="button" className="shelf-import" onClick={onImport} aria-label="导入书籍">
             <Plus size={14} weight="bold" aria-hidden /> 导入

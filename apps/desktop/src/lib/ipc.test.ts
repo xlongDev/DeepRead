@@ -21,6 +21,16 @@ import { AppError, COMMAND, ErrorCodes } from '@deepread/shared'
 import { webHandlers } from './web-handlers'
 import { invokeCommand, invokeStreamingCommand, isTauriRuntime, listenEvent } from './ipc'
 
+/** 把「期待拒绝」收敛成 AppError:catch 返回值与成功分支的 union 会让断言变模糊。 */
+async function failureOf(promise: Promise<unknown>): Promise<AppError> {
+  try {
+    await promise
+  } catch (error) {
+    return error as AppError
+  }
+  throw new Error('期待该调用被拒绝,却成功了')
+}
+
 const setTauri = (on: boolean): void => {
   if (on) {
     ;(window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {}
@@ -54,14 +64,14 @@ describe('invokeCommand', () => {
 
   it('响应未过 schema 校验 = 安全事件,不是静默透传', async () => {
     invokeMock.mockResolvedValue('yes')
-    const error = await invokeCommand('fonts.remove', { id: 'font-1' }).catch((e: AppError) => e)
+    const error = await failureOf(invokeCommand('fonts.remove', { id: 'font-1' }))
     expect(error.code).toBe(ErrorCodes.securityValidationFailed)
     expect(error.message).toContain('未通过 schema 校验')
   })
 
   it('Rust 的 wire 错误载荷归一成 AppError', async () => {
     invokeMock.mockRejectedValue({ code: 'STORAGE_IO', message: '数据库忙', retryable: false })
-    const error = await invokeCommand('fonts.remove', { id: 'font-1' }).catch((e: AppError) => e)
+    const error = await failureOf(invokeCommand('fonts.remove', { id: 'font-1' }))
     expect(error.code).toBe('STORAGE_IO')
     expect(error.message).toBe('数据库忙')
     expect(error.retryable).toBe(false)
@@ -69,7 +79,7 @@ describe('invokeCommand', () => {
 
   it('Tauri 的裸字符串失败(panic/坏参数)原样透出,不是一句笼统的失败', async () => {
     invokeMock.mockRejectedValue('tauri: state not managed')
-    const error = await invokeCommand('fonts.remove', { id: 'font-1' }).catch((e: AppError) => e)
+    const error = await failureOf(invokeCommand('fonts.remove', { id: 'font-1' }))
     expect(error.code).toBe(ErrorCodes.systemIpcFailed)
     expect(error.message).toBe('tauri: state not managed')
   })
@@ -85,7 +95,7 @@ describe('invokeCommand', () => {
 
   it('浏览器模式:未实现的命令明确报「运行时不可用」,不静默', async () => {
     setTauri(false)
-    const error = await invokeCommand('cloud.backup', undefined).catch((e: AppError) => e)
+    const error = await failureOf(invokeCommand('cloud.backup', undefined))
     expect(error.code).toBe(ErrorCodes.systemRuntimeUnavailable)
     expect(error.message).toContain('运行时不可用')
   })

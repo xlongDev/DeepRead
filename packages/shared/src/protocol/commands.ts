@@ -132,6 +132,12 @@ import type { TtsExportStatusRequest } from './generated/TtsExportStatusRequest'
 import type { TtsExportStatusResponse } from './generated/TtsExportStatusResponse'
 import type { TtsExportTaskEntry } from './generated/TtsExportTaskEntry'
 import type { TtsExportTaskStatus } from './generated/TtsExportTaskStatus'
+import type { OpdsAcquisition } from './generated/OpdsAcquisition'
+import type { OpdsCatalog } from './generated/OpdsCatalog'
+import type { OpdsDownloadRequest } from './generated/OpdsDownloadRequest'
+import type { OpdsDownloadResponse } from './generated/OpdsDownloadResponse'
+import type { OpdsEntry } from './generated/OpdsEntry'
+import type { OpdsFetchRequest } from './generated/OpdsFetchRequest'
 import type { ReadingFont } from './generated/ReadingFont'
 import type { FontImportRequest } from './generated/FontImportRequest'
 import type { FontRemoveRequest } from './generated/FontRemoveRequest'
@@ -281,6 +287,12 @@ export type {
   TtsExportStatusResponse,
   TtsExportTaskEntry,
   TtsExportTaskStatus,
+  OpdsAcquisition,
+  OpdsCatalog,
+  OpdsDownloadRequest,
+  OpdsDownloadResponse,
+  OpdsEntry,
+  OpdsFetchRequest,
 }
 
 export const COMMAND = {
@@ -333,6 +345,8 @@ export const COMMAND = {
   ttsAudio: 'tts.audio',
   ttsEdgeAudio: 'tts.edge.audio',
   ttsEdgeVoices: 'tts.edge.voices',
+  opdsFetch: 'opds.fetch',
+  opdsDownload: 'opds.download',
   ttsExportStart: 'tts.export.start',
   ttsExportStatus: 'tts.export.status',
   ttsExportCancel: 'tts.export.cancel',
@@ -536,6 +550,14 @@ export interface CommandMap {
   [COMMAND.ttsExportCancel]: {
     readonly request: TtsExportCancelRequest
     readonly response: TtsExportCancelResponse
+  }
+  [COMMAND.opdsFetch]: {
+    readonly request: OpdsFetchRequest
+    readonly response: OpdsCatalog
+  }
+  [COMMAND.opdsDownload]: {
+    readonly request: OpdsDownloadRequest
+    readonly response: OpdsDownloadResponse
   }
   [COMMAND.fontsList]: { readonly request: undefined; readonly response: ReadingFont[] }
   [COMMAND.fontsImport]: { readonly request: FontImportRequest; readonly response: ReadingFont }
@@ -1066,6 +1088,38 @@ export const ttsExportCancelResponseSchema = z.object({
   cancelled: z.boolean(),
 })
 
+/* OPDS 书源(plan B9.2):目录解析与下载在 Rust,认证不回传 UI。 */
+
+export const opdsFetchRequestSchema = z.object({
+  url: z.string().min(1).max(4096),
+  username: z.string().max(256).nullish(),
+  password: z.string().max(256).nullish(),
+})
+export const opdsAcquisitionSchema = z.object({
+  href: z.string().min(1).max(4096),
+  kind: z.string().max(256).nullish(),
+})
+export const opdsEntrySchema = z.object({
+  title: z.string().max(512),
+  author: z.string().max(256).nullish(),
+  summary: z.string().max(2048).nullish(),
+  coverUrl: z.string().max(4096).nullish(),
+  downloads: z.array(opdsAcquisitionSchema).max(20),
+})
+export const opdsCatalogSchema = z.object({
+  title: z.string().max(512),
+  entries: z.array(opdsEntrySchema).max(2000),
+  nextUrl: z.string().max(4096).nullish(),
+})
+export const opdsDownloadRequestSchema = z.object({
+  url: z.string().min(1).max(4096),
+  username: z.string().max(256).nullish(),
+  password: z.string().max(256).nullish(),
+})
+export const opdsDownloadResponseSchema = z.object({
+  path: z.string().min(1).max(4096),
+})
+
 export const readingFontSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(256),
@@ -1191,6 +1245,8 @@ export const responseSchemas = {
   [COMMAND.ttsExportStart]: ttsExportStartResponseSchema,
   [COMMAND.ttsExportStatus]: ttsExportStatusResponseSchema,
   [COMMAND.ttsExportCancel]: ttsExportCancelResponseSchema,
+  [COMMAND.opdsFetch]: opdsCatalogSchema,
+  [COMMAND.opdsDownload]: opdsDownloadResponseSchema,
   [COMMAND.fontsList]: fontsListResponseSchema,
   [COMMAND.fontsImport]: fontsImportResponseSchema,
   [COMMAND.fontsRemove]: fontsRemoveResponseSchema,
@@ -1263,6 +1319,8 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.ttsExportStart]: ttsExportStartRequestSchema,
   [COMMAND.ttsExportStatus]: ttsExportStatusRequestSchema,
   [COMMAND.ttsExportCancel]: ttsExportCancelRequestSchema,
+  [COMMAND.opdsFetch]: opdsFetchRequestSchema,
+  [COMMAND.opdsDownload]: opdsDownloadRequestSchema,
   [COMMAND.fontsList]: undefined,
   [COMMAND.fontsImport]: fontImportRequestSchema,
   [COMMAND.fontsRemove]: fontRemoveRequestSchema,

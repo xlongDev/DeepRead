@@ -461,6 +461,7 @@ describe('LibraryScreen 外壳契约', () => {
       '排序方式',
       '切换排序方向(当前降序)',
       '批量管理',
+      '添加书源',
       '导入书籍',
     ])
     expect(document.querySelector('.shelf-title')?.textContent).toContain('书架')
