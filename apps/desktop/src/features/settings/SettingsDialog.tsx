@@ -36,11 +36,12 @@ import {
 import { AiProviderForm, useAiProviders } from './AiProviderSettings'
 import { KeybindingsSettings } from './KeybindingsSettings'
 import {
-  APP_THEMES,
+  APP_THEME_CHOICES,
   formatBytes,
   SHELF_COLUMN_OPTIONS,
   SHELF_DENSITY_OPTIONS,
   type AppTheme,
+  type AppThemeChoice,
   type ShelfColumns,
   type ShelfDensity,
 } from '../library/shelf-view'
@@ -54,8 +55,11 @@ type SettingsTab = (typeof SETTINGS_TABS)[number]
 const IGNORED_VERSION_KEY = 'deepread.update.ignored'
 
 interface SettingsDialogProps {
+  /** 生效世界(三个之一):决定下拉色标等按明暗分叉的显示。 */
   readonly appTheme: AppTheme
-  readonly onThemeChange: (theme: AppTheme) => void
+  /** 用户选的那一项(可能是「跟随系统」):决定哪张卡被选中。 */
+  readonly themeChoice: AppThemeChoice
+  readonly onThemeChange: (theme: AppThemeChoice) => void
   readonly accent: AccentChoice
   readonly onAccentChange: (choice: AccentChoice) => void
   /** 网格一行几本;状态归宿主(书架),这里只是它的设置入口。 */
@@ -76,6 +80,7 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({
   appTheme,
+  themeChoice,
   onThemeChange,
   accent,
   onAccentChange,
@@ -123,15 +128,28 @@ export function SettingsDialog({
 
   const {
     providers,
-    loaded: aiLoaded,
     activeId: aiActiveId,
     configForm: aiConfigForm,
     setConfigForm: setAiConfigForm,
     saveProvider: saveAiProvider,
     removeProvider: removeAiProvider,
+    activateProvider: activateAiProvider,
+    editProvider: editAiProvider,
+    newProvider: newAiProvider,
+    editingId: aiEditingId,
+    embedding: aiEmbedding,
+    embeddingForm: aiEmbeddingForm,
+    setEmbeddingForm: setAiEmbeddingForm,
+    saveEmbedding: saveAiEmbedding,
+    removeEmbedding: removeAiEmbedding,
+    testEmbedding: testAiEmbedding,
+    embeddingBusy: aiEmbeddingBusy,
+    embeddingError: aiEmbeddingError,
+    embeddingNotice: aiEmbeddingNotice,
     detectOcFerry,
     adoptOcFerryModel,
     error: aiProviderError,
+    notice: aiNotice,
   } = useAiProviders()
 
   /** OC Ferry 是本机转发口:探测只拿模型清单,采用由 Rust 落库并存密钥。 */
@@ -338,7 +356,14 @@ export function SettingsDialog({
     <div className="modal-overlay">
       {/* 遮罩本身不可点:关闭走这个铺满背景的按钮(键盘可达),面板在上层。 */}
       <button type="button" className="modal-dismiss" aria-label="关闭设置" onClick={onClose} />
-      <dialog ref={panelRef} className="modal-panel" open aria-modal="true" aria-label="设置">
+      <dialog
+        ref={panelRef}
+        className="modal-panel"
+        data-settings-tab={settingsTab}
+        open
+        aria-modal="true"
+        aria-label="设置"
+      >
         {/* 不用 <header>/<footer>:它们在 <dialog> 里会被 AX 映射成无名的
             banner / contentinfo landmark,读屏的 landmark 列表多两个空条目。 */}
         <div className="modal-head">
@@ -436,18 +461,20 @@ export function SettingsDialog({
                   <div className="settings-theme-block">
                     <span className="settings-shelf-columns-label">明暗</span>
                     <div className="theme-grid">
-                      {APP_THEMES.map((theme) => (
+                      {APP_THEME_CHOICES.map((theme) => (
                         <button
                           key={theme.id}
                           type="button"
-                          className={`theme-swatch${appTheme === theme.id ? ' is-active' : ''}`}
+                          className={`theme-swatch${themeChoice === theme.id ? ' is-active' : ''}`}
                           onClick={() => onThemeChange(theme.id)}
-                          aria-pressed={appTheme === theme.id}
+                          aria-pressed={themeChoice === theme.id}
+                          title={
+                            theme.id === 'system'
+                              ? '浅色系统用纯白(暖纸),深色系统自动切到夜间(石墨)'
+                              : undefined
+                          }
                         >
-                          <span
-                            className="theme-swatch-color"
-                            style={{ background: theme.swatch, color: theme.ink }}
-                          >
+                          <span className="theme-swatch-color" style={{ background: theme.swatch }}>
                             <span
                               className="theme-swatch-line"
                               style={{ background: theme.ink, opacity: 0.85 }}
@@ -630,11 +657,18 @@ export function SettingsDialog({
                   <>
                     <AiProviderForm
                       providers={providers}
+                      activeId={aiActiveId}
+                      editingId={aiEditingId}
+                      notice={aiNotice}
                       configForm={aiConfigForm}
                       onFormChange={setAiConfigForm}
                       onSave={() => saveAiProvider()}
                       onRemove={removeAiProvider}
+                      onActivate={activateAiProvider}
+                      onEdit={editAiProvider}
+                      onNew={newAiProvider}
                       onApplyPreset={(preset) => {
+                        // 只碰对话服务;向量服务有自己的地址与密钥。
                         setAiConfigForm((form) => ({
                           ...form,
                           name: preset.label,
@@ -643,6 +677,15 @@ export function SettingsDialog({
                         }))
                       }}
                       error={aiProviderError}
+                      embedding={aiEmbedding}
+                      embeddingForm={aiEmbeddingForm}
+                      onEmbeddingFormChange={setAiEmbeddingForm}
+                      onSaveEmbedding={() => saveAiEmbedding()}
+                      onRemoveEmbedding={() => removeAiEmbedding()}
+                      onTestEmbedding={() => testAiEmbedding()}
+                      embeddingBusy={aiEmbeddingBusy}
+                      embeddingNotice={aiEmbeddingNotice}
+                      embeddingError={aiEmbeddingError}
                     />
                     <div className="ai-section ai-oc-ferry">
                       <p className="ai-section-title">本机免费模型 · OC Ferry</p>
@@ -685,13 +728,6 @@ export function SettingsDialog({
                         需先启动 OC Ferry 托盘程序；密钥由 Rust 在本机读取，不会进入页面。
                       </p>
                     </div>
-                    {aiLoaded && providers.length > 0 && (
-                      <p className="ai-privacy">
-                        配置好的服务会自动出现在阅读器 AI 助手与云端朗读里;当前生效:{' '}
-                        {providers.find((provider) => provider.id === aiActiveId)?.name ?? '未选择'}
-                        。
-                      </p>
-                    )}
                   </>
                 )}
               </div>

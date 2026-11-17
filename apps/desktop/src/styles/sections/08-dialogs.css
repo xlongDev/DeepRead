@@ -33,7 +33,7 @@
   position: relative;
   /* 面板在上层,遮罩按钮只铺在下层。 */
   z-index: 1;
-  width: min(460px, 100%);
+  width: min(560px, 100%);
   max-height: min(78dvh, 720px);
   /* 面板自己是「三明治」:标题、页签、页脚固定,只有 .settings-body 滚。
      原来滚动条挂在整块面板上,一滚就把标题和「完成」一起推出去 —— 用户在
@@ -47,6 +47,12 @@
      16px 的大窗口读作「放大的卡片」,而这里是一整块浮起的面板。 */
   border-radius: var(--radius-sheet);
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+/* AI 服务页有三块表单(对话 / 向量 / 本机模型),560px 会把两列挤到标签折行、
+   说明文字压到按钮上。只有这一页加宽,外观 / 快捷键页维持原来的紧凑节奏。 */
+.modal-panel[data-settings-tab='ai'] {
+  width: min(700px, 100%);
 }
 
 /* 原生 <dialog> 自带边框/内边距/居中,这里只保留语义,外观交给 tokens。 */
@@ -168,7 +174,8 @@ dialog.modal-panel {
 }
 
 /* Theme swatches: each previews its own world in miniature. */
-/* 「界面主题」卡里的「明暗」块:小标签 + 三张预览同占一行组。
+/* 「界面主题」卡里的「明暗」块:小标签 + 四张预览同占一行组(跟随系统 +
+   三个世界)。窄窗口放不下四张时 auto-fill 自己折行,不硬挤。
    明暗与配色是同一件事的两半,同卡两行,靠 .settings-group 的发丝线分开。 */
 .settings-theme-block {
   display: flex;

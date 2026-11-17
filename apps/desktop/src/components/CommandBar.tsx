@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { MagnifyingGlass } from '@phosphor-icons/react'
-import { APP_THEMES, type AppTheme } from '@deepread/design-system'
+import { APP_THEME_CHOICES, type AppThemeChoice } from '@deepread/design-system'
 import { useModalFocus } from '../lib/modal-dialog'
 import { isTauriRuntime } from '../lib/ipc'
 import { shelfTitle, type LibraryView, type ShelfBook } from '../features/library/shelf-view'
@@ -21,7 +21,7 @@ interface CommandBarProps {
   readonly onImport: () => void
   readonly onSettings: () => void
   readonly onSync: () => void
-  readonly onTheme: (theme: AppTheme) => void
+  readonly onTheme: (theme: AppThemeChoice) => void
 }
 
 /**
@@ -82,7 +82,7 @@ export function CommandBar({
       ...(isTauriRuntime()
         ? [{ id: 'sync', label: '云同步', hint: 'WebDAV', group: '操作', run: onSync }]
         : []),
-      ...APP_THEMES.map((theme) => ({
+      ...APP_THEME_CHOICES.map((theme) => ({
         id: `theme-${theme.id}`,
         label: `外观:${theme.label}`,
         hint: '切换主题',

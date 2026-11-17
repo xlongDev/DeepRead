@@ -153,7 +153,7 @@ export function AiDrawer({
   onSaveAnswerToNote,
   onClose,
 }: AiDrawerProps) {
-  const { providers, activeId, setActiveId } = useAiProviders()
+  const { providers, activeId, setActiveId, embedding } = useAiProviders()
   const [messages, setMessages] = useState<readonly ChatUiMessage[]>([])
   const [input, setInput] = useState('')
   const [phase, setPhase] = useState<StreamPhase>('idle')
@@ -233,7 +233,10 @@ export function AiDrawer({
           text: chunk.text,
           vector: vectors[i] ?? [],
         })),
+        // 索引按向量模型失效:优先用独立的全书问答服务,老数据才回落对话
+        // Provider 上那个 embeddingModel。
         embeddingModel:
+          embedding?.model ??
           providers.find((provider) => provider.id === activeId)?.embeddingModel ??
           providers.find((provider) => provider.id === activeId)?.model ??
           'mock-model',
@@ -250,7 +253,7 @@ export function AiDrawer({
       setIndexStatus('missing')
       setError(toAppError(indexError).message)
     }
-  }, [activeId, bookHash, providers, sections])
+  }, [activeId, bookHash, providers, sections, embedding])
 
   // 聊天历史:开抽屉时恢复上次的会话(仅 user/assistant 两种角色)。
   useEffect(() => {

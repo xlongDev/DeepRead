@@ -147,7 +147,12 @@ export function toggleFavoriteTag(tags: readonly string[]): readonly string[] {
 
 /* 主题目录的唯一定义在设计系统包里(tokens.css 是运行时值的唯一真相)。
    这里 re-export,让书架这一层的调用方不必知道包边界。 */
-export { APP_THEMES, LEGACY_APP_THEME_MAP, type AppTheme } from '@deepread/design-system'
+export {
+  APP_THEMES,
+  APP_THEME_CHOICES,
+  type AppTheme,
+  type AppThemeChoice,
+} from '@deepread/design-system'
 
 export const SORT_LABELS: Readonly<Record<SortKey, string>> = {
   added: '最近添加',

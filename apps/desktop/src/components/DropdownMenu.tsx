@@ -28,6 +28,8 @@ interface DropdownMenuProps<T extends string> {
    * 壳内重新挂上这些变量,规则照常命中(与 TTS 播放器 portal 同款做法)。
    */
   readonly themeVars?: React.CSSProperties
+  /** 右列里的下拉往左长(菜单才能留在弹窗内);默认贴触发器左边缘展开。 */
+  readonly menuAlign?: 'start' | 'end' | 'auto'
 }
 
 /** 菜单浮层的 z-index:压在一切 chrome(40)与设置面板(45)之上。 */
@@ -50,6 +52,7 @@ export function DropdownMenu<T extends string>({
   title,
   children,
   themeVars,
+  menuAlign = 'start',
 }: DropdownMenuProps<T>) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -62,7 +65,7 @@ export function DropdownMenu<T extends string>({
 
   // 落位逻辑与 ActionMenu 共用一份:同一个界面里的两个菜单必须遵守同一套
   // 翻转 / 夹边规则,否则一个向下弹、一个探出屏幕。
-  useMenuPosition(open, triggerRef, menuRef)
+  useMenuPosition(open, triggerRef, menuRef, 200, menuAlign)
 
   useEffect(() => {
     if (!open) return

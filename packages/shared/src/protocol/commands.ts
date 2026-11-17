@@ -77,6 +77,9 @@ import type { AiConfigSaveResponse } from './generated/AiConfigSaveResponse'
 import type { AiConfigUseOcFerryRequest } from './generated/AiConfigUseOcFerryRequest'
 import type { AiConfigRemoveRequest } from './generated/AiConfigRemoveRequest'
 import type { AiConfigRemoveResponse } from './generated/AiConfigRemoveResponse'
+import type { AiEmbeddingConfig } from './generated/AiEmbeddingConfig'
+import type { AiEmbeddingSetRequest } from './generated/AiEmbeddingSetRequest'
+import type { AiEmbeddingSetResponse } from './generated/AiEmbeddingSetResponse'
 import type { OcFerryDiscovery } from './generated/OcFerryDiscovery'
 import type { AiChatRequest } from './generated/AiChatRequest'
 import type { AiChatResponse } from './generated/AiChatResponse'
@@ -152,6 +155,9 @@ export type {
   AiConfigUseOcFerryRequest,
   AiEmbedRequest,
   AiEmbedResponse,
+  AiEmbeddingConfig,
+  AiEmbeddingSetRequest,
+  AiEmbeddingSetResponse,
   AiIndexChunk,
   AiIndexGetRequest,
   AiIndexGetResponse,
@@ -285,6 +291,8 @@ export const COMMAND = {
   aiConfigList: 'ai.config.list',
   aiConfigSave: 'ai.config.save',
   aiConfigRemove: 'ai.config.remove',
+  aiEmbeddingSet: 'ai.embedding.set',
+  aiEmbeddingRemove: 'ai.embedding.remove',
   aiOcFerryDetect: 'ai.ocFerry.detect',
   aiOcFerryUse: 'ai.ocFerry.use',
   aiChat: 'ai.chat',
@@ -425,6 +433,14 @@ export interface CommandMap {
   }
   [COMMAND.aiConfigRemove]: {
     readonly request: AiConfigRemoveRequest
+    readonly response: AiConfigRemoveResponse
+  }
+  [COMMAND.aiEmbeddingSet]: {
+    readonly request: AiEmbeddingSetRequest
+    readonly response: AiEmbeddingSetResponse
+  }
+  [COMMAND.aiEmbeddingRemove]: {
+    readonly request: undefined
     readonly response: AiConfigRemoveResponse
   }
   [COMMAND.aiOcFerryDetect]: {
@@ -754,16 +770,34 @@ export const aiProviderConfigSchema = z.object({
 })
 export type AiProviderConfigWire = z.output<typeof aiProviderConfigSchema>
 
+/** 全书问答的向量服务:地址与密钥都独立于对话 Provider。 */
+export const aiEmbeddingConfigSchema = z.object({
+  baseUrl: z.string().url().max(512),
+  model: z.string().min(1).max(128),
+})
+
 export const aiConfigListResponseSchema = z.object({
   providers: z.array(aiProviderConfigSchema).max(100),
+  // 老版本 / 浏览器 mock 没有这个字段;没有独立向量服务时 Rust 也不发。
+  embedding: aiEmbeddingConfigSchema.nullish(),
 })
 export const aiConfigSaveRequestSchema = z.object({
   provider: aiProviderConfigSchema,
-  apiKey: z.string().min(1).max(512),
+  // 空串 = 编辑已有配置时保留钥匙串里的密钥(密钥不回传页面,ADR-0010)。
+  apiKey: z.string().max(512),
 })
 export const aiConfigSaveResponseSchema = z.object({ provider: aiProviderConfigSchema })
 export const aiConfigRemoveRequestSchema = z.object({ id: z.string().min(8).max(64) })
 export const aiConfigRemoveResponseSchema = z.object({ removed: z.boolean() })
+export const aiEmbeddingSetRequestSchema = z.object({
+  baseUrl: z.string().url().max(512),
+  model: z.string().min(1).max(128),
+  // 编辑时留空保留钥匙串里的旧密钥(ADR-0010)。
+  apiKey: z.string().max(512),
+})
+export const aiEmbeddingSetResponseSchema = z.object({
+  embedding: aiEmbeddingConfigSchema,
+})
 export const ocFerryDiscoverySchema = z.object({
   baseUrl: z.string().url().max(512),
   models: z.array(z.string().min(1).max(128)).min(1).max(100),
@@ -1049,6 +1083,8 @@ export const responseSchemas = {
   [COMMAND.aiConfigList]: aiConfigListResponseSchema,
   [COMMAND.aiConfigSave]: aiConfigSaveResponseSchema,
   [COMMAND.aiConfigRemove]: aiConfigRemoveResponseSchema,
+  [COMMAND.aiEmbeddingSet]: aiEmbeddingSetResponseSchema,
+  [COMMAND.aiEmbeddingRemove]: aiConfigRemoveResponseSchema,
   [COMMAND.aiOcFerryDetect]: ocFerryDiscoverySchema,
   [COMMAND.aiOcFerryUse]: aiConfigSaveResponseSchema,
   [COMMAND.aiChat]: aiChatResponseSchema,
@@ -1124,9 +1160,11 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.aiArtifactSet]: aiArtifactSetRequestSchema,
   [COMMAND.aiConfigSave]: aiConfigSaveRequestSchema,
   [COMMAND.aiConfigRemove]: aiConfigRemoveRequestSchema,
+  [COMMAND.aiEmbeddingSet]: aiEmbeddingSetRequestSchema,
   [COMMAND.secretSet]: secretSetRequestSchema,
   [COMMAND.secretDelete]: secretDeleteRequestSchema,
   [COMMAND.aiConfigList]: undefined,
+  [COMMAND.aiEmbeddingRemove]: undefined,
   [COMMAND.aiOcFerryDetect]: undefined,
   [COMMAND.aiOcFerryUse]: aiConfigUseOcFerryRequestSchema,
   [COMMAND.cardsList]: cardsListRequestSchema,

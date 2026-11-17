@@ -506,6 +506,13 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
   gap: var(--space-8);
 }
 
+/* 三块(对话 / 向量 / 本机模型)靠发丝线分开,不靠大留白:它们是同一张
+   设置卡里的三组,不是三个互不相干的面板。 */
+.ai-provider-module > .ai-section + .ai-section {
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--color-border);
+}
+
 .ai-section-title {
   margin: 0;
   font-size: var(--font-size-xs);
@@ -532,9 +539,18 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .ai-provider-info {
+  /* 卡片主体现在是可点的「编辑」按钮:清掉原生按钮外观,文字仍左对齐。 */
   display: grid;
   gap: 2px;
   min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .ai-provider-info strong {
@@ -556,12 +572,16 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 .ai-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  /* 窄弹窗里「可选 · 全书问答/建索引」曾折成两行、末字孤零零挂在输入框上。 */
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
 
 .ai-field-hint {
-  margin-left: 4px;
   font-style: normal;
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
@@ -569,29 +589,85 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 
 .ai-form-actions {
   display: flex;
-  align-items: center;
-  gap: var(--space-12);
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-8);
   /* .settings-body 底部有 28px 渐隐;留白免得「保存配置」被渐隐吃掉。 */
   padding-bottom: var(--space-24);
 }
 
+/* 说明不再和按钮抢同一行:原来 flex:1 + min-width:180px 在窄弹窗里把
+   两行长句压到按钮右侧,读起来像文字被按钮盖住。 */
 .ai-form-actions .ai-privacy {
-  flex: 1;
-  min-width: 180px;
+  flex: none;
+  min-width: 0;
 }
 
-/* OC Ferry 一键接入:表单之外的一行动作,发丝线与上面的配置分开。 */
-.ai-oc-ferry {
-  padding-top: var(--space-12);
-  border-top: 1px solid var(--color-border);
-}
-
+/* OC Ferry 一键接入:表单之外的一行动作,发丝线由 .settings-group 统一给。 */
 .ai-oc-ferry-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-8);
+}
+
+/* ---------- AI 配置页:选中态 / 编辑态 / Embedding 说明 ---------- */
+
+.ai-provider-card.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+.ai-provider-current {
+  margin-left: var(--space-6);
+  font-size: var(--font-size-2xs);
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-accent);
+}
+
+.ai-provider-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-shrink: 0;
+}
+
+.ai-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.ai-section-hint,
+.ai-field-note {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-sm);
+  color: var(--color-text-tertiary);
+}
+
+.ai-field-note.is-ok {
+  color: var(--color-accent);
+}
+
+.ai-link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ai-notice {
+  display: block;
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-accent);
 }
 
 /* 连接 / 模型各三格,并排才塞得进 78dvh 的三明治弹窗;窄窗回单列。 */
@@ -603,7 +679,62 @@ button.page-flip:active:not(:disabled) .page-flip-chip {
 }
 
 @media (max-width: 560px) {
-  .ai-fields-grid {
+  .ai-fields-grid,
+  .ai-embedding-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .ai-embedding-grid .is-wide {
+    grid-column: auto;
+  }
+}
+
+/* ---------- 全书问答 · 向量服务 ----------
+   独立成一块:预设改的是它自己的 Base URL,永远不会覆盖对话服务的地址;
+   下拉贴在右列并往左展开(menuAlign=end),浮层不再探出弹窗右边界。 */
+.ai-service-state {
+  flex-shrink: 0;
+  padding: 2px var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunk);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+}
+
+.ai-service-state.is-on {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.ai-embedding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-12) var(--space-16);
+  align-items: end;
+}
+
+.ai-embedding-grid .is-wide {
+  grid-column: 1 / -1;
+}
+
+.ai-embedding-grid > .dropdown > .dropdown-trigger {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.ai-embedding-grid > .dropdown .dropdown-trigger > span:first-child {
+  min-width: 0;
+}
+
+.ai-embedding-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  padding-top: var(--space-4);
+}
+
+.ai-service-current {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
 }

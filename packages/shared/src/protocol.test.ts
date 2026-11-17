@@ -3,7 +3,9 @@ import { z } from 'zod'
 import { appErrorPayloadSchema } from './protocol/errors'
 import {
   aiArtifactGetRequestSchema,
+  aiConfigListResponseSchema,
   aiConfigUseOcFerryRequestSchema,
+  aiEmbeddingSetRequestSchema,
   appInfoSchema,
   chapterRuleSchema,
   chapterRulesGetResponseSchema,
@@ -71,6 +73,31 @@ describe('command validators', () => {
   it('request validators exist for commands that take a request', () => {
     expect(requestValidators[COMMAND.systemPing]).toBeDefined()
     expect(requestValidators[COMMAND.appInfo]).toBeUndefined()
+  })
+
+  it('the embedding service is a separate command surface with its own key', () => {
+    expect(requestValidators[COMMAND.aiEmbeddingSet]).toBeDefined()
+    expect(responseSchemas[COMMAND.aiEmbeddingSet]).toBeDefined()
+    expect(responseValidators[COMMAND.aiEmbeddingRemove]).toBeDefined()
+    expect(requestValidators[COMMAND.aiEmbeddingRemove]).toBeUndefined()
+    const request = {
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      model: 'BAAI/bge-m3',
+      apiKey: '',
+    }
+    expect(aiEmbeddingSetRequestSchema.safeParse(request).success).toBe(true)
+    expect(aiEmbeddingSetRequestSchema.safeParse({ ...request, apiKey: 'sk-x' }).success).toBe(true)
+    expect(aiEmbeddingSetRequestSchema.safeParse({ ...request, baseUrl: 'nope' }).success).toBe(
+      false,
+    )
+    // 旧调用方 / 浏览器 mock 不返回 embedding 时仍要放行。
+    expect(aiConfigListResponseSchema.safeParse({ providers: [] }).success).toBe(true)
+    expect(
+      aiConfigListResponseSchema.safeParse({
+        providers: [],
+        embedding: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-m3' },
+      }).success,
+    ).toBe(true)
   })
 
   it('OC Ferry schemas keep the discovery key-free and the model bounded', () => {

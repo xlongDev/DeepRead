@@ -9,8 +9,8 @@
  * 的两次点击确认、封面解析失败后的回退渲染、弹窗 Esc 关闭。
  */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   localDayKey,
   type AppInfo,
@@ -20,7 +20,7 @@ import {
   type NoteEntry,
 } from '@deepread/shared'
 import { LibraryScreen } from './LibraryScreen'
-import { APP_THEMES } from './shelf-view'
+import { APP_THEME_CHOICES } from './shelf-view'
 import { invokeCommand, listenEvent } from '../../lib/ipc'
 import { readCachedCover } from '../../lib/cover-store'
 import { extractCover } from '@deepread/reader-adapter'
@@ -96,6 +96,20 @@ vi.mock('../settings/AiProviderSettings', () => ({
     removeProvider: vi.fn(async (): Promise<void> => undefined),
     detectOcFerry: vi.fn(async (): Promise<null> => null),
     adoptOcFerryModel: vi.fn(async (): Promise<boolean> => true),
+    editingId: null,
+    notice: null,
+    embedding: null,
+    embeddingForm: { baseUrl: '', model: '', apiKey: '' },
+    setEmbeddingForm: vi.fn(),
+    saveEmbedding: vi.fn(async (): Promise<void> => undefined),
+    removeEmbedding: vi.fn(async (): Promise<void> => undefined),
+    testEmbedding: vi.fn(async (): Promise<void> => undefined),
+    embeddingBusy: false,
+    embeddingError: null,
+    embeddingNotice: null,
+    activateProvider: vi.fn(),
+    editProvider: vi.fn(),
+    newProvider: vi.fn(),
     error: null,
   }),
   AiProviderForm: () => <div data-testid="ai-provider-form" />,
@@ -1283,9 +1297,13 @@ describe('LibraryScreen 弹窗', () => {
     expect(within(dialog).getByText('外观')).toBeInTheDocument()
     expect(within(dialog).getByText('AI 服务')).toBeInTheDocument()
     expect(within(dialog).getByText('备份与更新')).toBeInTheDocument()
-    // 个数从 APP_THEMES 派生:加主题不该让这条断言变红(它锁的是
-    // 「列全了」,不是「有 12 个」)。
-    expect(document.querySelectorAll('.theme-swatch').length).toBe(APP_THEMES.length)
+    // 个数从选项目录派生:加主题不该让这条断言变红(它锁的是
+    // 「列全了」,不是「有 3 个」)。目录含「跟随系统」+ 三个世界。
+    expect(document.querySelectorAll('.theme-swatch').length).toBe(APP_THEME_CHOICES.length)
+    expect(within(dialog).getByRole('button', { name: /跟随系统/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   it('备份与更新分区提供备份、恢复、检查更新三个动作', async () => {
@@ -1309,6 +1327,92 @@ describe('LibraryScreen 弹窗', () => {
     await renderLibrary()
     fireEvent.click(sidebarButton('云同步'))
     expect(screen.getByTestId('sync-drawer')).toBeInTheDocument()
+  })
+})
+
+describe('LibraryScreen 界面主题跟随系统', () => {
+  const originalMatchMedia = window.matchMedia
+
+  /** 可控的 prefers-color-scheme;set() 模拟用户在系统设置里切深浅。 */
+  function mockSystemDark(initial: boolean) {
+    let matches = initial
+    const listeners = new Set<(event: MediaQueryListEvent) => void>()
+    window.matchMedia = vi.fn((query: string): MediaQueryList => {
+      const darkQuery = query === '(prefers-color-scheme: dark)'
+      return {
+        get matches() {
+          return darkQuery ? matches : false
+        },
+        media: query,
+        onchange: null,
+        addListener: (cb: (event: MediaQueryListEvent) => void): void => {
+          if (darkQuery) listeners.add(cb)
+        },
+        removeListener: (cb: (event: MediaQueryListEvent) => void): void => {
+          listeners.delete(cb)
+        },
+        addEventListener: (_type: string, cb: EventListenerOrEventListenerObject): void => {
+          if (darkQuery && typeof cb === 'function') {
+            listeners.add(cb as (event: MediaQueryListEvent) => void)
+          }
+        },
+        removeEventListener: (_type: string, cb: EventListenerOrEventListenerObject): void => {
+          if (typeof cb === 'function') {
+            listeners.delete(cb as (event: MediaQueryListEvent) => void)
+          }
+        },
+        dispatchEvent: () => false,
+      } as unknown as MediaQueryList
+    })
+    return {
+      set: (next: boolean): void => {
+        matches = next
+        for (const cb of listeners) cb({ matches: next } as MediaQueryListEvent)
+      },
+    }
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia
+  })
+
+  it('首次启动默认跟随系统:浅色系统给纯白,设置里第一项选中', async () => {
+    mockSystemDark(false)
+    await renderLibrary()
+    expect(document.documentElement.dataset.appTheme).toBe('pure-white')
+    expect(localStorage.getItem('deepread.app-theme')).toBe('system')
+    fireEvent.click(sidebarButton('设置'))
+    expect(await screen.findByRole('button', { name: /跟随系统/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('深色系统首次启动直接是夜间,不先白一帧', async () => {
+    mockSystemDark(true)
+    await renderLibrary()
+    expect(document.documentElement.dataset.appTheme).toBe('dark')
+    expect(localStorage.getItem('deepread.app-theme')).toBe('system')
+  })
+
+  it('运行中切换系统深浅,界面即时跟着换', async () => {
+    const system = mockSystemDark(false)
+    await renderLibrary()
+    act(() => system.set(true))
+    expect(document.documentElement.dataset.appTheme).toBe('dark')
+    act(() => system.set(false))
+    expect(document.documentElement.dataset.appTheme).toBe('pure-white')
+  })
+
+  it('手动选具体世界后不再跟随系统,选择按用户意图持久化', async () => {
+    const system = mockSystemDark(false)
+    await renderLibrary()
+    fireEvent.click(sidebarButton('设置'))
+    fireEvent.click(await screen.findByRole('button', { name: /纯黑/ }))
+    expect(document.documentElement.dataset.appTheme).toBe('oled')
+    expect(localStorage.getItem('deepread.app-theme')).toBe('oled')
+    act(() => system.set(true))
+    expect(document.documentElement.dataset.appTheme).toBe('oled')
   })
 })
 

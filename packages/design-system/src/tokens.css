@@ -330,10 +330,10 @@
 
 /* ---------- App shell themes (v2: three worlds) ----------
    Applied via <html data-app-theme="…">. `pure-white` is the :root default.
-   Legacy ids from the 12-theme era are mapped at read time in LibraryScreen,
-   so an old localStorage value never lands on a selector that no longer
-   exists. Themes only move lightness along the same OKLCH axes; they never
-   introduce a second palette. */
+   「跟随系统」是 themes.ts 里的一个用户选项,解析成下面的某个世界后才写进
+   这个属性 —— 它不是第四套配色。12 主题时代的旧 id 由 parseAppThemeChoice
+   在读取时映射,所以老存档不会落到一个不存在的语法上。主题只在同一组
+   OKLCH 轴上挪明度,不引入第二套色板。 */
 [data-app-theme='dark'] {
   color-scheme: dark;
   --shadow-color: 0, 0, 0;

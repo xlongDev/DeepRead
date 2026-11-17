@@ -16,15 +16,20 @@ import {
 import { extractCover, extractMetadata } from '@deepread/reader-adapter'
 import {
   ACCENT_STORAGE_KEY,
+  APP_THEME_STORAGE_KEY,
   BACKGROUND_STORAGE_KEY,
   MOTION_STORAGE_KEY,
+  SYSTEM_DARK_QUERY,
   backgroundAccent,
   motionAttribute,
   onAccentFor,
   parseAccent,
+  parseAppThemeChoice,
   parseBackground,
   parseMotionPreference,
+  resolveAppTheme,
   serializeAccent,
+  systemPrefersDark,
   wallpaperFor,
   type AccentChoice,
   type BackgroundChoice,
@@ -61,7 +66,6 @@ import { ShelfView } from './ShelfView'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
-  LEGACY_APP_THEME_MAP,
   BULK_CONFIRM,
   FAVORITE_TAG,
   isFinished,
@@ -80,7 +84,7 @@ import {
   viewFromStorage,
   columnsFromStorage,
   densityFromStorage,
-  type AppTheme,
+  type AppThemeChoice,
   type LibraryView,
   type ShelfBook,
   type ShelfColumns,
@@ -204,7 +208,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     // ?theme=dark|graphite|… :浏览器里直接看某个主题下的书架,免得手改 localStorage。
     const themeParam = new URLSearchParams(window.location.search).get('theme')
     if (themeParam !== null && APP_THEMES.some((theme) => theme.id === themeParam)) {
-      setAppTheme(themeParam as AppTheme)
+      setThemeChoice(themeParam as AppThemeChoice)
     }
     setLibraryLoaded(true)
     const demo: readonly ShelfBook[] = [
@@ -313,14 +317,29 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [syncOpen, setSyncOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [covers, setCovers] = useState<ReadonlyMap<string, string>>(new Map())
-  const [appTheme, setAppTheme] = useState<AppTheme>(() => {
-    const stored = localStorage.getItem('deepread.app-theme')
-    if (stored === null) return 'pure-white'
-    if (APP_THEMES.some((theme) => theme.id === stored)) return stored as AppTheme
-    // 12 主题时代的值映射到 v2 的三个世界,老用户的选择不会静默回落默认;
-    // 完全不认识的脏值才回落 —— 直接 cast 会让 dataset 带上没有 CSS 块的主题名。
-    return LEGACY_APP_THEME_MAP[stored] ?? 'pure-white'
-  })
+  /**
+   * 用户意图(跟随系统 / 三个具体世界)与生效世界分开存:前者进 localStorage,
+   * 后者只写到 `<html>`。存生效世界会让「跟随系统」在第一次切换后被自己覆盖。
+   */
+  const [themeChoice, setThemeChoice] = useState<AppThemeChoice>(() =>
+    parseAppThemeChoice(localStorage.getItem(APP_THEME_STORAGE_KEY)),
+  )
+  /** 系统明暗:一个独立的信号。选了具体世界时照样更新,切回跟随系统不会拿到旧值。 */
+  const [systemDark, setSystemDark] = useState(systemPrefersDark)
+  const appTheme = resolveAppTheme(themeChoice, systemDark)
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia(SYSTEM_DARK_QUERY)
+    const onChange = (event: MediaQueryListEvent): void => setSystemDark(event.matches)
+    // 老 WKWebView 只有 addListener;没有 addEventListener 时不能让监听静默失效。
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange)
+      return () => media.removeEventListener('change', onChange)
+    }
+    media.addListener(onChange)
+    return () => media.removeListener(onChange)
+  }, [])
   /** 强调色:预设 id 或自定义 hex;宿主持有,设置面板只是入口。 */
   const [accent, setAccent] = useState<AccentChoice>(() =>
     parseAccent(localStorage.getItem(ACCENT_STORAGE_KEY)),
@@ -458,8 +477,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   // 切主题后滚动尤其明显:每次 frame() 都在用那张错的纹理重绘)。
   useLayoutEffect(() => {
     document.documentElement.dataset['appTheme'] = appTheme
-    localStorage.setItem('deepread.app-theme', appTheme)
-  }, [appTheme])
+    localStorage.setItem(APP_THEME_STORAGE_KEY, themeChoice)
+  }, [appTheme, themeChoice])
 
   // 布局阶段写壁纸,不能等 useEffect:那会在首次 paint 先出一帧纯色桌面,
   // 切回书架时读作「白一下才渐变」。useLayoutEffect 在 paint 前同步落地。
@@ -1748,7 +1767,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           onImport={triggerImport}
           onSettings={() => setSettingsOpen(true)}
           onSync={() => setSyncOpen(true)}
-          onTheme={setAppTheme}
+          onTheme={setThemeChoice}
         />
       )}
 
@@ -1769,7 +1788,8 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
       {settingsOpen && (
         <SettingsDialog
           appTheme={appTheme}
-          onThemeChange={setAppTheme}
+          themeChoice={themeChoice}
+          onThemeChange={setThemeChoice}
           accent={accent}
           onAccentChange={setAccent}
           shelfColumns={shelfColumns}

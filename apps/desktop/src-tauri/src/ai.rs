@@ -130,11 +130,43 @@ pub struct AiConfigSaveRequest {
     pub api_key: String,
 }
 
+/// 全书问答的向量服务是独立的一份配置:很多服务商(DeepSeek / Kimi / OC
+/// Ferry…)只有对话接口,借对话服务的地址与密钥去打 /embeddings 必然失败,
+/// 更不该为了一个向量模型去改对话模型能用的 Base URL。
+///
+/// 它复用 `ai_providers` 表的固定一行 + `ai.key.embedding-service`,因此不需
+/// 要新的表/迁移,备份恢复也照常带走;但 `ai.config.list` 会把它从对话列表
+/// 里摘出来,单独以 `embedding` 字段返回,webview 永远看不到明文密钥。
+pub const EMBEDDING_PROVIDER_ID: &str = "embedding-service";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AiEmbeddingConfig {
+    pub base_url: String,
+    pub model: String,
+}
+
 #[derive(Debug, Serialize, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct AiConfigListResponse {
     pub providers: Vec<AiProviderConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<AiEmbeddingConfig>,
+}
+
+/// 把固定槽位从对话列表里摘出来。老版本把向量模型写在对话 Provider 上,
+/// 那条路径仍由 `ai.embed` 兜底,这里只处理新配置。
+fn split_embedding_provider(providers: &mut Vec<AiProviderConfig>) -> Option<AiEmbeddingConfig> {
+    let index = providers
+        .iter()
+        .position(|provider| provider.id == EMBEDDING_PROVIDER_ID)?;
+    let row = providers.remove(index);
+    Some(AiEmbeddingConfig {
+        base_url: row.base_url,
+        model: row.embedding_model.unwrap_or(row.model),
+    })
 }
 
 #[derive(Debug, Serialize, PartialEq, TS)]
@@ -171,8 +203,11 @@ pub fn ai_config_list(
     let conn =
         db.0.lock()
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+    let mut providers = load_providers(&conn)?;
+    let embedding = split_embedding_provider(&mut providers);
     Ok(AiConfigListResponse {
-        providers: load_providers(&conn)?,
+        providers,
+        embedding,
     })
 }
 
@@ -190,8 +225,11 @@ pub fn ai_config_save(
             .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
     upsert_provider(&conn, &request.provider)?;
 
-    let key = format!("ai.key.{}", request.provider.id);
-    crate::secrets::set_secret(&secrets, &base, &key, &request.api_key)?;
+    // 编辑配置时页面拿不到旧密钥(ADR-0010):空 Key 表示「保留钥匙串里那份」。
+    if !request.api_key.trim().is_empty() {
+        let key = format!("ai.key.{}", request.provider.id);
+        crate::secrets::set_secret(&secrets, &base, &key, &request.api_key)?;
+    }
     Ok(AiConfigSaveResponse {
         provider: request.provider,
     })
@@ -211,6 +249,87 @@ pub fn ai_config_remove(
     let removed = remove_provider_row(&conn, &request.id)?;
     if removed {
         let key = format!("ai.key.{}", request.id);
+        crate::secrets::delete_secret(&secrets, &base, &key)?;
+    }
+    Ok(AiConfigRemoveResponse { removed })
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct AiEmbeddingSetRequest {
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AiEmbeddingSetResponse {
+    pub embedding: AiEmbeddingConfig,
+}
+
+/// `ai.embedding.set` — 单独保存全书问答用的向量服务。地址与密钥都归属它
+/// 自己,与当前生效的对话服务互不影响;留空 apiKey 表示保留已存密钥。
+#[tauri::command(rename = "ai.embedding.set")]
+pub fn ai_embedding_set(
+    app: tauri::AppHandle,
+    secrets: State<'_, SecretStore>,
+    db: tauri::State<'_, crate::storage::Db>,
+    request: AiEmbeddingSetRequest,
+) -> Result<AiEmbeddingSetResponse, AppError> {
+    let base_url = request.base_url.trim().to_string();
+    let model = request.model.trim().to_string();
+    if base_url.is_empty() || model.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            "向量服务需要填写 Base URL 与模型 ID",
+        ));
+    }
+    let embedding = AiEmbeddingConfig {
+        base_url: base_url.clone(),
+        model: model.clone(),
+    };
+    let provider = AiProviderConfig {
+        id: EMBEDDING_PROVIDER_ID.to_string(),
+        name: "全书问答向量服务".to_string(),
+        base_url,
+        model: model.clone(),
+        embedding_model: Some(model),
+        tts_model: None,
+    };
+    let base = data_dir(&app)?;
+    {
+        let conn =
+            db.0.lock()
+                .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+        upsert_provider(&conn, &provider)?;
+    }
+    if !request.api_key.trim().is_empty() {
+        let key = format!("ai.key.{EMBEDDING_PROVIDER_ID}");
+        crate::secrets::set_secret(&secrets, &base, &key, request.api_key.trim())?;
+    }
+    Ok(AiEmbeddingSetResponse { embedding })
+}
+
+/// `ai.embedding.remove` — 关掉全书问答的向量服务。旧数据里写在对话
+/// Provider 上的 embeddingModel 仍能被 `ai.embed` 读到。
+#[tauri::command(rename = "ai.embedding.remove")]
+pub fn ai_embedding_remove(
+    app: tauri::AppHandle,
+    secrets: State<'_, SecretStore>,
+    db: tauri::State<'_, crate::storage::Db>,
+) -> Result<AiConfigRemoveResponse, AppError> {
+    let base = data_dir(&app)?;
+    let removed = {
+        let conn =
+            db.0.lock()
+                .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
+        remove_provider_row(&conn, EMBEDDING_PROVIDER_ID)?
+    };
+    if removed {
+        let key = format!("ai.key.{EMBEDDING_PROVIDER_ID}");
         crate::secrets::delete_secret(&secrets, &base, &key)?;
     }
     Ok(AiConfigRemoveResponse { removed })
@@ -727,52 +846,104 @@ pub async fn embed_texts(
         .send()
         .await
         .map_err(|err| {
-            AppError::new(ErrorCode::AiProviderError, "无法连接 embeddings 服务")
-                .with_cause(err)
-                .retryable()
+            AppError::new(
+                ErrorCode::AiProviderError,
+                "连不上向量服务。请确认该地址能直连(海外端点常被网络拦下),或换一家可直连的服务",
+            )
+            .with_cause(err)
+            .retryable()
         })?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
         return Err(AppError::new(
             ErrorCode::AiProviderError,
-            format!("embeddings 服务返回错误({status})"),
-        )
-        .with_context("body", Value::String(text.chars().take(400).collect())));
-    }
-    let payload: Value = response.json().await.map_err(|err| {
-        AppError::new(ErrorCode::AiProviderError, "embeddings 响应不是合法 JSON").with_cause(err)
-    })?;
-    let mut vectors: Vec<(usize, Vec<f64>)> = payload
-        .get("data")
-        .and_then(|data| data.as_array())
-        .map(|array| {
-            array
-                .iter()
-                .filter_map(|item| {
-                    let index = item.get("index")?.as_u64()? as usize;
-                    let embedding = item.get("embedding")?.as_array()?;
-                    let vector: Vec<f64> = embedding
-                        .iter()
-                        .map(|value| value.as_f64().unwrap_or(0.0))
-                        .collect();
-                    Some((index, vector))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    vectors.sort_by_key(|(index, _)| *index);
-    if vectors.len() != texts.len() {
-        return Err(AppError::new(
-            ErrorCode::AiProviderError,
             format!(
-                "embeddings 数量不符:期望 {},实际 {}",
-                texts.len(),
-                vectors.len()
+                "向量服务返回 HTTP {status}:{}。请确认 Base URL 提供 /embeddings、模型 ID 与 API Key 属于同一家服务",
+                brief_value(&text, 200)
             ),
         ));
     }
-    Ok(vectors.into_iter().map(|(_, vector)| vector).collect())
+    let payload: Value = response.json().await.map_err(|err| {
+        AppError::new(
+            ErrorCode::AiProviderError,
+            "向量服务返回的不是合法 JSON(可能是代理/网关返回了错误页)",
+        )
+        .with_cause(err)
+    })?;
+    parse_embedding_payload(&payload, texts.len())
+}
+
+fn brief_value(text: &str, limit: usize) -> String {
+    text.chars()
+        .take(limit)
+        .collect::<String>()
+        .replace('\n', " ")
+}
+
+/// 各家「OpenAI 兼容」的 embeddings 响应并不统一:有的不带 `index`,有的把
+/// 向量放在 `embedding.values` / `values` / `vector` 里,还有的用顶层
+/// `embeddings[]`。解析器要吃下这些变体;真解析不出来时**把上游原始结构附在
+/// 错误里**,而不是只丢一句「数量不符」让用户猜。
+fn parse_embedding_payload(payload: &Value, expected: usize) -> Result<Vec<Vec<f64>>, AppError> {
+    if let Some(error) = payload.get("error") {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .unwrap_or("上游返回错误对象");
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            format!("向量服务返回错误:{message}"),
+        ));
+    }
+    let items: Vec<&Value> = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| payload.get("embeddings").and_then(Value::as_array))
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    let mut vectors: Vec<(usize, Vec<f64>)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(position, item)| {
+            // index 缺失时按数组位置兜底:不少兼容层根本不发这个字段。
+            let index = item
+                .get("index")
+                .and_then(Value::as_u64)
+                .unwrap_or(position as u64) as usize;
+            let vector = parse_embedding_vector(item)?;
+            Some((index, vector))
+        })
+        .collect();
+    vectors.sort_by_key(|(index, _)| *index);
+    let result: Vec<Vec<f64>> = vectors.into_iter().map(|(_, vector)| vector).collect();
+    if result.len() != expected {
+        return Err(AppError::new(
+            ErrorCode::AiProviderError,
+            format!(
+                "向量服务没有返回有效向量(期望 {expected} 条,实际 {} 条)。请在 设置 → AI 服务 → 全书问答 里确认地址提供 /embeddings、模型 ID 与密钥属于同一家;上游响应:{}",
+                result.len(),
+                brief_value(&payload.to_string(), 240)
+            ),
+        ));
+    }
+    Ok(result)
+}
+
+fn parse_embedding_vector(item: &Value) -> Option<Vec<f64>> {
+    let raw = item
+        .get("embedding")
+        .or_else(|| item.get("vector"))
+        .or_else(|| item.get("values"))?;
+    let array = raw
+        .as_array()
+        .or_else(|| raw.get("values").and_then(Value::as_array))?;
+    let vector: Vec<f64> = array
+        .iter()
+        .map(|value| value.as_f64().unwrap_or(0.0))
+        .collect();
+    (!vector.is_empty()).then_some(vector)
 }
 
 /// Pure helper: the upstream chat-completions URL for a configured base URL.
@@ -999,27 +1170,40 @@ pub async fn ai_embed(
     request: AiEmbedRequest,
 ) -> Result<AiEmbedResponse, AppError> {
     let base = data_dir(&app)?;
-    let config = {
+    // 独立向量服务优先;没配过时回落老数据(embeddingModel 写在对话 Provider 上)。
+    // 两条路径各自解析自己的地址与密钥,绝不拿对话服务的 Key 打别家的接口。
+    let (url, model, secret_key) = {
         let conn =
             db.0.lock()
                 .map_err(|_| AppError::new(ErrorCode::StorageIo, "database busy"))?;
-        provider_by_id(&conn, &request.config_id)?
-            .ok_or_else(|| AppError::new(ErrorCode::AiProviderError, "AI 服务配置不存在"))?
+        if let Some(row) = provider_by_id(&conn, EMBEDDING_PROVIDER_ID)? {
+            let model = row.embedding_model.unwrap_or(row.model);
+            (
+                format!("{}/embeddings", row.base_url.trim_end_matches('/')),
+                model,
+                format!("ai.key.{EMBEDDING_PROVIDER_ID}"),
+            )
+        } else {
+            let config = provider_by_id(&conn, &request.config_id)?
+                .ok_or_else(|| AppError::new(ErrorCode::AiProviderError, "AI 服务配置不存在"))?;
+            // 拿 chat 模型打 /embeddings 必失败,而报错来自远端,用户看不出
+            // 根因是「没填模型」。这里提前拦下,把话说清楚。
+            let model = config.embedding_model.clone().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::AiProviderError,
+                    "未配置向量服务,请在设置 → AI 服务 → 全书问答里添加",
+                )
+            })?;
+            (
+                format!("{}/embeddings", config.base_url.trim_end_matches('/')),
+                model,
+                format!("ai.key.{}", request.config_id),
+            )
+        }
     };
-    let key = format!("ai.key.{}", request.config_id);
-    let api_key = crate::secrets::get_secret(&secrets, &base, &key)?
+    let api_key = crate::secrets::get_secret(&secrets, &base, &secret_key)?
         .ok_or_else(|| AppError::new(ErrorCode::AiProviderError, "请先填写该服务的 API Key"))?;
-    // embedding 模型必须显式配置:拿 chat 模型打 /embeddings 必失败,而报错
-    // 来自远端,用户看不出根因是「没填模型」。这里提前拦下,把话说清楚。
-    let model = config.embedding_model.clone().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::AiProviderError,
-            "该服务未配置 Embedding 模型,请在设置 → AI 服务里填写",
-        )
-    })?;
-    let url = format!("{}/embeddings", config.base_url.trim_end_matches('/'));
-    let client = crate::http();
-    let vectors = embed_texts(client, &url, &api_key, &model, &request.texts).await?;
+    let vectors = embed_texts(crate::http(), &url, &api_key, &model, &request.texts).await?;
     Ok(AiEmbedResponse { vectors })
 }
 
@@ -1067,6 +1251,92 @@ pub async fn ai_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn provider(id: &str, base_url: &str) -> AiProviderConfig {
+        AiProviderConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            base_url: base_url.to_string(),
+            model: "chat-model".to_string(),
+            embedding_model: None,
+            tts_model: None,
+        }
+    }
+
+    #[test]
+    fn embedding_service_is_kept_out_of_chat_providers() {
+        let mut rows = vec![
+            provider("cfg-chat", "https://api.deepseek.com/v1"),
+            AiProviderConfig {
+                embedding_model: Some("BAAI/bge-m3".to_string()),
+                ..provider(EMBEDDING_PROVIDER_ID, "https://api.siliconflow.cn/v1")
+            },
+            provider("cfg-second", "https://api.moonshot.cn/v1"),
+        ];
+        let embedding = split_embedding_provider(&mut rows).expect("embedding slot");
+        assert_eq!(embedding.base_url, "https://api.siliconflow.cn/v1");
+        assert_eq!(embedding.model, "BAAI/bge-m3");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.id != EMBEDDING_PROVIDER_ID));
+    }
+
+    #[test]
+    fn legacy_embedding_rows_fall_back_to_the_chat_model() {
+        let mut rows = vec![provider(EMBEDDING_PROVIDER_ID, "http://localhost:11434/v1")];
+        assert_eq!(
+            split_embedding_provider(&mut rows).map(|item| item.model),
+            Some("chat-model".to_string())
+        );
+        assert!(split_embedding_provider(&mut rows).is_none());
+    }
+
+    #[test]
+    fn embedding_payloads_accept_common_openai_compatible_shapes() {
+        let standard = json!({
+            "data": [
+                { "index": 1, "embedding": [0.2, 0.4] },
+                { "index": 0, "embedding": [0.1, 0.3] }
+            ]
+        });
+        assert_eq!(
+            parse_embedding_payload(&standard, 2).expect("standard"),
+            vec![vec![0.1, 0.3], vec![0.2, 0.4]]
+        );
+        // 很多兼容层不发 index,旧解析器会把整批静默丢光(截图里「期望 1,实际 0」)。
+        let no_index = json!({ "data": [{ "embedding": [1.0, 2.0] }] });
+        assert_eq!(
+            parse_embedding_payload(&no_index, 1).expect("missing index"),
+            vec![vec![1.0, 2.0]]
+        );
+        // Gemini 原生 / 部分网关把向量塞在 values 里。
+        let nested = json!({ "embeddings": [{ "values": [3.0, 4.0] }] });
+        assert_eq!(
+            parse_embedding_payload(&nested, 1).expect("values"),
+            vec![vec![3.0, 4.0]]
+        );
+        let object_embedding = json!({ "data": [{ "embedding": { "values": [5.0] } }] });
+        assert_eq!(
+            parse_embedding_payload(&object_embedding, 1).expect("embedding.values"),
+            vec![vec![5.0]]
+        );
+    }
+
+    #[test]
+    fn embedding_errors_carry_the_upstream_reason() {
+        let upstream_error = json!({ "error": { "message": "API key not valid" } });
+        let message = parse_embedding_payload(&upstream_error, 1)
+            .expect_err("upstream error")
+            .message;
+        assert!(message.contains("API key not valid"), "{message}");
+
+        let empty = json!({ "object": "list", "data": [] });
+        let message = parse_embedding_payload(&empty, 1)
+            .expect_err("empty data")
+            .message;
+        assert!(message.contains("没有返回有效向量"), "{message}");
+        assert!(message.contains("全书问答"), "{message}");
+        assert!(message.contains("\"data\":[]"), "{message}");
+    }
 
     #[test]
     fn sse_error_frames_become_upstream_errors() {
