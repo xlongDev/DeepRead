@@ -18,7 +18,6 @@ import {
   TextAa,
   X,
 } from '@phosphor-icons/react'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
@@ -26,7 +25,6 @@ import {
   type AiProviderConfig,
   type AnnotationRecord,
   type BookmarkRecord,
-  type DictionaryMeta,
   type ReadingFont,
 } from '@deepread/shared'
 import type {
@@ -40,15 +38,11 @@ import { localDayKey } from '@deepread/shared'
 import { countChars } from '@deepread/reader-core'
 import {
   applyRepair,
-  buildIndex,
   chapterSections,
   extractCover,
   FoliateAdapter,
   isFixedLayoutFormat,
   reviewRepair,
-  inflateGzip,
-  lookupWord,
-  type DefinitionField,
   type EngineCallbacks,
   type EngineSelection,
 } from '@deepread/reader-adapter'
@@ -100,10 +94,12 @@ import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
 import { TranslationCard, type TranslationCardState } from './TranslationCard'
-import { LookupCard, type LookupResult } from './LookupCard'
+import { LookupCard } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
 import { TocPanel } from './TocPanel'
-import { SearchPanel, MAX_SHOWN_SEARCH_RESULTS } from './SearchPanel'
+import { SearchPanel } from './SearchPanel'
+import { useReaderSearch } from './use-reader-search'
+import { useLookup } from './use-lookup'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { ReaderBottomBar } from './ReaderBottomBar'
 import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
@@ -145,8 +141,6 @@ const SAVE_DEBOUNCE_MS = 800
 const EXCERPT_MAX_CHARS = 500
 /** 翻译卡的估计高度:算避让位置用(卡片 max-height 420,流式中会变)。 */
 const TRANSLATE_CARD_HEIGHT = 300
-/** 词典卡的估计高度(max-height 300),同用于避让工具条。 */
-const LOOKUP_CARD_HEIGHT = 280
 
 /**
  * 偏好 → 内核版式对象(开书初值 / 偏好下发 / 改动下发三处共用)。
@@ -446,26 +440,6 @@ export function ReaderScreen({
   const rulerSupported =
     !isFixedLayoutFormat(book.format) && typography.writingMode !== 'vertical-rl'
   const rulerActive = rulerSupported && rulerSettings.enabled
-  const [searchResults, setSearchResults] = useState<readonly { cfi: string; excerpt: string }[]>(
-    [],
-  )
-  const [searchState, setSearchState] = useState<'idle' | 'searching' | 'done' | 'error'>('idle')
-  /** 命中数超过展示上限:必须说清楚,否则用户以为搜索不全。 */
-  const [searchTruncated, setSearchTruncated] = useState(false)
-  /** 全书搜索进度(0-100 整数;内核逐节产出,null = 没在搜)。PDF 逐页搜,
-   *  一本几百页的书要好几秒 —— 没有进度就是「搜索中」卡死观感。 */
-  const [searchProgress, setSearchProgress] = useState<number | null>(null)
-  /** 全书搜索是否区分大小写(默认不敏感,中文场景大多如此)。 */
-  const [searchMatchCase, setSearchMatchCase] = useState(false)
-  /** 在飞的搜索控制器:再次搜索或关书时中止上一轮,旧结果不该晚到覆盖新状态。 */
-  const searchAbortRef = useRef<AbortController | null>(null)
-  const [dictionaries, setDictionaries] = useState<readonly DictionaryMeta[]>([])
-  const [lookup, setLookup] = useState<{
-    word: string
-    rect: { top: number; left: number }
-    results: readonly LookupResult[]
-  } | null>(null)
-  const [lookupLoading, setLookupLoading] = useState(false)
   const [repairReview, setRepairReview] = useState<{
     proposals: readonly RepairChange[]
     accepted: ReadonlySet<string>
@@ -575,9 +549,28 @@ export function ReaderScreen({
     typeof localStorage === 'undefined'
       ? ''
       : (localStorage.getItem(`deepread.chapterPattern.${book.hash}`) ?? '')
-  const dictCacheRef = useRef(
-    new Map<string, { entries: ReturnType<typeof buildIndex>; dict: Uint8Array }>(),
-  )
+
+  // 搜索与词典两个域收进 hook:状态机与内核调用都住那里,这里只留接线。
+  const {
+    searchResults,
+    searchState,
+    searchTruncated,
+    searchProgress,
+    searchMatchCase,
+    setSearchMatchCase,
+    runSearch,
+    runSearchWith,
+    abortSearch,
+  } = useReaderSearch(adapterRef, searchInputRef)
+  const {
+    dictionaries,
+    lookup,
+    lookupLoading,
+    importDictionary,
+    removeDictionary,
+    runLookup,
+    closeLookup,
+  } = useLookup(selection, hostRef, setPanelProblem)
 
   useEffect(() => {
     annotationsRef.current = annotations
@@ -780,15 +773,6 @@ export function ReaderScreen({
       })
   }, [])
 
-  useEffect(() => {
-    if (!isTauriRuntime()) return
-    invokeCommand('dictionary.list', undefined)
-      .then((response) => setDictionaries(response.dictionaries))
-      .catch(() => {
-        // Lookup is optional; the panel's import button retries the list.
-      })
-  }, [])
-
   // One effect owns the adapter lifecycle: create → open → restore → destroy.
   // Splitting create and open across effects raced under StrictMode's
   // double-mount and leaked a second kernel view into the host.
@@ -908,11 +892,11 @@ export function ReaderScreen({
     return () => {
       cancelled = true
       // 在飞的搜索一起停:内核生成器跟着 return,不留后台循环空转。
-      searchAbortRef.current?.abort()
+      abortSearch()
       adapterRef.current = null
       void adapter.destroy()
     }
-  }, [book, zhConvert])
+  }, [book, zhConvert, abortSearch])
 
   /**
    * 并行阅读的联动:对面那一栏翻到了别处,本栏跟着跳。
@@ -1824,59 +1808,6 @@ export function ReaderScreen({
     // 不关 selection:AiDrawer 的 selection 作用域要读它。
   }, [selection])
 
-  /**
-   * 全书搜索的公共路径:侧栏搜索框回车/按钮与「搜书中选中文本」都走这里。
-   * 中止上一轮再开新的 —— 两轮并飞时旧结果晚到会覆盖新状态;中止后返回的
-   * 是部分结果,照常上屏(停在半路的命中依然是命中)。
-   */
-  const runSearchWith = useCallback(
-    async (query: string): Promise<void> => {
-      const adapter = adapterRef.current
-      if (!adapter || query === '') return
-      searchAbortRef.current?.abort()
-      const controller = new AbortController()
-      searchAbortRef.current = controller
-      setSearchState('searching')
-      setSearchProgress(0)
-      try {
-        let lastPercent = -1
-        const results = await adapter.search(query, {
-          matchCase: searchMatchCase,
-          signal: controller.signal,
-          onProgress: (fraction) => {
-            // 按整数百分点去重:逐节 setState 在几千节的书上是白花渲染。
-            const percent = Math.min(100, Math.round(fraction * 100))
-            if (percent !== lastPercent) {
-              lastPercent = percent
-              setSearchProgress(percent)
-            }
-          },
-        })
-        setSearchTruncated(results.length > MAX_SHOWN_SEARCH_RESULTS)
-        setSearchResults(
-          results
-            .slice(0, MAX_SHOWN_SEARCH_RESULTS)
-            .map((r) => ({ cfi: r.location.cfi ?? '', excerpt: r.excerpt })),
-        )
-        setSearchState('done')
-        // 命中处上屏:淡蓝高亮标出每一条,翻页跟随、关面板保留(fixed-layout
-        // 走 Custom Highlight,见适配器);新搜索时由 showSearchHits 先摘旧的。
-        // PDF 是 fixed-layout,内核渲染器没有 overlayer(上游 TODO),命中只出
-        // 列表与跳页、不画高亮 —— addAnnotation 解析不到 overlayer 静默跳过。
-        void adapterRef.current
-          ?.showSearchHits?.(results.map((r) => r.location.cfi ?? '').filter(Boolean))
-          .catch(() => {})
-      } catch {
-        // 内核搜索失败要有明确终态 —— 否则 searchState 永远停在「搜索中」。
-        setSearchState('error')
-      } finally {
-        setSearchProgress(null)
-        if (searchAbortRef.current === controller) searchAbortRef.current = null
-      }
-    },
-    [searchMatchCase],
-  )
-
   /** 在本书中搜索选中文本:复用侧栏搜索那套结果,填进输入框直接搜。 */
   const searchSelectionInBook = useCallback((): void => {
     if (selection === null) return
@@ -1887,45 +1818,6 @@ export function ReaderScreen({
     void runSearchWith(query)
     // 工具栏不关:搜索结果在侧栏,选区的墨水/笔记还能接着用。
   }, [selection, runSearchWith])
-
-  const isGzip = (data: Uint8Array): boolean => data[0] === 0x1f && data[1] === 0x8b
-
-  const fetchBuffer = async (path: string): Promise<Uint8Array> => {
-    const response = await fetch(convertFileSrc(path))
-    if (!response.ok) throw new Error(`无法读取 ${path}`)
-    return new Uint8Array(await response.arrayBuffer())
-  }
-
-  const loadDictionary = async (
-    meta: DictionaryMeta,
-  ): Promise<{ entries: ReturnType<typeof buildIndex>; dict: Uint8Array }> => {
-    const cached = dictCacheRef.current.get(meta.id)
-    if (cached) return cached
-    let idx = await fetchBuffer(meta.idxPath)
-    let dict = await fetchBuffer(meta.dictPath)
-    if (isGzip(idx)) idx = await inflateGzip(idx)
-    if (isGzip(dict)) dict = await inflateGzip(dict)
-    const loaded = { entries: buildIndex(idx), dict }
-    dictCacheRef.current.set(meta.id, loaded)
-    return loaded
-  }
-
-  const importDictionary = useCallback(async (): Promise<void> => {
-    const path = await openFileDialog({
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'StarDict 词典', extensions: ['ifo'] }],
-    })
-    if (!path) return
-    try {
-      await invokeCommand('dictionary.register', { path })
-      const response = await invokeCommand('dictionary.list', undefined)
-      setDictionaries(response.dictionaries)
-      setPanelProblem(null)
-    } catch (registerError) {
-      setPanelProblem(toAppError(registerError).message ?? null)
-    }
-  }, [])
 
   /** 浏览器端拿到字体 File 之后的那一段(桌面端走 `fonts.import`)。 */
   const importFontFile = useCallback(
@@ -1994,17 +1886,6 @@ export function ReaderScreen({
     },
     [customFonts, typography.fontFamily, updateLayout],
   )
-
-  const removeDictionary = useCallback(async (id: string): Promise<void> => {
-    try {
-      await invokeCommand('dictionary.remove', { id })
-      setDictionaries((current) => current.filter((d) => d.id !== id))
-      dictCacheRef.current.delete(id)
-      setPanelProblem(null)
-    } catch (removeError) {
-      setPanelProblem(toAppError(removeError).message ?? null)
-    }
-  }, [])
 
   const startRepair = (): void => {
     const source = adapterRef.current?.textEditing?.getSourceText() ?? null
@@ -2116,42 +1997,6 @@ export function ReaderScreen({
     persistStatsSettings(next)
   }, [])
 
-  const runLookup = async (): Promise<void> => {
-    if (!selection) return
-    const word = selection.text
-      .trim()
-      .replace(/^[^\w\u4e00-\u9fff]+|[^\w\u4e00-\u9fff]+$/g, '')
-      .slice(0, 40)
-    // 词典卡与翻译卡同套避让(工具条现在不关),选区也留给后续动作。
-    const frame =
-      hostRef.current?.getBoundingClientRect() ?? windowFrame(window.innerWidth, window.innerHeight)
-    const rect = {
-      top: placeCompanionCard(frame, anchorFromRect(selection.rect), LOOKUP_CARD_HEIGHT).top,
-      left: selection.rect.left,
-    }
-    if (!word) return
-    setLookupLoading(true)
-    setLookup({ word, rect, results: [] })
-    const results: { dictName: string; word: string; fields: readonly DefinitionField[] }[] = []
-    for (const meta of dictionaries) {
-      try {
-        const loaded = await loadDictionary(meta)
-        for (const result of lookupWord(
-          loaded.entries,
-          loaded.dict,
-          word,
-          meta.sametypesequence ?? undefined,
-        )) {
-          results.push({ dictName: meta.name, ...result })
-        }
-      } catch {
-        // One unreadable dictionary must not break lookup for the rest.
-      }
-    }
-    setLookup({ word, rect, results })
-    setLookupLoading(false)
-  }
-
   const toggleBookmark = useCallback((): void => {
     const { cfi } = progressStore.get()
     if (cfi === null) return
@@ -2176,11 +2021,6 @@ export function ReaderScreen({
   const removeBookmark = (id: string): void => {
     setBookmarks((list) => list.map((b) => (b.id === id ? { ...b, deleted: true } : b)))
     scheduleSave()
-  }
-
-  const runSearch = (): Promise<void> => {
-    const query = searchInputRef.current?.value.trim() ?? ''
-    return runSearchWith(query)
   }
 
   const theme = READER_THEMES[themeIndex] ?? READER_THEMES[0]!
@@ -2560,7 +2400,7 @@ export function ReaderScreen({
             searchProgress={searchProgress}
             searchMatchCase={searchMatchCase}
             onSearchMatchCaseChange={setSearchMatchCase}
-            onCancelSearch={() => searchAbortRef.current?.abort()}
+            onCancelSearch={abortSearch}
             searchResults={searchResults}
             searchTruncated={searchTruncated}
             onSearch={() => void runSearch()}
@@ -2738,7 +2578,7 @@ export function ReaderScreen({
             rect={lookup?.rect ?? selection?.rect ?? null}
             loading={lookupLoading}
             results={lookup?.results ?? []}
-            onClose={() => setLookup(null)}
+            onClose={closeLookup}
           />
         )}
 
