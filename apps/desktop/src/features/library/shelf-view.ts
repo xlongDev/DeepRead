@@ -121,8 +121,6 @@ export type LibraryView = 'shelf' | 'notes' | 'stats'
 
 /** 标签下拉的「不筛选」哨兵值(自绘下拉需要一个真实值)。 */
 export const ALL_TAGS = '__all__'
-/** 整批移出的待确认哨兵(单本待确认用的是真实 hash)。 */
-export const BULK_CONFIRM = '__bulk__'
 
 /**
  * 收藏就是标签 —— 不新增字段、不加迁移,`library.tag.set` 本来就能存它。

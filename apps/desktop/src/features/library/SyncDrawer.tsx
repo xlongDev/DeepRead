@@ -4,6 +4,7 @@ import { toAppError, type CloudConfigGetResponse } from '@deepread/shared'
 import { invokeCommand } from '../../lib/ipc'
 import { AUTO_SYNC_STORAGE_KEY, isAutoSyncEnabled, runSync, type SyncReport } from '../../lib/sync'
 import { useDrawerFocus } from '../../lib/modal-dialog'
+import { ConfirmButton } from '../../components/ConfirmButton'
 
 interface SyncDrawerProps {
   /** Refresh the shelf after a WebDAV restore replaced the database. */
@@ -16,7 +17,6 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
   const [form, setForm] = useState({ endpoint: '', username: '', password: '' })
   const [busy, setBusy] = useState<'test' | 'save' | 'sync' | 'backup' | 'restore' | null>(null)
   const [report, setReport] = useState<SyncReport | null>(null)
-  const [confirmRestore, setConfirmRestore] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   /** 自动同步开关:与书架侧的静默同步 effect 读同一个 localStorage 键。 */
@@ -102,11 +102,6 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
 
   const restore = (): Promise<void> =>
     withBusy('restore', async () => {
-      if (!confirmRestore) {
-        setConfirmRestore(true)
-        return
-      }
-      setConfirmRestore(false)
       await invokeCommand('cloud.restore', undefined)
       setMessage('已从云端备份恢复。')
       onRestored()
@@ -230,14 +225,12 @@ export function SyncDrawer({ onRestored, onClose }: SyncDrawerProps) {
               >
                 {busy === 'backup' ? '备份中…' : '备份数据库'}
               </button>
-              <button
-                type="button"
-                className={`btn${confirmRestore ? ' is-danger' : ''}`}
+              <ConfirmButton
+                label={busy === 'restore' ? '恢复中…' : '从云端恢复'}
+                confirmLabel="确认覆盖本机?"
                 disabled={busy !== null}
-                onClick={() => void restore()}
-              >
-                {busy === 'restore' ? '恢复中…' : confirmRestore ? '确认覆盖本机?' : '从云端恢复'}
-              </button>
+                onConfirm={() => void restore()}
+              />
               <button
                 type="button"
                 className="btn-ghost btn"

@@ -66,7 +66,6 @@ import { ShelfView } from './ShelfView'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
-  BULK_CONFIRM,
   FAVORITE_TAG,
   isFinished,
   isReading,
@@ -113,8 +112,6 @@ function needsMetaFor(book: ShelfBook): boolean {
     book.language === null
   )
 }
-
-/** `confirmRemove` 与 `tagFilter` 的哨兵值在 shelf-view.ts 单点定义。 */
 
 /** 只看「最后一次 morph」,见 withViewTransition 收尾处的说明。 */
 let vtToken = 0
@@ -360,8 +357,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     setBackground(value)
     setAccent((prev) => (prev.kind === 'custom' ? prev : { kind: 'auto' }))
   }, [])
-  /** Hash waiting for the second click — removing a book drops its progress and annotations. */
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   /** 正在编辑书籍信息的那一本;null = 弹窗关闭。 */
   const [editBook, setEditBook] = useState<ShelfBook | null>(null)
   const [infoBusy, setInfoBusy] = useState(false)
@@ -990,16 +985,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     return sortBooks(base, sort, sortDir)
   }, [books, query, search, sort, sortDir])
 
-  // Two-step: one stray click used to drop a book plus its progress forever.
-  // 待确认状态留在外壳(它和整批移出共用同一个哨兵),ShelfView 只管渲染按钮。
-  const handleRemoveClick = (hash: string): void => {
-    if (confirmRemove === hash) {
-      setConfirmRemove(null)
-      void removeFromLibrary(hash)
-    } else {
-      setConfirmRemove(hash)
-    }
-  }
+  // 两击移除的确认态在 ConfirmButton 里;一次误点曾会连进度与批注一起删掉。
 
   /**
    * 卡片悬浮的「导出批注」:只导这一本。
@@ -1172,7 +1158,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const exitSelection = (): void => {
     setSelecting(false)
     setSelected(new Set())
-    setConfirmRemove(null)
   }
 
   /**
@@ -1317,10 +1302,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   }
 
   const removeSelected = async (): Promise<void> => {
-    if (confirmRemove !== BULK_CONFIRM) {
-      setConfirmRemove(BULK_CONFIRM)
-      return
-    }
     setBulkBusy(true)
     try {
       for (const book of selectedBooks) await removeFromLibrary(book.hash)
@@ -1343,7 +1324,6 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   }
 
   const openBookInfo = (book: ShelfBook): void => {
-    setConfirmRemove(null)
     setInfoError(null)
     setEditBook(book)
   }
@@ -1700,8 +1680,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
                   onSetTags={(book, next) => void setBookTags(book, next)}
                   onFavoriteSelected={() => void favoriteSelected()}
                   onImport={triggerImport}
-                  confirmRemove={confirmRemove}
-                  onRemoveClick={handleRemoveClick}
+                  onRemoveBook={(book) => void removeFromLibrary(book.hash)}
                   tagDraft={tagDraft}
                   onTagDraft={setTagDraft}
                   onTagSelected={() => void tagSelected()}

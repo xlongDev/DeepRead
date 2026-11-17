@@ -26,10 +26,10 @@ import {
 } from '@phosphor-icons/react'
 import { DropdownMenu } from '../../components/DropdownMenu'
 import { ScrollingText } from '../../components/ScrollingText'
+import { ConfirmButton } from '../../components/ConfirmButton'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { TagPopover } from './TagPopover'
 import {
-  BULK_CONFIRM,
   coverPalette,
   FAVORITE_TAG,
   formatBytes,
@@ -91,9 +91,8 @@ export interface ShelfViewProps {
   /** 导出这本书的批注(.md)。 */
   readonly onExportNotes: (book: ShelfBook) => void | Promise<void>
   readonly onImport: () => void
-  /** 已进入待确认态的书籍 hash(单本移除与整批移出共用)。 */
-  readonly confirmRemove: string | null
-  readonly onRemoveClick: (hash: string) => void
+  /** 移除一本书(进度与批注一并删除;两击确认在 ConfirmButton 里)。 */
+  readonly onRemoveBook: (book: ShelfBook) => void
   readonly tagDraft: string
   readonly onTagDraft: (value: string) => void
   readonly onTagSelected: () => void
@@ -134,8 +133,7 @@ export function ShelfView({
   onTagPreset,
   onExportNotes,
   onImport,
-  confirmRemove,
-  onRemoveClick,
+  onRemoveBook,
   tagDraft,
   onTagDraft,
   onTagSelected,
@@ -240,7 +238,6 @@ export function ShelfView({
 
   const renderMenu = (book: ShelfBook, extraClass: string): React.JSX.Element | null => {
     if (menuHash !== book.hash) return null
-    const pendingRemove = confirmRemove === book.hash
     return (
       <div
         ref={menuRef}
@@ -281,19 +278,27 @@ export function ShelfView({
           <PencilSimple size={14} weight="regular" aria-hidden />
           编辑书籍信息
         </button>
-        <button
-          type="button"
+        {/* 移除始终是两次点击:第一次进待确认态,菜单留着让用户看清后果。 */}
+        <ConfirmButton
+          className=""
           role="menuitem"
-          className={pendingRemove ? 'is-danger' : ''}
-          onClick={() => {
-            // 移除始终是两次点击:第一次进待确认态,菜单留着让用户看清后果。
-            onRemoveClick(book.hash)
-            if (pendingRemove) setMenuHash(null)
+          label={
+            <>
+              <Trash size={14} weight="regular" aria-hidden />
+              从书架移除
+            </>
+          }
+          confirmLabel={
+            <>
+              <Trash size={14} weight="regular" aria-hidden />
+              确认移除(进度与批注一并删除)
+            </>
+          }
+          onConfirm={() => {
+            setMenuHash(null)
+            void onRemoveBook(book)
           }}
-        >
-          <Trash size={14} weight="regular" aria-hidden />
-          {pendingRemove ? '确认移除(进度与批注一并删除)' : '从书架移除'}
-        </button>
+        />
       </div>
     )
   }
@@ -786,14 +791,12 @@ export function ShelfView({
           <Tag size={14} weight="regular" aria-hidden />
           加标签
         </button>
-        <button
-          type="button"
-          className={`btn${confirmRemove === BULK_CONFIRM ? ' is-danger' : ''}`}
+        <ConfirmButton
+          label="移出书架"
+          confirmLabel={`确认移除 ${selected.size} 本?`}
           disabled={bulkBusy || selected.size === 0}
-          onClick={onRemoveSelected}
-        >
-          {confirmRemove === BULK_CONFIRM ? `确认移除 ${selected.size} 本?` : '移出书架'}
-        </button>
+          onConfirm={onRemoveSelected}
+        />
       </div>
 
       {/* 批量加标签的浮层:常用标签 + 自定义输入,与卡片悬浮的打标签浮层同一套
