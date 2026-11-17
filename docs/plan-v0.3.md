@@ -235,7 +235,7 @@ R2 风险的原文触发条件——"出现第一次双端不一致 bug → 提�
 | 9.2 | **OPDS**(M-L):`opds.fetch` 命令复用 B2 的 quick-xml 解析 Atom/OPDS 目录;书架"添加书源"面板 → 浏览/搜索/下载 → 进现有导入管线;认证支持 Basic                                                                                                   | M-L              |
 | 9.3 | **隐蔽阅读模式**(M,§76):`tauri-plugin-global-shortcut`(能力评估 + capabilities 收敛)+ 全局热键隐藏/恢复窗口 + 可选托盘图标;设置页独立开关                                                                                                     | M                |
 | 9.4 | **性能监视器**(M,§139):开发模式 FPS/内存/CPU overlay(§70 预算对齐)+ 100MB+ 大书实测矩阵跑一遍并把结果写进 `docs/development/performance.md`                                                                                                   | M                |
-| 9.5 | **测试盲区收尾**(M-L):`AiDrawer`/`LearningDrawer`/`SyncDrawer`/`GraphView`/`ipc.ts`/`web-handlers.ts` 契约测试;FB2/CBZ 真书样本进 `smoke:formats`(样本到手即跑,没有就保持"未验证"标注)                                                        | M-L              |
+| 9.5 | **测试盲区收尾**(M-L):`AiDrawer`/`LearningDrawer`/`SyncDrawer`/`GraphView`/`ipc.ts`/`web-handlers.ts` 契约测试;FB2/CBZ 真书样本进 `smoke:formats`(样本到手即跑,没有就保持"未验证"标注) **—— 契约测试 ✅(2026-11-18):ipc/SyncDrawer/GraphView 补齐 22 例,其余三处此前已有;FB2/CBZ 样本仍缺** | M-L              |
 | 9.6 | **移动端 UX**(XL,独立 epic):先出侦察报告(触控翻页/长按选区/移动布局差距清单),再单独立项排期——**不进本计划承诺范围**                                                                                                                           | 侦察 M / 实施 XL |
 | 9.7 | **发布运营 checklist**(S):更新器 endpoint 从 `.invalid` 占位符换真实域名 + minisign 签名证书申请,完成后跑通端到端更新;`docs/release.md` 增补                                                                                                  | S(ops)           |
 
