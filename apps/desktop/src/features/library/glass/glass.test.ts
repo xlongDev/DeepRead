@@ -28,6 +28,11 @@ const librarySource = readFileSync(
   resolve(process.cwd(), 'src/features/library/LibraryScreen.tsx'),
   'utf8',
 )
+// 壁纸落 <html> 的时序契约在 use-appearance 里(hook 化后从 LibraryScreen 搬走)。
+const appearanceSource = readFileSync(
+  resolve(process.cwd(), 'src/features/library/use-appearance.ts'),
+  'utf8',
+)
 const notesSource = readFileSync(resolve(process.cwd(), 'src/styles/sections/04-notes.css'), 'utf8')
 const cssSource = readFileSync(
   resolve(process.cwd(), 'src/styles/sections/13-glass-wallpaper.css'),
@@ -172,7 +177,9 @@ describe('wallpaper glass surface list', () => {
     // root 快照 cross-fade 会让旧页文字透过新页玻璃;壁纸须在 paint 前落地。
     expect(librarySource).toContain('wallpapered')
     expect(librarySource).toContain("root.dataset.background !== 'none'")
-    expect(librarySource).toContain('useLayoutEffect')
+    // useLayoutEffect 写壁纸/主题这段在 use-appearance.ts(布局阶段落地)。
+    expect(appearanceSource).toContain('useLayoutEffect')
+    expect(appearanceSource).toContain('root.dataset.background = background')
   })
 
   it('keeps page entrance motion but drops the opacity that breaks backdrop-filter', () => {
