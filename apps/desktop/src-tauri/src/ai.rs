@@ -1139,6 +1139,7 @@ pub async fn ai_chat(
     let client = crate::http();
     let task_id = request.task_id.clone();
     let channel = on_event.clone();
+    let cleanup_id = task_id.clone();
 
     tauri::async_runtime::spawn(async move {
         let on_chunk = |chunk: String| {
@@ -1149,6 +1150,14 @@ pub async fn ai_chat(
             }
         };
         let result = stream_chat(client, &url, &api_key, body, cancelled, &on_chunk).await;
+        // 任务结算即除名:这张表原本只在 ai.cancel 时移除,正常完成/出错的
+        // 任务会永远占着一条(每轮对话泄漏一条,活得跟应用一样长)。取消后
+        // 迟到的 ai.cancel 会如实回答 cancelled:false。
+        app.state::<AiState>()
+            .cancelled
+            .lock()
+            .await
+            .remove(&cleanup_id);
         match result {
             Ok(()) => emit_event(&channel, "done", json!(null)),
             Err(err) => emit_event(
