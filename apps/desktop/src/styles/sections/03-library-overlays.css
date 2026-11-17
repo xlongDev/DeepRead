@@ -1310,3 +1310,27 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-surface) 70%, transparent);
   flex-shrink: 0;
 }
+
+/* 有声书导出任务的浮条(plan B8):任务在 Rust 后台跑,书架跟进进度。 */
+.tts-export-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: var(--z-overlay, 60);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg, 0 8px 30px rgb(0 0 0 / 0.18));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.tts-export-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}

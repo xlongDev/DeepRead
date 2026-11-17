@@ -24,7 +24,14 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { type AiProviderConfig } from '@deepread/shared'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+import { toAppError, type AiProviderConfig, type TtsExportTaskStatus } from '@deepread/shared'
+import {
+  fetchExportStatuses,
+  isTerminalExport,
+  planExportChapters,
+  type ExportChapterSource,
+} from '../../lib/tts-export'
 import {
   buildSpeechUnits,
   queuePosition,
@@ -187,6 +194,9 @@ interface TtsDrawerProps {
   readonly getSectionText: () => Promise<string>
   /** 跳转章节(±1);返回 false 表示越界。 */
   readonly jumpSection: (delta: number) => Promise<boolean>
+  /** 有声书导出的整书原料(章节序号/标题/纯文本),父层经内核逐章取好。
+   *  测试替身可不接 —— 导出入口对缺席自报错,不静默。 */
+  readonly exportChapters?: () => Promise<readonly ExportChapterSource[]>
   /** TTS 高亮广播:声音移动到新位置时通知父层;父层负责把高亮打回正文
    *  并触发自动翻页。传 null 表示清掉当前高亮(暂停/切章/关闭)。 */
   readonly onHighlight?: (
@@ -263,6 +273,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     onPlayingChange,
     getSectionText,
     jumpSection,
+    exportChapters,
     onHighlight,
     onExpand,
     onMinimize,
@@ -316,6 +327,80 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
 
   const activeId = activeProviderId
+
+  /* ---------------------------------------------------------------------- */
+  /* 有声书导出(plan B8 / ADR-0009):合成循环在 Rust,这里只管提交与展示。 */
+  /* ---------------------------------------------------------------------- */
+  /** 任务状态经 1.2s 轮询跟进;抽屉随时可关,书架侧栏同一张注册表。 */
+  const [exportStatus, setExportStatus] = useState<TtsExportTaskStatus | null>(null)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const exportDone = exportStatus !== null && isTerminalExport(exportStatus)
+  useEffect(() => {
+    if (exportDone) return
+    let cancelled = false
+    const tick = (): void => {
+      void fetchExportStatuses(bookHash)
+        .then((tasks) => {
+          if (cancelled) return
+          setExportStatus(tasks.find((task) => task.bookHash === bookHash)?.status ?? null)
+        })
+        .catch(() => {})
+    }
+    tick()
+    const timer = setInterval(tick, 1200)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [bookHash, exportDone])
+
+  const startExport = useCallback(async (): Promise<void> => {
+    if (exportBusy) return
+    if (!isTauriRuntime()) {
+      setExportError('导出仅在桌面端可用。')
+      return
+    }
+    const engine = settings.engine
+    if (engine === 'system') {
+      setExportError('系统语音不支持导出,请换 Edge 或云引擎。')
+      return
+    }
+    const configId = engine === 'cloud' ? activeId : undefined
+    if (engine === 'cloud' && !configId) {
+      setExportError('云引擎导出需要先在语音面板里选择一个服务。')
+      return
+    }
+    if (!exportChapters) {
+      setExportError('当前环境没有提供导出数据源。')
+      return
+    }
+    setExportBusy(true)
+    setExportError(null)
+    try {
+      const dir = await openFileDialog({ multiple: false, directory: true, title: '选择导出目录' })
+      if (!dir) return
+      const chapters = await exportChapters()
+      await invokeCommand('tts.export.start', {
+        bookHash,
+        title: bookTitle,
+        engine,
+        voice: voiceForSpeaker(settings, 'narrator', engine) ?? '',
+        speed: engine === 'cloud' ? settings.rate : undefined,
+        configId,
+        outputDir: dir,
+        chapters: planExportChapters(chapters),
+      })
+    } catch (exportCause) {
+      setExportError(toAppError(exportCause).message)
+    } finally {
+      setExportBusy(false)
+    }
+  }, [activeId, bookHash, bookTitle, exportBusy, exportChapters, settings])
+
+  const cancelExport = useCallback((): void => {
+    void invokeCommand('tts.export.cancel', { bookHash }).catch(() => {})
+  }, [bookHash])
 
   // 引擎:词级高亮时才逐词发布边界(见 useTts 的 trackBoundary)。
   const tts = useTts({
@@ -1297,6 +1382,38 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 ))}
             </div>
           )}
+          <div className="tts-export" aria-label="有声书导出">
+            {exportStatus !== null && (
+              <div className="tts-export-status">
+                <span>
+                  {exportStatus.phase === 'running' &&
+                    `导出中:第 ${exportStatus.chapter + 1} 章 · ${exportStatus.block}/${exportStatus.totalBlocks} 块 · ${(exportStatus.bytes / 1024 / 1024).toFixed(1)} MB`}
+                  {exportStatus.phase === 'done' && '导出完成,manifest 已写入所选目录。'}
+                  {exportStatus.phase === 'error' && `导出失败:${exportStatus.error ?? '未知错误'}`}
+                  {exportStatus.phase === 'cancelled' && '已取消:已完成章节保留,再点导出即续跑。'}
+                </span>
+                {exportStatus.phase === 'running' && (
+                  <button type="button" className="btn" onClick={cancelExport}>
+                    取消
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn"
+              disabled={exportBusy || exportStatus?.phase === 'running'}
+              onClick={() => void startExport()}
+            >
+              {exportBusy ? '准备中…' : '导出有声书'}
+            </button>
+            <p className="tts-voices-sub">
+              {settings.engine === 'system'
+                ? '系统语音不支持导出;换 Edge 或云引擎后按当前音色逐句合成。'
+                : '按当前引擎与音色合成整书,输出分章 MP3 与 manifest 到所选目录;听过的句子走缓存,秒级续跑。'}
+            </p>
+            {exportError !== null && <p className="tts-voices-sub">{exportError}</p>}
+          </div>
         </div>
       ) : (
         <>

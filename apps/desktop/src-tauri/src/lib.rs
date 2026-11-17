@@ -22,6 +22,7 @@ pub mod state;
 pub mod storage;
 mod timestamps;
 mod tts;
+mod tts_export;
 
 use log::{info, warn};
 use tauri::Emitter;
@@ -172,6 +173,7 @@ pub fn run() {
             Ok(())
         })
         .manage(ai::AiState::default())
+        .manage(tts_export::TtsExportState::default())
         .manage(secrets::SecretStore::Keyring)
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -242,6 +244,9 @@ pub fn run() {
             tts::command_tts_audio,
             edge_tts::command_edge_tts_audio,
             edge_tts::command_edge_tts_voices,
+            tts_export::tts_export_start,
+            tts_export::tts_export_status,
+            tts_export::tts_export_cancel,
             fonts::command_fonts_list,
             fonts::command_fonts_import,
             fonts::command_fonts_remove,

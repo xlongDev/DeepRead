@@ -1,0 +1,22 @@
+# B8 · 有声书导出管线 —— 批次小结(2026-11-18)
+
+## 落地面
+
+- **Rust 任务系统**(`tts_export.rs`):`tts.export.start / status / cancel` 三命令 + `TtsExportState` 注册表(同书单任务,异书可并行)。合成循环复用两条既有路径 —— Edge 走 `edge_tts::edge_tts_audio`、云引擎走 `tts::tts_audio`,两者都自带 `tts-cache/`,**与听书共享缓存:听过的句子秒过,中断续跑天然免费**。
+- 分章输出:用户选定目录下 `chNN-章节名.mp3`(.part 写满才改名,原子提交,取消/断电不留半成品)+ `manifest.json`(书名/引擎/音色/逐章文件与字节)。
+- 磁盘预检:`df -k -P`(unix)/ `wmic`(windows)拿剩余空间,按 1.5KB/字估算,不足即拒并给两个数;拿不到剩余空间就放行(fail-open)。
+- 失败块重试 1 次(与播放同节奏);取消 = 块间旗标,已完成章节保留。
+- **前端**:块清单构建(`lib/tts-export.ts` 的 `planExportChapters`)与听书同一套 `buildSpeechUnits` 句级单元;TtsDrawer 语音面板"导出有声书"入口(选目录 → 提交 → 可关抽屉);进度走**轮询**(抽屉内 1.2s、书架浮条 2s),书架常驻浮条展示任务进度/取消。
+
+## 与计划的偏离(有意为之)
+
+| 计划原文 | 实际 | 理由 |
+| --- | --- | --- |
+| EventMap 扩 `task.progress/done/error` 事件 | 轮询 `tts.export.status` | 意图(跨抽屉/书架生命周期看进度)完整满足,省掉事件协议双端管线;AI 流式管线(Channel)之后,轮询是面积最小的方案 |
+| 书架侧栏任务指示 + reveal | 书架底部浮条;**不 做 reveal** | reveal 需 tauri-plugin-opener 新依赖(违反依赖纪律);目录是用户自己选的,可发现性天然解决 |
+| 音色映射沿用听书配置 | 叙述者音色单声道导出 | B5 的 per-speaker 音色导出待真书验证后再扩;`speed` 仅 cloud 生效,Edge 固定 1.0(播放期才拉伸,缓存键与语速无关) |
+
+## 验证
+
+- 门禁:TS 500 + Rust 262 全绿,clippy/fmt/prettier 干净;纯函数测试锁死文件名清洗、df 解析、体积估算、wire 形状(deny_unknown_fields)、块清单句级切分。
+- **真书验证:未验证** —— 待桌面真机:《认知觉醒》(约 10 万字)完整导出、中断续跑不重合成、产物按 manifest 定位、导出期间阅读无卡顿。

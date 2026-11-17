@@ -95,6 +95,7 @@ import { SearchPanel } from './SearchPanel'
 import { useReaderSearch } from './use-reader-search'
 import { useLookup } from './use-lookup'
 import { useTranslation } from './use-translation'
+import type { ExportChapterSource } from '../../lib/tts-export'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { ReaderBottomBar } from './ReaderBottomBar'
 import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
@@ -2549,6 +2550,22 @@ export function ReaderScreen({
               onPlayingChange={setTtsActive}
               getSectionText={ttsGetSectionText}
               jumpSection={ttsJumpSection}
+              exportChapters={async () => {
+                // 整书导出原料:逐章取纯文本(内核域方法),标题 v1 用序号名。
+                const adapter = adapterRef.current
+                const readable = adapter?.readableText
+                if (!readable) return []
+                const count = await readable.getSectionCount()
+                const chapters: ExportChapterSource[] = []
+                for (let index = 0; index < count; index += 1) {
+                  chapters.push({
+                    index,
+                    title: `第${index + 1}章`,
+                    text: await readable.getSectionText(index),
+                  })
+                }
+                return chapters
+              }}
               onHighlight={(highlight) => {
                 const adapter = adapterRef.current
                 if (!adapter) return

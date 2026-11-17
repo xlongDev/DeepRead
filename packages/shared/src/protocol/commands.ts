@@ -121,6 +121,17 @@ import type { EdgeTtsAudioResponse } from './generated/EdgeTtsAudioResponse'
 import type { EdgeWord } from './generated/EdgeWord'
 import type { EdgeVoice as EdgeTtsVoice } from './generated/EdgeVoice'
 import type { EdgeVoicesResponse as EdgeTtsVoicesResponse } from './generated/EdgeVoicesResponse'
+import type { TtsExportCancelRequest } from './generated/TtsExportCancelRequest'
+import type { TtsExportCancelResponse } from './generated/TtsExportCancelResponse'
+import type { TtsExportChapter } from './generated/TtsExportChapter'
+import type { TtsExportEngine } from './generated/TtsExportEngine'
+import type { TtsExportPhase } from './generated/TtsExportPhase'
+import type { TtsExportStartRequest } from './generated/TtsExportStartRequest'
+import type { TtsExportStartResponse } from './generated/TtsExportStartResponse'
+import type { TtsExportStatusRequest } from './generated/TtsExportStatusRequest'
+import type { TtsExportStatusResponse } from './generated/TtsExportStatusResponse'
+import type { TtsExportTaskEntry } from './generated/TtsExportTaskEntry'
+import type { TtsExportTaskStatus } from './generated/TtsExportTaskStatus'
 import type { ReadingFont } from './generated/ReadingFont'
 import type { FontImportRequest } from './generated/FontImportRequest'
 import type { FontRemoveRequest } from './generated/FontRemoveRequest'
@@ -259,6 +270,17 @@ export type {
   SystemPingResponse,
   TtsAudioRequest,
   TtsAudioResponse,
+  TtsExportCancelRequest,
+  TtsExportCancelResponse,
+  TtsExportChapter,
+  TtsExportEngine,
+  TtsExportPhase,
+  TtsExportStartRequest,
+  TtsExportStartResponse,
+  TtsExportStatusRequest,
+  TtsExportStatusResponse,
+  TtsExportTaskEntry,
+  TtsExportTaskStatus,
 }
 
 export const COMMAND = {
@@ -311,6 +333,9 @@ export const COMMAND = {
   ttsAudio: 'tts.audio',
   ttsEdgeAudio: 'tts.edge.audio',
   ttsEdgeVoices: 'tts.edge.voices',
+  ttsExportStart: 'tts.export.start',
+  ttsExportStatus: 'tts.export.status',
+  ttsExportCancel: 'tts.export.cancel',
   fontsList: 'fonts.list',
   fontsImport: 'fonts.import',
   fontsRemove: 'fonts.remove',
@@ -500,6 +525,18 @@ export interface CommandMap {
     readonly response: EdgeTtsAudioResponse
   }
   [COMMAND.ttsEdgeVoices]: { readonly request: undefined; readonly response: EdgeTtsVoicesResponse }
+  [COMMAND.ttsExportStart]: {
+    readonly request: TtsExportStartRequest
+    readonly response: TtsExportStartResponse
+  }
+  [COMMAND.ttsExportStatus]: {
+    readonly request: TtsExportStatusRequest
+    readonly response: TtsExportStatusResponse
+  }
+  [COMMAND.ttsExportCancel]: {
+    readonly request: TtsExportCancelRequest
+    readonly response: TtsExportCancelResponse
+  }
   [COMMAND.fontsList]: { readonly request: undefined; readonly response: ReadingFont[] }
   [COMMAND.fontsImport]: { readonly request: FontImportRequest; readonly response: ReadingFont }
   [COMMAND.fontsRemove]: { readonly request: FontRemoveRequest; readonly response: boolean }
@@ -983,6 +1020,52 @@ export const edgeTtsVoicesResponseSchema = z.object({
   voices: z.array(edgeTtsVoiceSchema),
 })
 
+/* 有声书导出(plan B8 / ADR-0009):块清单一次交付,合成循环在 Rust。 */
+
+export const ttsExportChapterSchema = z.object({
+  index: z.number().int().min(0),
+  title: z.string().max(512),
+  blocks: z.array(z.string().max(5000)).max(20_000),
+})
+export const ttsExportStartRequestSchema = z.object({
+  bookHash: z.string().min(8).max(64),
+  title: z.string().min(1).max(512),
+  author: z.string().max(256).nullish(),
+  engine: z.enum(['edge', 'cloud']),
+  configId: z.string().min(8).max(64).nullish(),
+  voice: z.string().min(1).max(128),
+  speed: z.number().min(0.25).max(4).nullish(),
+  outputDir: z.string().min(1).max(4096),
+  chapters: z.array(ttsExportChapterSchema).min(1).max(5000),
+})
+export const ttsExportStartResponseSchema = z.object({
+  totalBlocks: z.number().int().min(0),
+})
+export const ttsExportStatusRequestSchema = z.object({
+  bookHash: z.string().min(8).max(64).optional(),
+})
+export const ttsExportTaskStatusSchema = z.object({
+  phase: z.enum(['running', 'done', 'error', 'cancelled']),
+  chapter: z.number().int().min(0),
+  block: z.number().int().min(0),
+  totalBlocks: z.number().int().min(0),
+  bytes: z.number().min(0),
+  error: z.string().max(2048).nullish(),
+  outputDir: z.string().max(4096).nullish(),
+  finishedAt: z.string().regex(ISO8601_PATTERN).nullish(),
+})
+export const ttsExportStatusResponseSchema = z.object({
+  tasks: z.array(
+    z.object({ bookHash: z.string().min(8).max(64), status: ttsExportTaskStatusSchema }),
+  ),
+})
+export const ttsExportCancelRequestSchema = z.object({
+  bookHash: z.string().min(8).max(64),
+})
+export const ttsExportCancelResponseSchema = z.object({
+  cancelled: z.boolean(),
+})
+
 export const readingFontSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(256),
@@ -1105,6 +1188,9 @@ export const responseSchemas = {
   [COMMAND.ttsAudio]: ttsAudioResponseSchema,
   [COMMAND.ttsEdgeAudio]: edgeTtsAudioResponseSchema,
   [COMMAND.ttsEdgeVoices]: edgeTtsVoicesResponseSchema,
+  [COMMAND.ttsExportStart]: ttsExportStartResponseSchema,
+  [COMMAND.ttsExportStatus]: ttsExportStatusResponseSchema,
+  [COMMAND.ttsExportCancel]: ttsExportCancelResponseSchema,
   [COMMAND.fontsList]: fontsListResponseSchema,
   [COMMAND.fontsImport]: fontsImportResponseSchema,
   [COMMAND.fontsRemove]: fontsRemoveResponseSchema,
@@ -1174,6 +1260,9 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.ttsAudio]: ttsAudioRequestSchema,
   [COMMAND.ttsEdgeAudio]: edgeTtsAudioRequestSchema,
   [COMMAND.ttsEdgeVoices]: undefined,
+  [COMMAND.ttsExportStart]: ttsExportStartRequestSchema,
+  [COMMAND.ttsExportStatus]: ttsExportStatusRequestSchema,
+  [COMMAND.ttsExportCancel]: ttsExportCancelRequestSchema,
   [COMMAND.fontsList]: undefined,
   [COMMAND.fontsImport]: fontImportRequestSchema,
   [COMMAND.fontsRemove]: fontRemoveRequestSchema,

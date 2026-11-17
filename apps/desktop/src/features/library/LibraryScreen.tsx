@@ -36,6 +36,7 @@ import { matchesBookQuery, MAX_SEARCH_HITS } from '../../lib/library-search'
 import { useGlassRefraction } from './glass/useGlassRefraction'
 import { notesToMarkdown, saveNoteMarkdown } from './notes-view'
 import { invokeCommand, isTauriRuntime, listenEvent } from '../../lib/ipc'
+import { fetchExportStatuses, type TtsExportTaskEntry } from '../../lib/tts-export'
 import { useKeybindings } from '../../lib/keybindings'
 import { CommandBar } from '../../components/CommandBar'
 import { SyncDrawer } from './SyncDrawer'
@@ -336,6 +337,25 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const [bulkBusy, setBulkBusy] = useState(false)
   /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
   const [view, setView] = useState<LibraryView>('shelf')
+  /** 有声书导出任务(plan B8):任务在 Rust 后台跑,回书架后仍要看到进度,
+   *  所以书架侧常驻轮询;终端态留在 Rust 注册表里,结果一直可查。 */
+  const [exportTasks, setExportTasks] = useState<readonly TtsExportTaskEntry[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const tick = (): void => {
+      void fetchExportStatuses()
+        .then((tasks) => {
+          if (!cancelled) setExportTasks(tasks)
+        })
+        .catch(() => {})
+    }
+    tick()
+    const timer = setInterval(tick, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
 
   /**
    * 收/展侧栏。差的不只是宽度:内容区一变,书架从 5 列变 6 列(每本卡还同时
@@ -1665,6 +1685,35 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           onRestored={loadBooks}
           onClose={() => setSettingsOpen(false)}
         />
+      )}
+
+      {/* 有声书导出任务(plan B8):Rust 后台合成,书架用一行浮条跟进进度。
+          只在有任务时占位;终态保留到下次任务,便于看清刚才那次的结果。 */}
+      {exportTasks.length > 0 && (
+        <div className="tts-export-bar" role="status">
+          {exportTasks.map((task) => (
+            <div key={task.bookHash} className="tts-export-bar-row">
+              <span>
+                {task.status.phase === 'running' &&
+                  `有声书导出中 · ${task.status.block}/${task.status.totalBlocks} 块`}
+                {task.status.phase === 'done' && '有声书导出完成'}
+                {task.status.phase === 'error' && `有声书导出失败:${task.status.error ?? ''}`}
+                {task.status.phase === 'cancelled' && '有声书导出已取消(可续跑)'}
+              </span>
+              {task.status.phase === 'running' && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    void invokeCommand('tts.export.cancel', { bookHash: task.bookHash })
+                  }
+                >
+                  取消
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       <input

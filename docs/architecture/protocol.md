@@ -160,6 +160,16 @@
 
 错误码:`AI_PROVIDER_ERROR`(连接失败/上游非 2xx/响应不合法,多数可重试)、`STORAGE_IO/CORRUPT`。
 
+### `tts.export.*`(有声书导出,plan B8 / ADR-0009)
+
+| 命令                | 请求 → 响应                                                                                                                               | 说明                                                                                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tts.export.start`  | `{ bookHash, title, engine: 'edge'\|'cloud', voice, outputDir, chapters[{index,title,blocks[]}], configId?, speed? }` → `{ totalBlocks }` | 前端用与听书同一套句级单元(`buildSpeechUnits`)产出块清单一次交付;合成循环在 Rust,逐块走 `tts-cache/`(听过的句子秒过,续跑免费);分章 mp3 原子提交(.part→改名)+ `manifest.json` |
+| `tts.export.status` | `{ bookHash? }` → `{ tasks[{ bookHash, status{phase,chapter,block,totalBlocks,bytes,error?,outputDir?,finishedAt?} }] }`                  | 轮询制(1-2s):省略 bookHash 返回全部任务;终态(done/error/cancelled)保留在注册表供 UI 展示,同书重启导出即覆盖                                                                  |
+| `tts.export.cancel` | `{ bookHash }` → `{ cancelled }`                                                                                                          | 块间生效:半成品 .part 丢弃、已完成章节保留;再次 start 即续跑                                                                                                                 |
+
+约定:同一本书同时只允许一个导出任务;Edge 引擎固定 1.0 语速(播放期才拉伸,缓存与语速无关),`speed` 仅对 cloud 生效;进度走轮询而非事件系统(EventMap 不扩)。
+
 ## Event 目录(Phase 0)
 
 ### `app.ready`(v1)
