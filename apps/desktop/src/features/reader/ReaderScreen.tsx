@@ -49,11 +49,7 @@ import {
 import type { RepairChange } from '@deepread/reader-adapter'
 import {
   buildChapterRuleMessages,
-  buildTranslateMessages,
   parseChapterRuleCandidates,
-  parseTranslation,
-  streamTranslationView,
-  TRANSLATE_MAX_CHARS,
   type ChapterRule,
   type ChapterRuleCandidate,
 } from '@deepread/ai-core'
@@ -80,8 +76,6 @@ import {
   persistRulerSettings,
   persistStatsSettings,
   persistTypography,
-  loadTranslateTarget,
-  persistTranslateTarget,
   READER_THEMES,
   withAlpha,
   type PageTurnStyle,
@@ -93,13 +87,14 @@ import {
 import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
 import { AiDrawer } from './AiDrawer'
-import { TranslationCard, type TranslationCardState } from './TranslationCard'
+import { TranslationCard } from './TranslationCard'
 import { LookupCard } from './LookupCard'
 import { SettingsPanel } from './SettingsPanel'
 import { TocPanel } from './TocPanel'
 import { SearchPanel } from './SearchPanel'
 import { useReaderSearch } from './use-reader-search'
 import { useLookup } from './use-lookup'
+import { useTranslation } from './use-translation'
 import { NoteEditor, type NoteDraft } from './NoteEditor'
 import { ReaderBottomBar } from './ReaderBottomBar'
 import { createProgressStore, useProgressSnapshot, type ProgressStore } from './progress-store'
@@ -116,12 +111,7 @@ import { collectChatText } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { ParallelPicker } from './ParallelPicker'
-import {
-  anchorFromRect,
-  placeCompanionCard,
-  windowFrame,
-  type ReadingFrame,
-} from './selection-place'
+import { windowFrame, type ReadingFrame } from './selection-place'
 import { animateFlipTurn } from './page-flip'
 import { animatePageTurn } from './page-turn'
 import { TtsDrawer, type TtsDrawerHandle } from './TtsDrawer'
@@ -140,8 +130,6 @@ const SAVE_DEBOUNCE_MS = 800
 /** 与 `reader.note.update` 的上限对齐(shared 协议里那条 zod)。 */
 const EXCERPT_MAX_CHARS = 500
 /** 翻译卡的估计高度:算避让位置用(卡片 max-height 420,流式中会变)。 */
-const TRANSLATE_CARD_HEIGHT = 300
-
 /**
  * 偏好 → 内核版式对象(开书初值 / 偏好下发 / 改动下发三处共用)。
  *
@@ -534,13 +522,14 @@ export function ReaderScreen({
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null)
   /** AI 服务列表:翻译要显示用的哪个 provider/model(成本诚实)。 */
   const [aiProviders, setAiProviders] = useState<readonly AiProviderConfig[]>([])
-  /** 划选翻译的浮层状态;null = 没在翻译。 */
-  const [translation, setTranslation] = useState<TranslationCardState | null>(null)
-  /** 目标语言:null = 没手动选过,跟着书的语言走(见 effectiveTranslateTarget)。 */
-  const [translateTarget, setTranslateTarget] = useState<string | null>(loadTranslateTarget)
-  /** 目标语言的实际取值:没手动选过时,中文书译英、其余译中。 */
-  const effectiveTranslateTarget =
-    translateTarget ?? (bookLanguage?.toLowerCase().startsWith('zh') ? 'English' : '中文')
+  // 划词翻译域收进 hook:卡片状态/目标语言/流式调用都住那里,这里只留接线。
+  const {
+    translation,
+    runTranslate,
+    closeTranslation,
+    effectiveTranslateTarget,
+    changeTargetLanguage,
+  } = useTranslation(selection, aiProviders, bookLanguage, hostRef, setNotice)
   const [panelProblem, setPanelProblem] = useState<string | null>(null)
   /** 脚注弹层:内核渲染好内容的二级视图元素;null = 关闭。 */
   const [footnote, setFootnote] = useState<{ view: HTMLElement; type: string | null } | null>(null)
@@ -1552,69 +1541,6 @@ export function ReaderScreen({
     [book.bookId, scheduleSave],
   )
 
-  /**
-   * 划选翻译:走 ai.chat 流式通道,边收边渲染,收完 zod 校验。
-   * 门槛是「有没有配 AI 服务」——没配就说清楚,不做假的翻译结果。
-   */
-  const runTranslate = useCallback(async (): Promise<void> => {
-    const current = selection
-    if (current === null) return
-    const provider = aiProviders[0]
-    if (provider === undefined) {
-      setNotice({ text: '还没有配置 AI 服务:先在 AI 助手里添加一个,再回来翻译。', danger: false })
-      return
-    }
-    const source = current.text
-    const text = source.slice(0, TRANSLATE_MAX_CHARS)
-    // 卡片落点避开还开着的划词工具:工具在选区下方,卡片去工具底下(见
-    // selection-place 的三级退让),不再不管不顾地压在选区上。
-    const frame =
-      hostRef.current?.getBoundingClientRect() ?? windowFrame(window.innerWidth, window.innerHeight)
-    const rect = {
-      top: placeCompanionCard(frame, anchorFromRect(current.rect), TRANSLATE_CARD_HEIGHT).top,
-      left: current.rect.left,
-    }
-    setTranslation({
-      rect,
-      lang: null,
-      body: '',
-      provider: `${provider.name} · ${provider.model}`,
-      truncated: source.length > TRANSLATE_MAX_CHARS,
-      error: null,
-      loading: true,
-    })
-    let buffer = ''
-    try {
-      await collectChatText(
-        provider.id,
-        [
-          ...buildTranslateMessages({
-            text,
-            targetLang: effectiveTranslateTarget,
-            context: text,
-          }),
-        ],
-        (delta) => {
-          buffer += delta
-          const view = streamTranslationView(buffer)
-          setTranslation((state) =>
-            state === null ? state : { ...state, lang: view.lang, body: view.body },
-          )
-        },
-      )
-      const parsed = parseTranslation(buffer)
-      setTranslation((state) =>
-        state === null
-          ? state
-          : { ...state, lang: parsed.detectedLang, body: parsed.translation, loading: false },
-      )
-    } catch (cause) {
-      setTranslation((state) =>
-        state === null ? state : { ...state, loading: false, error: toAppError(cause).message },
-      )
-    }
-  }, [aiProviders, effectiveTranslateTarget, selection])
-
   /** 下笔:选中即成划线 + 一条笔记。已有批注只改 note,高亮本身不动。 */
   const commitNote = async (): Promise<void> => {
     const draft = noteDraft
@@ -2564,11 +2490,8 @@ export function ReaderScreen({
             translation={translation}
             targetLanguage={effectiveTranslateTarget}
             themeVars={readerVars}
-            onTargetLanguageChange={(target) => {
-              setTranslateTarget(target)
-              persistTranslateTarget(target)
-            }}
-            onClose={() => setTranslation(null)}
+            onTargetLanguageChange={changeTargetLanguage}
+            onClose={closeTranslation}
           />
         )}
 
