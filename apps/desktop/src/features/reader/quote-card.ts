@@ -62,6 +62,8 @@ const CARD_HEIGHT = 1440
 const CARD_PADDING = 96
 const QUOTE_FONT = `44px 'LXGW WenKai', 'Songti SC', 'Noto Serif CJK SC', serif`
 const META_FONT = `30px 'LXGW WenKai', 'Songti SC', 'Noto Serif CJK SC', serif`
+/** 版心能排下的行数上限:超出加省略号,不悄悄丢行。 */
+const QUOTE_MAX_LINES = 11
 
 /** 画一张分享卡并返回 PNG data URL。canvas 上下文拿不到(null)返回 null。 */
 export function drawQuoteCard(
@@ -70,7 +72,9 @@ export function drawQuoteCard(
 ): string | null {
   const ctx = canvas.getContext('2d')
   if (ctx === null) return null
-  const trimmed = quote.trim().slice(0, QUOTE_MAX_CHARS)
+  // 按码点截断(slice 会把 emoji 切成半个代理对,画出来是 replacement char)。
+  const chars = [...quote.trim()]
+  const trimmed = chars.slice(0, QUOTE_MAX_CHARS).join('')
 
   canvas.width = CARD_WIDTH
   canvas.height = CARD_HEIGHT
@@ -92,14 +96,18 @@ export function drawQuoteCard(
   ctx.font = `bold 96px 'LXGW WenKai', 'Songti SC', serif`
   ctx.fillText('「', CARD_PADDING, CARD_PADDING + 84)
 
-  // 金句:2 倍行距居中排;装不下就截在 QUOTE_MAX_CHARS(末尾省略号)。
+  // 金句:2 倍行距居中排;行数超版心就在末行打省略号,不悄悄丢行。
   ctx.fillStyle = ink
   ctx.font = QUOTE_FONT
   ctx.textBaseline = 'alphabetic'
   const lineHeight = 76
   let top = CARD_PADDING + 220
-  for (const line of wrapLines((text) => ctx.measureText(text).width, trimmed, maxWidth)) {
-    if (top > CARD_HEIGHT - CARD_PADDING - 160) break
+  let lines = wrapLines((text) => ctx.measureText(text).width, trimmed, maxWidth)
+  if (lines.length > QUOTE_MAX_LINES) {
+    lines = lines.slice(0, QUOTE_MAX_LINES)
+    lines[QUOTE_MAX_LINES - 1] += '…'
+  }
+  for (const line of lines) {
     ctx.fillText(line, CARD_PADDING, top)
     top += lineHeight
   }

@@ -27,6 +27,17 @@ export function QuoteCardModal({
   const [saved, setSaved] = useState<string | null>(null)
   useModalFocus(panelRef, { initialFocusRef: saveRef })
 
+  // Esc 关闭:与 BookInfoDialog 同一约定(useModalFocus 只管焦点圈与归还)。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (canvas !== null) drawQuoteCard(canvas, spec)
