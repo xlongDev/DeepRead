@@ -48,6 +48,7 @@ import { ShelfView } from './ShelfView'
 import { StatsView } from './StatsView'
 import {
   APP_THEMES,
+  collectionNameTaken,
   FAVORITE_TAG,
   isFinished,
   isReading,
@@ -65,7 +66,11 @@ import {
   viewFromStorage,
   columnsFromStorage,
   densityFromStorage,
+  loadCollections,
+  newCollectionId,
+  saveCollections,
   type AppThemeChoice,
+  type BookCollection,
   type LibraryView,
   type ShelfBook,
   type ShelfColumns,
@@ -335,6 +340,39 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   const keybindings = useKeybindings()
   /** 侧栏「我的分组」;与标签筛选叠加生效。 */
   const [smartFilter, setSmartFilter] = useState<SmartFilter>('all')
+  /** 自定义集合(本地组织层):列表 + 当前筛选的集合。成员变动即落盘。 */
+  const [collections, setCollections] = useState<readonly BookCollection[]>(loadCollections)
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
+
+  /** 集合的统一写入口:先落盘再进 state(坏名字在这里挡下,不进持久层)。 */
+  const updateCollections = (next: readonly BookCollection[]): void => {
+    saveCollections(next)
+    setCollections(next)
+  }
+  const createCollection = (name: string): void => {
+    const trimmed = name.trim()
+    if (trimmed === '' || collectionNameTaken(trimmed, collections)) return
+    updateCollections([...collections, { id: newCollectionId(), name: trimmed, bookHashes: [] }])
+  }
+  const renameCollection = (id: string, name: string): void => {
+    const trimmed = name.trim()
+    if (trimmed === '' || collectionNameTaken(trimmed, collections, id)) return
+    updateCollections(collections.map((c) => (c.id === id ? { ...c, name: trimmed } : c)))
+  }
+  const deleteCollection = (id: string): void => {
+    updateCollections(collections.filter((c) => c.id !== id))
+    if (activeCollectionId === id) setActiveCollectionId(null)
+  }
+  /** 书 ↔ 集合成员变动(书籍详情弹层的集合 chips)。 */
+  const toggleCollectionMember = (collectionId: string, bookHash: string, on: boolean): void => {
+    updateCollections(
+      collections.map((c) => {
+        if (c.id !== collectionId) return c
+        const without = c.bookHashes.filter((hash) => hash !== bookHash)
+        return { ...c, bookHashes: on ? [...without, bookHash] : without }
+      }),
+    )
+  }
   const [tagDraft, setTagDraft] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
   /** 侧栏的三个目的地:书架 / 笔记 / 统计。统计不再是一个弹窗,而是一个页面。 */
@@ -1033,22 +1071,28 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
     }
     return counts
   }, [books])
-  /** 分组与标签可叠加:两个条件都满足才留下。 */
+  /** 分组、集合与标签可叠加:所有条件都满足才留下。集合按 hash 交集算,
+   *  书被移出书架后残余的 hash 自然落空,不需要清理动作。 */
   const visible = useMemo(
     () =>
       filtered.filter(
         (book) =>
           matchesSmartFilter(book, smartFilter) &&
-          (tagFilter === null || book.tags.includes(tagFilter)),
+          (tagFilter === null || book.tags.includes(tagFilter)) &&
+          (activeCollectionId === null ||
+            collections.find((c) => c.id === activeCollectionId)?.bookHashes.includes(book.hash) ===
+              true),
       ),
-    [filtered, smartFilter, tagFilter],
+    [filtered, smartFilter, tagFilter, activeCollectionId, collections],
   )
   /** 零结果时把「用户到底筛了什么」原话说回去,而不是只说没有。 */
   const emptyHint = useMemo(() => {
     if (query.trim() !== '') return query
     if (tagFilter !== null) return tagFilter
+    if (activeCollectionId !== null)
+      return collections.find((c) => c.id === activeCollectionId)?.name ?? ''
     return SMART_FILTERS.find((filter) => filter.id === smartFilter)?.label ?? ''
-  }, [query, tagFilter, smartFilter])
+  }, [query, tagFilter, activeCollectionId, collections, smartFilter])
   const selectedBooks = books.filter((book) => selected.has(book.hash))
 
   const toggleSelected = (hash: string): void => {
@@ -1419,6 +1463,17 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         smartFilter={smartFilter}
         onSmartFilter={setSmartFilter}
         smartCounts={smartCounts}
+        collections={collections.map((collection) => ({
+          collection,
+          // 行计数只算仍在书架上的成员:移出书架的书不该留下幽灵数字。
+          count: collection.bookHashes.filter((hash) => books.some((book) => book.hash === hash))
+            .length,
+        }))}
+        activeCollectionId={activeCollectionId}
+        onCollection={setActiveCollectionId}
+        onCreateCollection={createCollection}
+        onRenameCollection={renameCollection}
+        onDeleteCollection={deleteCollection}
         tags={allTags}
         activeTag={tagFilter}
         onTag={(tag) => setTagFilter(tag)}
@@ -1669,6 +1724,10 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
           book={editBook}
           busy={infoBusy}
           error={infoError}
+          collections={collections}
+          onToggleCollection={(collectionId, on) =>
+            toggleCollectionMember(collectionId, editBook.hash, on)
+          }
           onSave={(draft) => void saveBookInfo(draft)}
           onClose={() => setEditBook(null)}
         />

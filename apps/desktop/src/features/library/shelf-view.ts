@@ -328,3 +328,56 @@ export const densityFromStorage = (): ShelfDensity => {
   const stored = localStorage.getItem(SHELF_DENSITY_KEY)
   return stored === 'comfortable' || stored === 'compact' ? stored : 'standard'
 }
+
+/* ---------- 自定义集合(本地层):书架的组织视图,书籍本体与标签不动。 ---------- */
+
+/** 一个自定义集合:名字 + 成员书 hash(有序,集合内的排序即成员顺序)。 */
+export interface BookCollection {
+  readonly id: string
+  readonly name: string
+  readonly bookHashes: readonly string[]
+}
+
+const COLLECTIONS_KEY = 'deepread.library.collections'
+
+/** 集合列表(本地存储)。坏 JSON / 形状不对的条目丢弃,按空集处理 —— 组织
+ *  视图坏掉不该拦着读书。 */
+export function loadCollections(): readonly BookCollection[] {
+  try {
+    const raw = localStorage.getItem(COLLECTIONS_KEY)
+    if (raw === null) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is BookCollection =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as BookCollection).id === 'string' &&
+        (item as BookCollection).id !== '' &&
+        typeof (item as BookCollection).name === 'string' &&
+        Array.isArray((item as BookCollection).bookHashes),
+    )
+  } catch {
+    return []
+  }
+}
+
+export function saveCollections(collections: readonly BookCollection[]): void {
+  localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(collections))
+}
+
+export function newCollectionId(): string {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 集合名与既有条目撞名(改名时排除自己):侧栏同名两行会分不清。 */
+export function collectionNameTaken(
+  name: string,
+  collections: readonly BookCollection[],
+  exceptId?: string,
+): boolean {
+  const wanted = name.trim()
+  return collections.some((c) => c.id !== exceptId && c.name === wanted)
+}

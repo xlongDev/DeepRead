@@ -1,13 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  collectionNameTaken,
   columnsFromStorage,
   coverPalette,
   densityFromStorage,
   formatBytes,
   formatStatDuration,
   isFavorite,
+  loadCollections,
   MAX_TAGS,
+  newCollectionId,
   parseTagInput,
+  saveCollections,
   shelfTitle,
   SORT_DEFAULT_DIR,
   sortBooks,
@@ -202,5 +206,41 @@ describe('labels', () => {
     expect(formatStatDuration(30)).toBe('30 秒')
     expect(formatStatDuration(600)).toBe('10 分')
     expect(formatStatDuration(5400)).toBe('1.5 小时')
+  })
+})
+
+describe('自定义集合(本地层)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('id 生成:两次不同且非空', () => {
+    expect(newCollectionId()).not.toBe(newCollectionId())
+    expect(newCollectionId()).not.toBe('')
+  })
+
+  it('空存取与整组往返;坏条目被丢弃', () => {
+    expect(loadCollections()).toEqual([])
+    saveCollections([
+      { id: 'c1', name: '三体系列', bookHashes: ['h1', 'h2'] },
+      { id: '', name: '坏条目', bookHashes: [] },
+    ])
+    // 形状不对的条目(空 id)不算集合。
+    expect(loadCollections()).toEqual([{ id: 'c1', name: '三体系列', bookHashes: ['h1', 'h2'] }])
+  })
+
+  it('坏 JSON 视作空集,不拦书架', () => {
+    localStorage.setItem('deepread.library.collections', '{ 坏')
+    expect(loadCollections()).toEqual([])
+  })
+
+  it('撞名校验:改名排除自己', () => {
+    const collections = [
+      { id: 'a', name: '系列', bookHashes: [] },
+      { id: 'b', name: '书单', bookHashes: [] },
+    ]
+    expect(collectionNameTaken('系列', collections)).toBe(true)
+    expect(collectionNameTaken('系列', collections, 'a')).toBe(false)
+    expect(collectionNameTaken('新书单', collections)).toBe(false)
   })
 })

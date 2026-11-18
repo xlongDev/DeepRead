@@ -6,16 +6,30 @@
  * 书架这一层;阅读器保持全屏沉浸,它有自己的抽屉。
  *
  * 「我的分组」是按进度与标签**现算**的视图,不需要用户维护任何东西;它与标签
- * 筛选可以叠加(两个条件同时满足才显示)。
+ * 筛选可以叠加(两个条件同时满足才显示)。「集合」是用户自己维护的第三种视图:
+ * 有序精选分组(系列/主题书单),存本地不进库 —— 书籍本体与标签都不动。
  */
 
-import { BookOpenText, ChartLineUp, Cloud, Gear, NoteBlank } from '@phosphor-icons/react'
+import {
+  BookOpenText,
+  ChartLineUp,
+  Cloud,
+  Gear,
+  NoteBlank,
+  Pencil,
+  Plus,
+  Trash,
+  X,
+} from '@phosphor-icons/react'
+import { useEffect, useRef, useState } from 'react'
 import { isTauriRuntime } from '../../lib/ipc'
 import { SlidingIndicator } from '../../components/SlidingIndicator'
+import { ConfirmButton } from '../../components/ConfirmButton'
 import {
   coverPalette,
   goalCard,
   SMART_FILTERS,
+  type BookCollection,
   type LibraryView,
   type SmartFilter,
 } from './shelf-view'
@@ -72,6 +86,14 @@ export interface LibrarySidebarProps {
   readonly smartFilter: SmartFilter
   readonly onSmartFilter: (filter: SmartFilter) => void
   readonly smartCounts: Readonly<Record<SmartFilter, number>>
+  /** 自定义集合(本地组织层):行计数传「仍在书架上的成员数」。 */
+  readonly collections: readonly { readonly collection: BookCollection; readonly count: number }[]
+  readonly activeCollectionId: string | null
+  /** 点当前已选中的集合 = 取消筛选(与标签同约定)。 */
+  readonly onCollection: (id: string | null) => void
+  readonly onCreateCollection: (name: string) => void
+  readonly onRenameCollection: (id: string, name: string) => void
+  readonly onDeleteCollection: (id: string) => void
   readonly tags: readonly string[]
   readonly activeTag: string | null
   /** 点当前已选中的标签 = 取消筛选。 */
@@ -93,6 +115,12 @@ export function LibrarySidebar({
   smartFilter,
   onSmartFilter,
   smartCounts,
+  collections,
+  activeCollectionId,
+  onCollection,
+  onCreateCollection,
+  onRenameCollection,
+  onDeleteCollection,
   tags,
   activeTag,
   onTag,
@@ -197,6 +225,15 @@ export function LibrarySidebar({
           </button>
         ))}
       </SlidingIndicator>
+
+      <CollectionsSection
+        collections={collections}
+        activeCollectionId={activeCollectionId}
+        onCollection={onCollection}
+        onCreateCollection={onCreateCollection}
+        onRenameCollection={onRenameCollection}
+        onDeleteCollection={onDeleteCollection}
+      />
 
       {tags.length > 0 && (
         <>
@@ -303,5 +340,148 @@ export function LibrarySidebar({
         </div>
       </div>
     </aside>
+  )
+}
+
+/**
+ * 自定义集合区:行 = 集合(点按筛选,再点取消);行尾悬停出改名/删除。
+ * 新建入口常驻(集合为 0 时也得建得出第一个),落成一个行内输入框。
+ */
+function CollectionsSection({
+  collections,
+  activeCollectionId,
+  onCollection,
+  onCreateCollection,
+  onRenameCollection,
+  onDeleteCollection,
+}: {
+  readonly collections: readonly { readonly collection: BookCollection; readonly count: number }[]
+  readonly activeCollectionId: string | null
+  readonly onCollection: (id: string | null) => void
+  readonly onCreateCollection: (name: string) => void
+  readonly onRenameCollection: (id: string, name: string) => void
+  readonly onDeleteCollection: (id: string) => void
+}) {
+  const [creating, setCreating] = useState(false)
+  const [draft, setDraft] = useState('')
+  /** 正在改名的集合 id;null = 没有。 */
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  /** 行内输入框出现即聚焦、全选(改名的现值整段可覆盖)。 */
+  useEffect(() => {
+    if (creating || renamingId !== null) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [creating, renamingId])
+
+  /** Esc 退出输入(取消创建/改名);Enter 提交。 */
+  const commitDraft = (id: string | null): void => {
+    const name = draft.trim()
+    setCreating(false)
+    setRenamingId(null)
+    setDraft('')
+    if (name === '') return
+    if (id === null) onCreateCollection(name)
+    else onRenameCollection(id, name)
+  }
+
+  return (
+    <>
+      <p className="lib-sidebar-label">
+        集合
+        {activeCollectionId !== null && (
+          <button type="button" className="lib-sidebar-clear" onClick={() => onCollection(null)}>
+            清除
+          </button>
+        )}
+      </p>
+      <div className="lib-sidebar-tags">
+        {collections.map(({ collection, count }) => {
+          const active = collection.id === activeCollectionId
+          const renaming = collection.id === renamingId
+          if (renaming) {
+            return (
+              <input
+                key={collection.id}
+                ref={inputRef}
+                className="lib-collection-input"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') commitDraft(collection.id)
+                  if (event.key === 'Escape') {
+                    setRenamingId(null)
+                    setDraft('')
+                  }
+                }}
+                onBlur={() => commitDraft(collection.id)}
+                aria-label="集合名称"
+              />
+            )
+          }
+          return (
+            <div key={collection.id} className={`lib-collection-row${active ? ' is-active' : ''}`}>
+              <button
+                type="button"
+                className="lib-sidebar-item is-tag is-grow"
+                aria-pressed={active}
+                onClick={() => onCollection(active ? null : collection.id)}
+              >
+                {collection.name}
+                <span className="lib-sidebar-count">{count}</span>
+              </button>
+              <span className="lib-collection-actions" aria-hidden={!active && undefined}>
+                <button
+                  type="button"
+                  className="chrome-button"
+                  aria-label={`重命名集合 ${collection.name}`}
+                  title="重命名"
+                  onClick={() => {
+                    setDraft(collection.name)
+                    setRenamingId(collection.id)
+                  }}
+                >
+                  <Pencil size={12} weight="regular" aria-hidden />
+                </button>
+                <ConfirmButton
+                  className="chrome-button lib-collection-remove"
+                  label={<Trash size={12} weight="regular" aria-hidden />}
+                  confirmLabel={<X size={12} weight="bold" aria-hidden />}
+                  onConfirm={() => onDeleteCollection(collection.id)}
+                />
+              </span>
+            </div>
+          )
+        })}
+        {creating ? (
+          <input
+            ref={inputRef}
+            className="lib-collection-input"
+            value={draft}
+            placeholder="集合名称"
+            aria-label="新建集合"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitDraft(null)
+              if (event.key === 'Escape') {
+                setCreating(false)
+                setDraft('')
+              }
+            }}
+            onBlur={() => commitDraft(null)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="lib-sidebar-item is-tag is-new"
+            onClick={() => setCreating(true)}
+          >
+            <Plus size={12} weight="bold" aria-hidden />
+            新建集合
+          </button>
+        )}
+      </div>
+    </>
   )
 }

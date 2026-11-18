@@ -1378,3 +1378,51 @@
 .opds-next {
   align-self: center;
 }
+
+/* 自定义集合(侧栏):行 = 名称 + 计数,悬停浮出改名/删除;新建入口常驻。 */
+.lib-collection-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.lib-collection-row .lib-sidebar-item.is-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.lib-collection-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.lib-collection-row:hover .lib-collection-actions,
+.lib-collection-row.is-active .lib-collection-actions {
+  display: inline-flex;
+}
+
+/* ConfirmButton 的待确认态在这里回到紧凑的图标按钮节奏。 */
+.lib-collection-remove.is-danger {
+  color: var(--color-danger, #b3261e);
+}
+
+.lib-collection-input {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.lib-sidebar-item.is-new {
+  color: var(--color-text-secondary);
+}
+
+/* 集合成员 chip 的「在集合里」态:与侧栏筛选同一 accent 语义。 */
+.tag-chip[aria-pressed='true'] {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}

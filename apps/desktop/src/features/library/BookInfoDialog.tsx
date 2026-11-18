@@ -17,6 +17,7 @@ import {
   formatBytes,
   shelfTitle,
   SUGGESTED_TAGS,
+  type BookCollection,
   type ShelfBook,
 } from './shelf-view'
 import { useModalFocus } from '../../lib/modal-dialog'
@@ -34,11 +35,23 @@ export interface BookInfoDialogProps {
   readonly book: ShelfBook
   readonly busy: boolean
   readonly error: string | null
+  /** 自定义集合(本地层):chips 点按即进出成员,不走草稿 — 与标签的
+   *  「保存生效」刻意不同,集合的组织动作不该被忘记保存吞掉。 */
+  readonly collections?: readonly BookCollection[]
+  readonly onToggleCollection?: (collectionId: string, on: boolean) => void
   readonly onSave: (draft: BookInfoDraft) => void
   readonly onClose: () => void
 }
 
-export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoDialogProps) {
+export function BookInfoDialog({
+  book,
+  busy,
+  error,
+  collections,
+  onToggleCollection,
+  onSave,
+  onClose,
+}: BookInfoDialogProps) {
   const [title, setTitle] = useState(() => shelfTitle(book))
   const [author, setAuthor] = useState(() => book.author ?? '')
   const [subtitle, setSubtitle] = useState(() => book.subtitle ?? '')
@@ -221,6 +234,35 @@ export function BookInfoDialog({ book, busy, error, onSave, onClose }: BookInfoD
             </p>
           )}
         </section>
+
+        {/* 集合:chips 即点即生效(见 props 注释);没有集合时给一行引导。 */}
+        {collections !== undefined && onToggleCollection !== undefined && (
+          <section className="modal-section">
+            <p className="modal-section-label">集合</p>
+            {collections.length > 0 ? (
+              <div className="book-info-suggest">
+                {collections.map((collection) => {
+                  const member = collection.bookHashes.includes(book.hash)
+                  return (
+                    <button
+                      key={collection.id}
+                      type="button"
+                      className={`tag-chip${member ? ' is-on' : ''}`}
+                      aria-pressed={member}
+                      onClick={() => onToggleCollection(collection.id, !member)}
+                    >
+                      {collection.name}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="library-note">
+                还没有集合 —— 到书架侧栏「新建集合」,可以把书归进系列或主题书单。
+              </p>
+            )}
+          </section>
+        )}
 
         {error !== null && (
           <p className="library-error" role="alert">

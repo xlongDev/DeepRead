@@ -2071,3 +2071,66 @@ describe('封面提取管线(B1.3 并发化)', () => {
     expect(document.querySelector('.book-cover-char')).not.toBeNull()
   })
 })
+
+describe('自定义集合', () => {
+  /** 新建一个集合并让输入框落定。 */
+  async function createCollection(name: string): Promise<void> {
+    fireEvent.click(screen.getByRole('button', { name: '新建集合' }))
+    const input = await screen.findByLabelText('新建集合')
+    fireEvent.change(input, { target: { value: name } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(screen.queryByLabelText('新建集合')).toBeNull())
+  }
+
+  it('新建 → 详情弹层勾进集合 → 点集合名只留成员书,再点取消筛选', async () => {
+    await renderLibrary()
+    await createCollection('三体系列')
+
+    // 成员赋值在书籍详情弹层:chip 即点即生效,不等保存。
+    fireEvent.contextMenu(screen.getByLabelText('打开《夜航书》'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '编辑书籍信息' }))
+    const dialog = await screen.findByLabelText('书籍信息')
+    fireEvent.click(within(dialog).getByRole('button', { name: '三体系列' }))
+    await waitFor(() => {
+      const saved: { bookHashes: string[] }[] = JSON.parse(
+        localStorage.getItem('deepread.library.collections') ?? '[]',
+      )
+      expect(saved[0]?.bookHashes).toContain(HASH_A)
+    })
+    // modal-dismiss 铺在 <dialog> 外面(遮罩层),不在 dialog 的子树里。
+    fireEvent.click(screen.getByRole('button', { name: '关闭书籍信息' }))
+
+    // 点侧栏集合行:只留成员那本;再点一次取消筛选,书架回满。
+    // 行的 AccName 拼法跨实现有出入(计数是否并进去),取匹配集合名的
+    // 第一颗按钮 —— DOM 顺序里就是行按钮自己(重命名键在它后面)。
+    const collectionRow = () => screen.getAllByRole('button', { name: /三体系列/ })[0]!
+    fireEvent.click(collectionRow())
+    await waitFor(() => expect(document.querySelectorAll('.book-card')).toHaveLength(1))
+    fireEvent.click(collectionRow())
+    await waitFor(() => {
+      expect(document.querySelectorAll('.book-card')).toHaveLength(BOOKS.length)
+    })
+  })
+
+  it('改名行内落定;两击删除清掉集合,书籍不动', async () => {
+    await renderLibrary()
+    await createCollection('待删')
+    // 行尾悬停操作在 jsdom 里没有 CSS hover,直接点 DOM 上存在的按钮。
+    fireEvent.click(screen.getByRole('button', { name: '重命名集合 待删' }))
+    const input = await screen.findByLabelText('集合名称')
+    fireEvent.change(input, { target: { value: '改名后' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByText('改名后')).toBeInTheDocument()
+
+    const remove = document.querySelector('.lib-collection-remove')!
+    fireEvent.click(remove)
+    fireEvent.click(remove)
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem('deepread.library.collections') ?? '[]')).toHaveLength(
+        0,
+      )
+    })
+    // 集合是组织视图:书还在架上。
+    expect(document.querySelectorAll('.book-card')).toHaveLength(BOOKS.length)
+  })
+})
