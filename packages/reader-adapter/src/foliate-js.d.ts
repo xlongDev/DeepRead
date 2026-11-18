@@ -64,6 +64,8 @@ declare module 'foliate-js/view.js' {
        *  two-page spreads on wide surfaces (双页). */
       spread?: 'auto' | 'none' | 'both' | 'portrait'
     }
+    /** EPUB3 media overlays 元数据(OPF):激活类名由书自己声明。 */
+    media?: { activeClass?: string; playbackActiveClass?: string }
     splitTOCHref?(href: string): Promise<[number, string | null]> | [number, string | null]
     getTOCFragment?(doc: Document, fragment: string | null): Element | null
     resolveHref?(href: string): Promise<{ index: number; anchor?: unknown }>
@@ -160,12 +162,32 @@ declare module 'foliate-js/view.js' {
     clear(): void
   }
 
+  /** EPUB3 media overlays(原书配音):SMIL 已由内核解析,音频内核自己排程,
+   *  highlight/unhighlight 事件驱动 view 跳页并把 activeClass 打到元素上。 */
+  export interface FoliateMediaOverlay extends EventTarget {
+    start(
+      sectionIndex: number,
+      filter?: (item: unknown, i: number, items: unknown[]) => boolean,
+    ): Promise<void>
+    pause(): void
+    resume(): void
+    stop(): void
+    prev(): void
+    next(): void
+    setVolume(volume: number): void
+    setRate(rate: number): void
+  }
+
   export class View extends HTMLElement {
     book: FoliateBook
     renderer: FoliateRenderer
     isFixedLayout: boolean
     lastLocation: ViewLocation | null
     history: FoliateHistory
+    /** open() 时书里有配音节就自动建好;没有就是 null。 */
+    mediaOverlay: FoliateMediaOverlay | null
+    /** 从当前挂载的节起播(view 自己算 index)。 */
+    startMediaOverlay(): Promise<void>
     open(source: FoliateBook | File | Blob | string): Promise<void>
     close(): void
     goToTextStart(): Promise<void>

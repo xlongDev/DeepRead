@@ -152,6 +152,8 @@ export interface ReaderEngine {
   readonly ttsBridge?: EngineTtsBridge
   /** 跳转历史:顶栏「上一位置」键的数据面。 */
   readonly history?: EngineHistory
+  /** 原书配音(EPUB3 media overlays):本书自带音频时出现。 */
+  readonly mediaOverlay?: EngineMediaOverlay
 
   /**
    * 向书籍文档注入 @font-face 规则(内置 + 用户导入)。open() 的
@@ -216,6 +218,24 @@ export interface EngineHistory {
   back(): void
   /** 是否有可回退的跳转。只在位置变化时变(relocate 采样即可)。 */
   canGoBack(): boolean
+}
+
+/** 原书配音数据面(EPUB3 media overlays):书自带音频与 SMIL 同步信息,
+ *  内核自己排程播放、跟播跳页并把激活类打到元素上。合成、缓存、跟词这些
+ *  TTS 管线在这里都不需要 —— 播控面与 TTS 引擎同形,调用方可以互换。 */
+export interface EngineMediaOverlay {
+  /** 本书是否带配音(逐节探测的汇总)。 */
+  available(): boolean
+  /** 从当前节起播;没有配音节时是空操作。 */
+  start(): Promise<void>
+  pause(): void
+  resume(): void
+  stop(): void
+  /** 句级推进(SMIL par 粒度),听书面板的切句键复用。 */
+  prev(): void
+  next(): void
+  /** 音频原生 playbackRate(不走 TTS 的播音侧拉伸)。 */
+  setRate(rate: number): void
 }
 
 export interface ReadingRulerOptions {

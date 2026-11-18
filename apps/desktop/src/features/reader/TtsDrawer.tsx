@@ -195,6 +195,10 @@ interface TtsDrawerProps {
   readonly minimized: boolean
   /** 播放状态变化(用于父层决定是否保留迷你条)。 */
   readonly onPlayingChange: (playing: boolean) => void
+  /** 本书自带原声配音(EPUB3 media overlays)时给横幅入口;点击收起面板,
+      播放交给宿主的配音条(与 TTS 会话互斥由宿主管)。 */
+  readonly narrationAvailable?: boolean
+  readonly onStartNarration?: () => void
   /** Plain text of the section currently on screen. */
   readonly getSectionText: () => Promise<string>
   /** 下一章的纯文本(章末预热下一章合成用);越界或缺失返回 null。测试替身
@@ -279,6 +283,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     minimized,
     themeVars,
     onPlayingChange,
+    narrationAvailable,
+    onStartNarration,
     getSectionText,
     getNextSectionText,
     jumpSection,
@@ -1480,6 +1486,15 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
               <X size={14} weight="regular" aria-hidden />
             </button>
           </div>
+
+          {/* 本书自带原声配音:合成引擎之外的第四条路 —— SMIL 解析、播放与
+              跟播跳页都是内核自己的事,这里只递一个入口。 */}
+          {narrationAvailable === true && onStartNarration !== undefined && (
+            <button type="button" className="tts-narration-banner" onClick={onStartNarration}>
+              <SpeakerHigh size={14} weight="fill" aria-hidden />
+              本书自带原声配音 · 点击收起面板直接听
+            </button>
+          )}
 
           <div className="tts-sentences" aria-live="polite">
             {units.length === 0 && (phase === 'loading' || booting) ? (

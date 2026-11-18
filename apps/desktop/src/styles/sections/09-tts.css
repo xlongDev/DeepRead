@@ -693,3 +693,55 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ---------- 原书配音(EPUB3 media overlays) ---------- */
+
+/* 听书抽屉里的入口横幅:与卡片区同一面板配方,accent 勾边表示「另一条路」。 */
+.tts-narration-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 14%, transparent);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 4%, transparent);
+  color: var(--reader-fg, var(--color-text-primary));
+  cursor: pointer;
+}
+
+.tts-narration-banner:hover {
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 8%, transparent);
+}
+
+/* 原声播放条:底部居中的浮动 chrome 家族(与 tts-mini 同一背景配方)。 */
+.narration-bar {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: var(--z-overlay, 60);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--reader-panel, var(--color-surface));
+  color: var(--reader-fg, var(--color-text-primary));
+  box-shadow: var(--shadow-lg, 0 8px 30px rgb(0 0 0 / 0.18));
+}
+
+.narration-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: var(--font-size-sm);
+  background: color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 8%, transparent);
+}
+
+.narration-rate {
+  font-size: var(--font-size-sm);
+  min-width: 44px;
+}

@@ -114,6 +114,7 @@ import { collectChatText } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
 import { QuoteCardModal } from './QuoteCard'
+import { NARRATION_RATES, NarrationBar, type NarrationPhase } from './NarrationBar'
 import { ParallelPicker } from './ParallelPicker'
 import { windowFrame, type ReadingFrame } from './selection-place'
 import { animateFlipTurn } from './page-flip'
@@ -398,6 +399,11 @@ export function ReaderScreen({
   const [selection, setSelection] = useState<EngineSelection | null>(null)
   /** 金句分享卡:选区/划线的摘录与墨水色(null = 弹层关着)。 */
   const [quoteCard, setQuoteCard] = useState<{ quote: string; accent: string } | null>(null)
+  /** 原书配音:本书自带 EPUB3 media overlays 时可用;null = 条收着。
+      与 TTS 会话互斥 —— 两套音频同时响是噪音,谁后启动谁活。 */
+  const [narrationPhase, setNarrationPhase] = useState<NarrationPhase | null>(null)
+  const [narrationRate, setNarrationRate] = useState<number>(1)
+  const [narrationAvailable, setNarrationAvailable] = useState(false)
   const [activeAnnotation, setActiveAnnotation] = useState<string | null>(null)
   /** 编辑模式划词工具的锚点:划线的实测选区框。点中的是已有划线时没有
    *  伴随选区可问,不测一个工具条就会落在 (0,0)(左上角)。 */
@@ -1051,7 +1057,7 @@ export function ReaderScreen({
       const target = event.target as HTMLElement | null
       if (
         target?.closest(
-          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini,.quote-card-overlay',
+          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini,.quote-card-overlay,.narration-bar',
         )
       )
         return
@@ -1538,6 +1544,47 @@ export function ReaderScreen({
     void countSectionChars(sectionIndexRef.current)
   }, [phase, countSectionChars])
 
+  // 原书配音:起播(先礼让 TTS 会话)、语速循环、停。播控转发内核
+  // MediaOverlay,这里只持相位的镜像(内核没有状态事件)。定义在探测
+  // effect 之前 —— 礼让 effect 的依赖要引用它们。
+  const startNarration = useCallback((): void => {
+    const overlay = adapterRef.current?.mediaOverlay
+    if (!narrationAvailable || !overlay) return
+    // 礼让:合成队列与内核配音同时响没有意义,谁后启动谁活。
+    ttsDrawerRef.current?.stop()
+    setTtsSession(false)
+    setOpenPanel(null)
+    overlay.setRate(narrationRate)
+    void overlay.start().then(() => setNarrationPhase('playing'))
+  }, [narrationAvailable, narrationRate])
+  const stopNarration = useCallback((): void => {
+    adapterRef.current?.mediaOverlay?.stop()
+    setNarrationPhase(null)
+  }, [])
+  const toggleNarration = useCallback((): void => {
+    const overlay = adapterRef.current?.mediaOverlay
+    if (!overlay) return
+    if (narrationPhase === 'playing') {
+      overlay.pause()
+      setNarrationPhase('paused')
+    } else {
+      overlay.resume()
+      setNarrationPhase('playing')
+    }
+  }, [narrationPhase])
+  const cycleNarrationRate = useCallback((): void => {
+    const at = NARRATION_RATES.indexOf(narrationRate as (typeof NARRATION_RATES)[number])
+    const next = NARRATION_RATES[(at + 1) % NARRATION_RATES.length] ?? 1
+    setNarrationRate(next)
+    adapterRef.current?.mediaOverlay?.setRate(next)
+  }, [narrationRate])
+
+  // 原书配音可用性:开书完成即探测一次(view 在 open 时建好 MediaOverlay)。
+  useEffect(() => {
+    if (phase !== 'reading') return
+    setNarrationAvailable(adapterRef.current?.mediaOverlay?.available() ?? false)
+  }, [phase])
+
   // 全书统计:打开书后一次性后台解析(逐节 createDocument,不挂载渲染),
   // 供"全书"字数与按字数的剩余时间估算;PDF 等固定排版为 null。
   useEffect(() => {
@@ -1778,6 +1825,8 @@ export function ReaderScreen({
     // 而首个 clip 的合成在两次 await 之后(章节文本 + 供应商往返),手势早已
     // 过期。不在这里解锁,用户看到的就是「点了朗读没反应,再点播放才响」。
     primeTtsAudio()
+    // 礼让:原声配音在响就先停。
+    stopNarration()
     setSelection(null)
     setActiveAnnotation(null)
     setActiveAnnotationRect(null)
@@ -1785,7 +1834,7 @@ export function ReaderScreen({
     setOpenPanel(null)
     setTtsSession(true)
     setPendingSpeak({ text, start: selection?.start ?? null })
-  }, [selection, annotations, activeAnnotation])
+  }, [selection, annotations, activeAnnotation, stopNarration])
 
   /** 问 AI:带上选区打开抽屉。scope 由读者在抽屉里切,这里只负责送上下文。 */
   const askAboutSelection = useCallback((): void => {
@@ -2606,6 +2655,18 @@ export function ReaderScreen({
           />
         )}
 
+        {narrationPhase !== null && (
+          <NarrationBar
+            phase={narrationPhase}
+            rate={narrationRate}
+            onToggle={toggleNarration}
+            onPrev={() => adapterRef.current?.mediaOverlay?.prev()}
+            onNext={() => adapterRef.current?.mediaOverlay?.next()}
+            onRate={cycleNarrationRate}
+            onStop={stopNarration}
+          />
+        )}
+
         {notice !== null && (
           <div
             className={`reader-notice${notice.danger ? ' is-danger' : ''}`}
@@ -2635,7 +2696,14 @@ export function ReaderScreen({
               colorScheme={theme.theme.colorScheme}
               minimized={ttsMiniVisible}
               themeVars={readerVars}
-              onPlayingChange={setTtsActive}
+              onPlayingChange={(playing) => {
+                setTtsActive(playing)
+                // 礼让的反方向:听书真正进入会话(起播/合成中)就停掉原声条
+                // —— 与配音条起播时的礼让互为镜像,谁后启动谁活。
+                if (playing) stopNarration()
+              }}
+              narrationAvailable={narrationAvailable}
+              onStartNarration={startNarration}
               getSectionText={ttsGetSectionText}
               getNextSectionText={ttsGetNextSectionText}
               jumpSection={ttsJumpSection}

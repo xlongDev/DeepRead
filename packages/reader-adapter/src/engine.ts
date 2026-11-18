@@ -25,6 +25,7 @@ import {
   type EngineTextEditing,
   type EngineTtsBridge,
   type EngineHistory,
+  type EngineMediaOverlay,
   type ReaderEngine,
   type ReaderLayout,
   type ReaderOpenInit,
@@ -101,6 +102,21 @@ export function unregisterCustomHighlight(doc: Document, name: string): void {
   const registry = (doc.defaultView?.CSS as { highlights?: Map<string, unknown> } | undefined)
     ?.highlights
   registry?.delete(name)
+}
+
+/**
+ * 原书配音激活态的兜底规则:内核把书声明的 activeClass 打到正在读的元素上,
+ * 但很多书自己不写这条 CSS —— 没有规则时"跟读高亮"等于不存在。给一条暖色
+ * 底,幂等注入(每份文档一份)。
+ *
+ * @internal 导出仅为单测。
+ */
+export function ensureMediaOverlayActiveStyle(doc: Document, activeClass: string): void {
+  if (activeClass === '' || doc.getElementById('media-overlay-active-style') !== null) return
+  const style = doc.createElement('style')
+  style.id = 'media-overlay-active-style'
+  style.textContent = `.${CSS.escape(activeClass)} { background-color: rgb(250 210 90 / 0.4); }`
+  doc.head?.appendChild(style)
 }
 
 /**
@@ -988,6 +1004,19 @@ export class FoliateAdapter implements ReaderEngine {
     return this
   }
 
+  get mediaOverlay(): EngineMediaOverlay {
+    return {
+      available: () => this.available(),
+      start: () => this.startOverlay(),
+      pause: () => this.pauseOverlay(),
+      resume: () => this.resumeOverlay(),
+      stop: () => this.stopOverlay(),
+      prev: () => this.prevOverlaySegment(),
+      next: () => this.nextOverlaySegment(),
+      setRate: (rate) => this.setOverlayRate(rate),
+    }
+  }
+
   #onRulerWheel(event: WheelEvent): void {
     event.preventDefault()
     this.#ruler.wheel(event.deltaY, event.deltaMode)
@@ -1161,6 +1190,8 @@ export class FoliateAdapter implements ReaderEngine {
         // 封面页防压扁(见 fixSvgStretch):同在量版之前改写,分页量到的
         // 就是修正后的版面。
         fixSvgStretch(doc)
+        // 原书配音的激活态兜底:书自己未必给 activeClass 写了上色规则。
+        ensureMediaOverlayActiveStyle(doc, view.book.media?.activeClass ?? '')
         // 阅读尺:新章节的正文挂上了。开书时尺比正文先就位(播种扫不到行),
         // 这是「第一次能扫到行」的信号,顺手重画/补播种。
         this.#ruler.refresh()
@@ -1688,6 +1719,41 @@ export class FoliateAdapter implements ReaderEngine {
 
   canGoBack(): boolean {
     return this.#view?.history.canGoBack ?? false
+  }
+
+  /** 原书配音(EngineMediaOverlay 域):播控面直接转发内核 MediaOverlay ——
+   *  播放、跟播跳页、激活高亮都是内核自己的事,适配层只递话筒。open() 时书
+   *  里有配音节内核才会建 MediaOverlay,所以 available 以它为准。 */
+  available(): boolean {
+    return this.#view?.mediaOverlay != null
+  }
+
+  async startOverlay(): Promise<void> {
+    await this.#view?.startMediaOverlay()
+  }
+
+  pauseOverlay(): void {
+    this.#view?.mediaOverlay?.pause()
+  }
+
+  resumeOverlay(): void {
+    this.#view?.mediaOverlay?.resume()
+  }
+
+  stopOverlay(): void {
+    this.#view?.mediaOverlay?.stop()
+  }
+
+  prevOverlaySegment(): void {
+    this.#view?.mediaOverlay?.prev()
+  }
+
+  nextOverlaySegment(): void {
+    this.#view?.mediaOverlay?.next()
+  }
+
+  setOverlayRate(rate: number): void {
+    this.#view?.mediaOverlay?.setRate(rate)
   }
 
   /**

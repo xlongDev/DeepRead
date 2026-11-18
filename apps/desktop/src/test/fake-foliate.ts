@@ -98,6 +98,16 @@ export class FakeFoliateAdapter {
   /** 跳转历史(EngineHistory 域):测试直接驱动 vi.fn 模拟栈态。 */
   readonly back = vi.fn<() => void>()
   readonly canGoBack = vi.fn<() => boolean>()
+  /** 原书配音(EngineMediaOverlay 域):方法名与域接口同名,域 getter 照旧
+   *  返回自身 —— 测试驱动这些 vi.fn 模拟内核播控。 */
+  readonly available = vi.fn<() => boolean>()
+  readonly start = vi.fn<() => Promise<void>>()
+  readonly pause = vi.fn<() => void>()
+  readonly resume = vi.fn<() => void>()
+  readonly stop = vi.fn<() => void>()
+  readonly prev = vi.fn<() => void>()
+  readonly next = vi.fn<() => void>()
+  readonly setRate = vi.fn<(rate: number) => void>()
 
   // 契约域能力:真内核暴露自身,替身同形 —— UI 经 ReaderEngine 的可选域
   // 取用,不然测试里域跳转全被可选链吞掉、路径静默变空操作。
@@ -114,6 +124,9 @@ export class FakeFoliateAdapter {
     return this
   }
   get history(): FakeFoliateAdapter {
+    return this
+  }
+  get mediaOverlay(): FakeFoliateAdapter {
     return this
   }
 
@@ -147,6 +160,14 @@ export class FakeFoliateAdapter {
     this.goToSection.mockResolvedValue(undefined)
     this.back.mockImplementation(() => {})
     this.canGoBack.mockReturnValue(false)
+    this.available.mockReturnValue(false)
+    this.start.mockResolvedValue(undefined)
+    this.pause.mockImplementation(() => {})
+    this.resume.mockImplementation(() => {})
+    this.stop.mockImplementation(() => {})
+    this.prev.mockImplementation(() => {})
+    this.next.mockImplementation(() => {})
+    this.setRate.mockImplementation(() => {})
     this.nextPage.mockResolvedValue(undefined)
     this.previousPage.mockResolvedValue(undefined)
     this.search.mockResolvedValue(options.searchResults ?? [])

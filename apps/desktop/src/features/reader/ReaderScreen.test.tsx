@@ -69,8 +69,22 @@ vi.mock('./AiDrawer', () => ({ AiDrawer: () => <div data-testid="ai" /> }))
 // 替身播放器留一个「上报播放态」的钩子:onPlayingChange 是 ReaderScreen
 // 判断「TTS 会话是否活着」的唯一来源(返回书架时决定卸载还是隐藏)。
 vi.mock('./TtsDrawer', () => ({
-  TtsDrawer: ({ onPlayingChange }: { onPlayingChange: (playing: boolean) => void }) => (
+  TtsDrawer: ({
+    onPlayingChange,
+    narrationAvailable,
+    onStartNarration,
+  }: {
+    onPlayingChange: (playing: boolean) => void
+    narrationAvailable?: boolean
+    onStartNarration?: () => void
+  }) => (
     <div data-testid="tts">
+      {/* 原声横幅的接线契约:prop 为真就出现入口,点击交给宿主。 */}
+      {narrationAvailable === true && (
+        <button type="button" onClick={() => onStartNarration?.()}>
+          本书自带原声配音 · 点击收起面板直接听
+        </button>
+      )}
       <button type="button" onClick={() => onPlayingChange(true)}>
         fake-play
       </button>
@@ -1516,5 +1530,53 @@ describe('金句分享卡', () => {
     expect(within(dialog).getByRole('button', { name: '保存图片' })).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '金句分享卡' })).toBeNull())
+  })
+})
+
+describe('原书配音(EPUB3 media overlays)', () => {
+  /** 让每个新实例都报告「本书带配音」。可用性探测发生在进入阅读态的一次
+   *  effect,必须赶在 renderReader 完成前把 available 掰成真 —— 钩构造入口。 */
+  function withNarration(): () => void {
+    const original = FakeFoliateAdapter.prototype.resetOptions
+    const spy = vi.spyOn(FakeFoliateAdapter.prototype, 'resetOptions').mockImplementation(function (
+      this: FakeFoliateAdapter,
+      options?: Parameters<FakeFoliateAdapter['resetOptions']>[0],
+    ) {
+      original.call(this, options)
+      this.available.mockReturnValue(true)
+    })
+    return () => spy.mockRestore()
+  }
+
+  it('本书带配音:听书抽屉出横幅,点击收面板、配音条起播', async () => {
+    const restore = withNarration()
+    const { adapter } = await renderReader()
+    restore()
+
+    fireEvent.click(screen.getByTitle('朗读 / 听书'))
+    const banner = await screen.findByRole('button', { name: /本书自带原声配音/ })
+    fireEvent.click(banner)
+
+    // 面板收起,配音条接管,起播走内核域。
+    await waitFor(() => expect(screen.queryByTestId('tts')).toBeNull())
+    expect(document.querySelector('.narration-bar')).not.toBeNull()
+    expect(adapter.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('礼让是双向的:配音条在响时起听书,配音条自动退场', async () => {
+    const restore = withNarration()
+    const { adapter } = await renderReader()
+    restore()
+
+    fireEvent.click(screen.getByTitle('朗读 / 听书'))
+    fireEvent.click(await screen.findByRole('button', { name: /本书自带原声配音/ }))
+    await waitFor(() => expect(document.querySelector('.narration-bar')).not.toBeNull())
+
+    // 横幅起播时已把抽屉收起;再开一次,让 TTS 出声。
+    fireEvent.click(screen.getByTitle('朗读 / 听书'))
+    // TTS 出声(fake-play 报非 idle)→ 配音条让位。
+    fireEvent.click(within(screen.getByTestId('tts')).getByText('fake-play'))
+    await waitFor(() => expect(document.querySelector('.narration-bar')).toBeNull())
+    expect(adapter.stop).toHaveBeenCalled()
   })
 })
