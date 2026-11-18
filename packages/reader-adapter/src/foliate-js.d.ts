@@ -150,11 +150,22 @@ declare module 'foliate-js/view.js' {
     goToSpread?(index: number, side?: string, reason?: string): Promise<void>
   }
 
+  /** 内核跳转历史栈(view.js 内的 History):goTo 级跳转 pushState,
+   *  翻页/滚动 replaceState 不入栈。back/forward 经 popstate 自动 goTo。 */
+  export interface FoliateHistory {
+    back(): void
+    forward(): void
+    readonly canGoBack: boolean
+    readonly canGoForward: boolean
+    clear(): void
+  }
+
   export class View extends HTMLElement {
     book: FoliateBook
     renderer: FoliateRenderer
     isFixedLayout: boolean
     lastLocation: ViewLocation | null
+    history: FoliateHistory
     open(source: FoliateBook | File | Blob | string): Promise<void>
     close(): void
     goToTextStart(): Promise<void>

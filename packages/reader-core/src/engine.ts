@@ -150,6 +150,8 @@ export interface ReaderEngine {
   readonly anchoring?: EngineAnchoring
   /** TTS 词级高亮桥:听书时把当前朗读词染色的唯一通道。 */
   readonly ttsBridge?: EngineTtsBridge
+  /** 跳转历史:顶栏「上一位置」键的数据面。 */
+  readonly history?: EngineHistory
 
   /**
    * 向书籍文档注入 @font-face 规则(内置 + 用户导入)。open() 的
@@ -204,6 +206,16 @@ export interface EngineAnchoring {
 export interface EngineTtsBridge {
   setTTSHighlightByOffset(charStart: number, charEnd: number, color: string): Promise<void>
   clearTTSHighlight(): Promise<void>
+}
+
+/** 跳转历史数据面:回到上一次**跳转**(目录/搜索/书签/进度拖拽)之前的位置。
+ *  翻页与滚动不入栈(内核对它们 replaceState,栈里只记跳转),所以这不是
+ *  「撤销翻页」;栈底时静默无操作。 */
+export interface EngineHistory {
+  /** 回退到上一位置。 */
+  back(): void
+  /** 是否有可回退的跳转。只在位置变化时变(relocate 采样即可)。 */
+  canGoBack(): boolean
 }
 
 export interface ReadingRulerOptions {

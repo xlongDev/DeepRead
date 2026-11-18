@@ -124,10 +124,11 @@ function respond(command: string): unknown {
 
 /** 顶栏 11 键的 title,按 DOM 顺序。动顶栏就必须同步改这里。
     全屏 / 阅读尺 / 学习全部铺出来,不再收进「更多」菜单;排版与显示两页合成
-    一个「阅读设置」。对照阅读只在宿主给了 onOpenParallel 时出现,是第 12 键。
+    一个「阅读设置」。对照阅读只在宿主给了 onOpenParallel 时出现,是第 13 键。
     阅读尺的 title 随版式支持度变,用非对称匹配兜住两种文案。 */
 const TOP_KEYS = [
   '返回书架',
+  '上一位置(回到跳转前:目录 / 搜索 / 书签 / 进度跳转可回退)',
   '在此页添加书签',
   '搜索全书(⌘K)',
   '目录(⌘B)',
@@ -263,10 +264,40 @@ describe('开书流程', () => {
   })
 })
 
-describe('顶栏 11 键', () => {
-  it('11 个键按顺序全部在位(全铺,不折叠)', async () => {
+describe('顶栏 12 键', () => {
+  it('12 个键按顺序全部在位(全铺,不折叠)', async () => {
     await renderReader()
     expect(topKeyTitles()).toEqual([...TOP_KEYS])
+  })
+
+  it('上一位置:无栈禁用;跳转落地后可用,点击走内核历史回退', async () => {
+    const { adapter } = await renderReader()
+    const key = screen.getByTitle(/上一位置/)
+    // 开书恢复不算跳转,栈底 = 禁用。
+    expect(key).toBeDisabled()
+    // 跳转落地(内核 pushState 后 relocate 报回),键亮起。
+    adapter.canGoBack.mockReturnValue(true)
+    adapter.emitRelocate({
+      cfi: 'epubcfi(/6/6!/4/2)',
+      fraction: 0.5,
+      tocLabel: '第二章',
+      location: { current: 4, total: 9 },
+      sectionIndex: 1,
+    })
+    await waitFor(() => expect(key).not.toBeDisabled())
+    fireEvent.click(key)
+    expect(adapter.back).toHaveBeenCalledTimes(1)
+    // 回退落地,栈重新见底,键回到禁用。
+    adapter.canGoBack.mockReturnValue(false)
+    adapter.emitRelocate({
+      cfi: 'epubcfi(/6/4!/4/2)',
+      fraction: 0.1,
+      tocLabel: '第一章 夜航',
+      location: { current: 1, total: 9 },
+      sectionIndex: 0,
+    })
+    await waitFor(() => expect(key).toBeDisabled())
+    expect(adapter.back).toHaveBeenCalledTimes(1)
   })
 
   it('「返回书架」调 onBack', async () => {

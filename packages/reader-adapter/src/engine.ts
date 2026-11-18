@@ -24,6 +24,7 @@ import {
   type EngineReadableText,
   type EngineTextEditing,
   type EngineTtsBridge,
+  type EngineHistory,
   type ReaderEngine,
   type ReaderLayout,
   type ReaderOpenInit,
@@ -983,6 +984,10 @@ export class FoliateAdapter implements ReaderEngine {
     return this
   }
 
+  get history(): EngineHistory {
+    return this
+  }
+
   #onRulerWheel(event: WheelEvent): void {
     event.preventDefault()
     this.#ruler.wheel(event.deltaY, event.deltaMode)
@@ -1672,6 +1677,17 @@ export class FoliateAdapter implements ReaderEngine {
   /** Total kernel spine sections (TTS 听书 uses this to detect book end). */
   async getSectionCount(): Promise<number> {
     return this.#requireView().book.sections.length
+  }
+
+  /** 跳转历史(EngineHistory 域):内核栈只记 goTo 级跳转(翻页/滚动是
+   *  replaceState),back 经内核 popstate 自己 goTo 回去。开书前(#view 空)
+   *  是无操作、不可退。 */
+  back(): void {
+    this.#view?.history.back()
+  }
+
+  canGoBack(): boolean {
+    return this.#view?.history.canGoBack ?? false
   }
 
   /**

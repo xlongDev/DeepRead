@@ -95,6 +95,9 @@ export class FakeFoliateAdapter {
   /** 阅读尺:null = 关。焦点带本身是 DOM 层的事,jsdom 里没有布局可量。 */
   readonly setReadingRuler = vi.fn<(options: ReadingRulerOptions | null) => void>()
   readonly moveReadingRuler = vi.fn<(direction: -1 | 1) => Promise<void>>()
+  /** 跳转历史(EngineHistory 域):测试直接驱动 vi.fn 模拟栈态。 */
+  readonly back = vi.fn<() => void>()
+  readonly canGoBack = vi.fn<() => boolean>()
 
   // 契约域能力:真内核暴露自身,替身同形 —— UI 经 ReaderEngine 的可选域
   // 取用,不然测试里域跳转全被可选链吞掉、路径静默变空操作。
@@ -108,6 +111,9 @@ export class FakeFoliateAdapter {
     return this
   }
   get ttsBridge(): FakeFoliateAdapter {
+    return this
+  }
+  get history(): FakeFoliateAdapter {
     return this
   }
 
@@ -139,6 +145,8 @@ export class FakeFoliateAdapter {
     this.getBookCharStats.mockResolvedValue(options.charStats ?? null)
     this.goTo.mockResolvedValue(undefined)
     this.goToSection.mockResolvedValue(undefined)
+    this.back.mockImplementation(() => {})
+    this.canGoBack.mockReturnValue(false)
     this.nextPage.mockResolvedValue(undefined)
     this.previousPage.mockResolvedValue(undefined)
     this.search.mockResolvedValue(options.searchResults ?? [])

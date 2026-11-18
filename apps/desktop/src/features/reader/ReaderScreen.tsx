@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowLeft,
+  ArrowUUpLeft,
   BookmarkSimple,
   CaretLeft,
   CaretRight,
@@ -466,6 +467,10 @@ export function ReaderScreen({
       「本章」过滤与批注列表都按它,章节不切换就不重渲染。 */
   const [currentChapter, setCurrentChapter] = useState<string | null>(null)
   const currentChapterRef = useRef<string | null>(null)
+  /** 顶栏「上一位置」键的可用态:内核历史栈只记跳转(翻页/滚动不入栈)。
+      与章节键同款——值变化才 setState,滚动模式高频 relocate 零重渲染。 */
+  const [canGoBack, setCanGoBack] = useState(false)
+  const canGoBackRef = useRef(false)
   const [ttsMinimized, setTtsMinimized] = useState(false)
   const [ttsActive, setTtsActive] = useState(false)
   /**
@@ -678,6 +683,13 @@ export function ReaderScreen({
         if (nextChapter !== currentChapterRef.current) {
           currentChapterRef.current = nextChapter
           setCurrentChapter(nextChapter)
+        }
+        // 历史栈采样:跳转 pushState、回退本身也走 goTo → relocate,都能
+        // 在这里读到最新 canGoBack;翻页 replaceState 不改变它。
+        const backable = adapterRef.current?.history?.canGoBack() ?? false
+        if (backable !== canGoBackRef.current) {
+          canGoBackRef.current = backable
+          setCanGoBack(backable)
         }
         scheduleSave()
         // 并行阅读的联动:位置变了就报给宿主(由它决定要不要拽对面那一栏)。
@@ -2092,6 +2104,15 @@ export function ReaderScreen({
           </button>
           <span className="reader-title">{title}</span>
           <div className="chrome-group">
+            <button
+              type="button"
+              className="chrome-button"
+              onClick={() => adapterRef.current?.history?.back()}
+              disabled={!canGoBack}
+              title="上一位置(回到跳转前:目录 / 搜索 / 书签 / 进度跳转可回退)"
+            >
+              <ArrowUUpLeft size={16} weight="regular" aria-hidden />
+            </button>
             <BookmarkButton
               progressStore={progressStore}
               bookmarks={liveBookmarks}
