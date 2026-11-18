@@ -3,6 +3,7 @@ import { classifyFile, sha256Hex, type OpenedBook } from './lib/book-import'
 import { LibraryScreen } from './features/library/LibraryScreen'
 import { ReaderScreen } from './features/reader/ReaderScreen'
 import { ParallelReader } from './features/reader/ParallelReader'
+import { DevStatsOverlay } from './components/DevStatsOverlay'
 
 export function App() {
   const [book, setBook] = useState<OpenedBook | null>(null)
@@ -72,6 +73,8 @@ export function App() {
   // `hidden` 的阅读器,窗口里就一层内容都没有,深色主题下就是「黑屏」。
   return (
     <>
+      {/* 性能监视器(plan B9.4):dev-only,生产构建被 Vite 树摇掉。 */}
+      {import.meta.env.DEV && <DevStatsOverlay />}
       {(book === null || readerHidden) && (
         <LibraryScreen onOpenBook={openBook} onOpenParallel={openParallel} />
       )}

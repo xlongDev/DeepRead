@@ -27,7 +27,25 @@ pnpm build && du -sh apps/desktop/dist/assets/*
 # 内存:Xcode Instruments → Allocations,打开 100MB+ TXT/PDF 样书前后对比
 ```
 
-## 待办(不阻断发布)
+## 开发模式监视器(plan B9.4,2026-11-18 落地)
 
-1. §139 开发模式性能监视器(FPS/内存/CPU overlay)——等阅读器 polish 阶段。
-2. 100MB+ 大书的分页实测矩阵(EPUB 章节懒加载已由内核处理,TXT 适配器已按段落分节)。
+`DevStatsOverlay`(src/components/)在 `import.meta.env.DEV` 挂载:每秒结算
+FPS(rAF 计数)+ Chromium 私有 `performance.memory` 堆读数,并轮询
+`dev.process.stats`(Rust 侧 `ps -o rss=,pcpu=`)拿进程 RSS 与 CPU%。生产
+构建整组件被 Vite 树摇掉。**读数锚点:交互帧预算 16ms(≈60fps),FPS 持续
+< 55 就去 Performance 面板找原因,不要猜。**
+
+## 100MB+ 大书实测矩阵(待真机实测,数据到手即填)
+
+构建:release。工具:overlay 读数 + `xcrun instruments`(macOS)。矩阵行
+按「书格式 × 书大小」给,每格填 打开耗时 / 翻页 P95 / 全书搜索 / 内存峰值。
+
+| 格式        | 大小 | 打开 | 翻页 P95 | 全书搜索 | 内存峰值 |
+| ----------- | ---- | ---- | -------- | -------- | -------- |
+| EPUB        | 待填 | 待填 | 待填     | 待填     | 待填     |
+| TXT(100MB+) | 待填 | 待填 | 待填     | 待填     | 待填     |
+| PDF(100MB+) | 待填 | 待填 | 待填     | 待填     | 待填     |
+| AZW3/MOBI   | 待填 | 待填 | 待填     | 待填     | 待填     |
+
+> 约定:没有实测数据就保持「待填」,不编数。跑矩阵的步骤:打开 dev 构建 →
+> overlay 记录稳态 RSS → 各操作三轮取 P95 → 填表并带日期。

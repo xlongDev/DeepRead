@@ -8,6 +8,7 @@ mod ai;
 mod cards;
 mod cloud;
 mod commands;
+mod dev;
 mod dictionary;
 mod edge_tts;
 // 这四个对集成测试(tests/integration.rs)开放 —— 那边要跨模块走完整链路
@@ -267,6 +268,7 @@ pub fn run() {
             opds::opds_download,
             privacy::privacy_hotkey_set,
             privacy::privacy_hotkey_get,
+            dev::dev_process_stats,
             fonts::command_fonts_list,
             fonts::command_fonts_import,
             fonts::command_fonts_remove,

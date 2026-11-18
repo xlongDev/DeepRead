@@ -1181,3 +1181,29 @@ button.parallel-divider:active:not(:disabled) {
     background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
   }
 }
+
+/* 性能监视器(plan B9.4):dev-only 悬浮读数,生产构建树摇掉。 */
+.dev-stats {
+  position: fixed;
+  top: 8px;
+  right: 10px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, #000 78%, transparent);
+  color: #9cff9c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: auto;
+  user-select: none;
+  cursor: default;
+}
+
+.dev-stats .is-warn {
+  color: #ffd166;
+}

@@ -140,6 +140,7 @@ import type { OpdsEntry } from './generated/OpdsEntry'
 import type { OpdsFetchRequest } from './generated/OpdsFetchRequest'
 import type { PrivacyHotkeyResponse } from './generated/PrivacyHotkeyResponse'
 import type { PrivacyHotkeySetRequest } from './generated/PrivacyHotkeySetRequest'
+import type { DevProcessStats } from './generated/DevProcessStats'
 import type { ReadingFont } from './generated/ReadingFont'
 import type { FontImportRequest } from './generated/FontImportRequest'
 import type { FontRemoveRequest } from './generated/FontRemoveRequest'
@@ -297,6 +298,7 @@ export type {
   OpdsFetchRequest,
   PrivacyHotkeyResponse,
   PrivacyHotkeySetRequest,
+  DevProcessStats,
 }
 
 export const COMMAND = {
@@ -349,6 +351,7 @@ export const COMMAND = {
   ttsAudio: 'tts.audio',
   ttsEdgeAudio: 'tts.edge.audio',
   ttsEdgeVoices: 'tts.edge.voices',
+  devProcessStats: 'dev.process.stats',
   privacyHotkeySet: 'privacy.hotkey.set',
   privacyHotkeyGet: 'privacy.hotkey.get',
   opdsFetch: 'opds.fetch',
@@ -556,6 +559,10 @@ export interface CommandMap {
   [COMMAND.ttsExportCancel]: {
     readonly request: TtsExportCancelRequest
     readonly response: TtsExportCancelResponse
+  }
+  [COMMAND.devProcessStats]: {
+    readonly request: undefined
+    readonly response: DevProcessStats
   }
   [COMMAND.privacyHotkeySet]: {
     readonly request: PrivacyHotkeySetRequest
@@ -1102,6 +1109,15 @@ export const ttsExportCancelResponseSchema = z.object({
   cancelled: z.boolean(),
 })
 
+/* 性能监视器(plan B9.4):dev-only 指标,生产调用方被树摇掉。 */
+
+export const devProcessStatsSchema = z.object({
+  // ts-rs 对无 skip 序列化的 Option 生成「必填但可 null」,与 .nullish() 的
+  // 「可选」不同 —— 这里必须用 .null()。
+  rssBytes: z.number().nullable(),
+  cpuPercent: z.number().nullable(),
+})
+
 /* 隐蔽阅读模式(ADR-0014):热键注册在 Rust,webview 只有开关语义。 */
 
 export const privacyHotkeySetRequestSchema = z.object({
@@ -1268,6 +1284,7 @@ export const responseSchemas = {
   [COMMAND.ttsExportStart]: ttsExportStartResponseSchema,
   [COMMAND.ttsExportStatus]: ttsExportStatusResponseSchema,
   [COMMAND.ttsExportCancel]: ttsExportCancelResponseSchema,
+  [COMMAND.devProcessStats]: devProcessStatsSchema,
   [COMMAND.privacyHotkeySet]: privacyHotkeyResponseSchema,
   [COMMAND.privacyHotkeyGet]: privacyHotkeyResponseSchema,
   [COMMAND.opdsFetch]: opdsCatalogSchema,
@@ -1344,6 +1361,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.ttsExportStart]: ttsExportStartRequestSchema,
   [COMMAND.ttsExportStatus]: ttsExportStatusRequestSchema,
   [COMMAND.ttsExportCancel]: ttsExportCancelRequestSchema,
+  [COMMAND.devProcessStats]: undefined,
   [COMMAND.privacyHotkeySet]: privacyHotkeySetRequestSchema,
   [COMMAND.privacyHotkeyGet]: undefined,
   [COMMAND.opdsFetch]: opdsFetchRequestSchema,
