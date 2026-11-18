@@ -17,6 +17,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
+# 显式安装进程级 CryptoProvider 用:reqwest(aws-lc-rs)与 tungstenite(ring)
+# 同时启用两个 provider,rustls 0.23 拒绝自动二选一 —— 不装默认值,首次
+# TLS 握手就 panic(依赖升级 db6b13e 引入,TTS「合成中」卡死即此)。
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 log.workspace = true

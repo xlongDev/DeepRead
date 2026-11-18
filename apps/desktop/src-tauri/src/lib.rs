@@ -73,6 +73,11 @@ fn emit_open_file(app: &tauri::AppHandle, path: String) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // rustls 要求进程级唯一 CryptoProvider:reqwest 拉了 aws-lc-rs,
+    // tungstenite/updater 拉了 ring,两个 feature 同时在图里时 rustls
+    // 拒绝自动选 —— 首场 TLS 握手直接 panic(Edge TTS「合成中」卡死、
+    // AI/WebDAV/更新器全灭的根因)。这里显式选 ring(纯 Rust,已在图里)。
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

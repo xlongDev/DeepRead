@@ -1031,6 +1031,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live Edge endpoint; run with --ignored"]
     async fn edge_audio_synthesizes_live() {
+        // 测试进程不走 run():rustls provider 歧义要在这里自行消解。
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let base = std::env::temp_dir().join("deepread-edge-tts-live");
         let result = edge_tts_audio(
             &base,
