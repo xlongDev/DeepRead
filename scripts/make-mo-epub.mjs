@@ -71,9 +71,9 @@ const smil = (pageHref, pars) => `<?xml version="1.0" encoding="utf-8"?>
   <body>
 ${pars
   .map(
-    ({ id, wav, begin, end }) => `    <par id="${id}">
+    ({ id, wav: audio, begin, end }) => `    <par id="${id}">
       <text src="${pageHref}#${id}"/>
-      <audio src="audio/${wav}" clipBegin="${begin}s" clipEnd="${end}s"/>
+      <audio src="audio/${audio}" clipBegin="${begin}s" clipEnd="${end}s"/>
     </par>`,
   )
   .join('\n')}
