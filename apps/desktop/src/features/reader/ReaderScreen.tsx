@@ -113,6 +113,7 @@ import { SlidingIndicator } from '../../components/SlidingIndicator'
 import { collectChatText } from '../../lib/ai-chat'
 import { LearningDrawer } from './LearningDrawer'
 import { SelectionToolbar } from './SelectionToolbar'
+import { QuoteCardModal } from './QuoteCard'
 import { ParallelPicker } from './ParallelPicker'
 import { windowFrame, type ReadingFrame } from './selection-place'
 import { animateFlipTurn } from './page-flip'
@@ -395,6 +396,8 @@ export function ReaderScreen({
   const [toc, setToc] = useState<readonly TocItem[]>([])
   const [chromeVisible, setChromeVisible] = useState(true)
   const [selection, setSelection] = useState<EngineSelection | null>(null)
+  /** 金句分享卡:选区/划线的摘录与墨水色(null = 弹层关着)。 */
+  const [quoteCard, setQuoteCard] = useState<{ quote: string; accent: string } | null>(null)
   const [activeAnnotation, setActiveAnnotation] = useState<string | null>(null)
   /** 编辑模式划词工具的锚点:划线的实测选区框。点中的是已有划线时没有
    *  伴随选区可问,不测一个工具条就会落在 (0,0)(左上角)。 */
@@ -1048,7 +1051,7 @@ export function ReaderScreen({
       const target = event.target as HTMLElement | null
       if (
         target?.closest(
-          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini',
+          '.reader-top,.reader-bottom,.reader-toc,.reader-settings,.reader-pick,.ai-drawer,.selection-toolbar,.lookup-card,.repair-panel,.page-flip,.dropdown-menu,.reader-theme-row,.tts-mini,.quote-card-overlay',
         )
       )
         return
@@ -2513,6 +2516,11 @@ export function ReaderScreen({
             onLookup={() => void runLookup()}
             onTranslate={() => void runTranslate()}
             onAsk={askAboutSelection}
+            onShareCard={() => {
+              const quote = (selection?.text ?? activeRecord?.excerpt ?? '').trim()
+              if (quote === '') return
+              setQuoteCard({ quote, accent: activeRecord?.color ?? lastInk.color })
+            }}
             onSpeak={speakSelection}
             onSearch={searchSelectionInBook}
             onHighlight={(color, style) => void addHighlight(color, style)}
@@ -2582,6 +2590,19 @@ export function ReaderScreen({
               ;(footnote.view as unknown as { close?: () => void }).close?.()
               setFootnote(null)
             }}
+          />
+        )}
+
+        {quoteCard !== null && (
+          <QuoteCardModal
+            spec={{
+              quote: quoteCard.quote,
+              bookTitle: title,
+              accent: quoteCard.accent,
+              paper: READER_THEMES[themeIndex]?.theme.background ?? '#faf7f0',
+              ink: READER_THEMES[themeIndex]?.theme.foreground ?? '#2b2b2b',
+            }}
+            onClose={() => setQuoteCard(null)}
           />
         )}
 

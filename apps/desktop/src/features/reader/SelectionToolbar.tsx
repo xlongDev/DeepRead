@@ -33,6 +33,7 @@ import {
   Highlighter,
   MagnifyingGlass,
   Note,
+  Quotes,
   SpeakerHigh,
   Sparkle,
   Translate,
@@ -88,6 +89,8 @@ export interface SelectionToolbarProps {
   readonly onLookup: () => void
   readonly onTranslate: () => void
   readonly onAsk: () => void
+  /** 金句分享卡:选区(或编辑模式下的划线摘录)生成可保存的图片。 */
+  readonly onShareCard: () => void
   readonly onSpeak: () => void
   readonly onSearch: () => void
   readonly onHighlight: (color: string, style: AnnotationStyle) => void
@@ -109,6 +112,7 @@ export function SelectionToolbar({
   onLookup,
   onTranslate,
   onAsk,
+  onShareCard,
   onSpeak,
   onSearch,
   onHighlight,
@@ -256,6 +260,15 @@ export function SelectionToolbar({
         </button>
         <button type="button" aria-label="问 AI" className="sel-icon" onClick={onAsk} title="问 AI">
           <Sparkle size={16} />
+        </button>
+        <button
+          type="button"
+          aria-label="分享卡"
+          className="sel-icon"
+          onClick={onShareCard}
+          title="金句分享卡(存成图片)"
+        >
+          <Quotes size={16} />
         </button>
         <button
           type="button"

@@ -1334,3 +1334,62 @@ button.ai-citation:hover {
   color: var(--color-accent);
   border-color: var(--color-accent);
 }
+
+/* 金句分享卡:纸面画在 canvas 里,弹层只是包装(预览 + 保存/关闭)。 */
+.quote-card-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay, 60);
+  background: rgb(0 0 0 / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.quote-card-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  max-width: min(420px, 92vw);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg, 0 8px 30px rgb(0 0 0 / 0.3));
+}
+
+.quote-card-canvas {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.quote-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.quote-card-saved {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.quote-card-problem {
+  margin: 0;
+  color: var(--color-danger, #c0392b);
+  font-size: var(--font-size-sm);
+}
+
+/* 原生 <dialog> 自带边框/内边距/居中,只留语义,外观交给面板配方。 */
+dialog.quote-card-panel {
+  border: none;
+  margin: 0;
+  padding: 20px;
+}

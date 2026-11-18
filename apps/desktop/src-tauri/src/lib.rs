@@ -240,6 +240,7 @@ pub fn run() {
             library::library_cover_get,
             library::library_cover_put,
             library::notes_export,
+            library::share_card_export,
             dictionary::dictionary_list,
             dictionary::dictionary_register,
             dictionary::dictionary_remove,

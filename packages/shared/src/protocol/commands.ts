@@ -60,6 +60,8 @@ import type { LibraryTagSetRequest } from './generated/LibraryTagSetRequest'
 import type { LibraryTagSetResponse } from './generated/LibraryTagSetResponse'
 import type { LibraryCoverGetRequest } from './generated/LibraryCoverGetRequest'
 import type { LibraryCoverGetResponse } from './generated/LibraryCoverGetResponse'
+import type { CardExportRequest } from './generated/CardExportRequest'
+import type { CardExportResponse } from './generated/CardExportResponse'
 import type { LibraryCoverPutRequest } from './generated/LibraryCoverPutRequest'
 import type { LibraryCoverPutResponse } from './generated/LibraryCoverPutResponse'
 import type { NotesExportRequest } from './generated/NotesExportRequest'
@@ -241,6 +243,8 @@ export type {
   LibraryRemoveResponse,
   LibraryTagSetRequest,
   LibraryTagSetResponse,
+  CardExportRequest,
+  CardExportResponse,
   NewCardInput,
   NoteEntry,
   NotesExportRequest,
@@ -325,6 +329,7 @@ export const COMMAND = {
   libraryCoverGet: 'library.cover.get',
   libraryCoverPut: 'library.cover.put',
   notesExport: 'notes.export',
+  cardExport: 'share.card.export',
   dictionaryList: 'dictionary.list',
   dictionaryRegister: 'dictionary.register',
   dictionaryRemove: 'dictionary.remove',
@@ -461,6 +466,10 @@ export interface CommandMap {
   [COMMAND.notesExport]: {
     readonly request: NotesExportRequest
     readonly response: NotesExportResponse
+  }
+  [COMMAND.cardExport]: {
+    readonly request: CardExportRequest
+    readonly response: CardExportResponse
   }
   [COMMAND.dictionaryList]: {
     readonly request: undefined
@@ -821,6 +830,13 @@ export const notesExportRequestSchema = z.object({
   defaultName: z.string().max(200),
 })
 export const notesExportResponseSchema = z.object({ path: z.string().max(4096).nullable() })
+export const cardExportRequestSchema = z.object({
+  // PNG 的 base64。金句卡是单屏画布,实际几百 KB;上限放宽到 4 MB 字节
+  // (base64 后 ~5.3M 字符)防超大输入,与封面 data 字段同量级。
+  base64: z.string().max(5_400_000),
+  defaultName: z.string().max(200),
+})
+export const cardExportResponseSchema = z.object({ path: z.string().max(4096).nullable() })
 
 const dictionaryMetaSchema = z.object({
   id: z.string().min(8).max(64),
@@ -1253,6 +1269,7 @@ export const responseSchemas = {
   [COMMAND.libraryCoverGet]: libraryCoverGetResponseSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutResponseSchema,
   [COMMAND.notesExport]: notesExportResponseSchema,
+  [COMMAND.cardExport]: cardExportResponseSchema,
   [COMMAND.dictionaryList]: dictionaryListResponseSchema,
   [COMMAND.dictionaryRegister]: dictionaryRegisterResponseSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveResponseSchema,
@@ -1330,6 +1347,7 @@ export const requestValidators: { [K in CommandName]: ResponseValidator<unknown>
   [COMMAND.libraryCoverGet]: libraryCoverGetRequestSchema,
   [COMMAND.libraryCoverPut]: libraryCoverPutRequestSchema,
   [COMMAND.notesExport]: notesExportRequestSchema,
+  [COMMAND.cardExport]: cardExportRequestSchema,
   [COMMAND.dictionaryList]: undefined,
   [COMMAND.dictionaryRegister]: dictionaryRegisterRequestSchema,
   [COMMAND.dictionaryRemove]: dictionaryRemoveRequestSchema,

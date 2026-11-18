@@ -1496,3 +1496,25 @@ describe('划选翻译', () => {
     expect(await screen.findByText(/还没有配置 AI 服务/)).toBeInTheDocument()
   })
 })
+
+describe('金句分享卡', () => {
+  /** 划选正文 → 工具栏出现。 */
+  async function selectText(adapter: FakeFoliateAdapter): Promise<HTMLElement> {
+    adapter.emitSelection({ ...SELECTION })
+    return await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.selection-toolbar')
+      if (node === null) throw new Error('选区工具栏没出现')
+      return node
+    })
+  }
+
+  it('选区一键开弹层,关闭即收;保存按钮在场', async () => {
+    const { adapter } = await renderReader()
+    await selectText(adapter)
+    fireEvent.click(screen.getByTitle('金句分享卡(存成图片)'))
+    const dialog = await screen.findByRole('dialog', { name: '金句分享卡' })
+    expect(within(dialog).getByRole('button', { name: '保存图片' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '金句分享卡' })).toBeNull())
+  })
+})

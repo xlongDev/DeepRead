@@ -1076,6 +1076,67 @@ pub async fn notes_export<R: tauri::Runtime>(
     })
 }
 
+/// 金句分享卡(canvas.toDataURL 的字节)存成 PNG:走系统保存对话框,理由同
+/// notes.export —— WebView 默认拦截 `<a download>`。
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardExportRequest {
+    /// PNG 字节的 base64(canvas 数据 URL 摘掉 `data:image/png;base64,` 头)。
+    pub base64: String,
+    /// 保存对话框的默认文件名(建议自带 `.png`;不带会补上)。
+    pub default_name: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct CardExportResponse {
+    /// 用户最终选定的绝对路径;`null` = 用户取消了对话框。
+    pub path: Option<String>,
+}
+
+#[tauri::command(rename = "share.card.export")]
+pub async fn share_card_export<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    request: CardExportRequest,
+) -> Result<CardExportResponse, AppError> {
+    use base64::Engine as _;
+    use tauri_plugin_dialog::DialogExt;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(request.base64.trim())
+        .map_err(|err| {
+            AppError::new(ErrorCode::SystemValidation, "invalid card image data").with_cause(err)
+        })?;
+    let name = request.default_name.trim();
+    let file_name = if name.is_empty() {
+        "分享卡.png".to_string()
+    } else if name.to_lowercase().ends_with(".png") {
+        name.to_string()
+    } else {
+        format!("{name}.png")
+    };
+    let path = app
+        .dialog()
+        .file()
+        .set_title("保存分享卡")
+        .set_file_name(file_name)
+        .add_filter("PNG", &["png"])
+        .blocking_save_file();
+    let Some(file_path) = path else {
+        return Ok(CardExportResponse { path: None });
+    };
+    let target = file_path
+        .into_path()
+        .map_err(|err| AppError::new(ErrorCode::StorageIo, "invalid save path").with_cause(err))?;
+    std::fs::write(&target, &bytes).map_err(|err| {
+        AppError::new(ErrorCode::StorageIo, "failed to write card image").with_cause(err)
+    })?;
+    Ok(CardExportResponse {
+        path: Some(target.to_string_lossy().to_string()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
