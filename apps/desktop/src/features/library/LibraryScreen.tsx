@@ -282,6 +282,24 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         progress: 0.77,
         tags: ['科技'],
       },
+      {
+        // 带原书配音(media overlays)的样书:听书抽屉的横幅与原声条全靠它验。
+        hash: 'demo6',
+        fileName: '原声配音演示.epub',
+        displayName: null,
+        author: 'DeepRead',
+        subtitle: null,
+        publisher: null,
+        language: null,
+        format: 'epub',
+        path: '/fixtures/原声配音演示.epub',
+        size: 216_940,
+        addedAt: '2026-09-10T08:00:00Z',
+        lastReadAt: null,
+        finishedAt: null,
+        progress: null,
+        tags: [],
+      },
     ]
     // 示例书架是一次性的 dev 种子,不该被紧随其后的真实书架覆盖 —— 用一个
     // ref 挡住 loadBooks,而不是往 IndexedDB 里写脏数据。

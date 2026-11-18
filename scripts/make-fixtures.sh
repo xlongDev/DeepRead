@@ -182,6 +182,9 @@ node "$ROOT/scripts/make-image-pdf.mjs"
 
 # --- MOBI (generated minimal but real PalmDB/PalmDOC/MOBI binary) -----------
 node "$ROOT/scripts/make-mobi.mjs"
+# EPUB 3 with media overlays: the only fixture exercising the kernel's
+# MediaOverlay path (原书配音). Hand-written ZIP + generated WAVs, no deps.
+node "$ROOT/scripts/make-mo-epub.mjs"
 
 # --- PDF.js support assets (CJK cmaps + standard fonts) ---------------------
 if [ -d "$PDFJS_DIST" ]; then
