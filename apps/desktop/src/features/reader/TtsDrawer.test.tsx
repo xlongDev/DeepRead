@@ -392,6 +392,24 @@ describe('待机与播放', () => {
     expect(synthTexts()).toContain('第二章的第二句。')
   })
 
+  it('章末预热:本章收尾时下一章首句已进合成,不等滚章', async () => {
+    const props = makeProps({
+      getSectionText: vi.fn().mockResolvedValueOnce(SECTION_1).mockResolvedValue(SECTION_2),
+      getNextSectionText: vi.fn(async () => SECTION_2),
+    })
+    render(<TtsDrawer {...props} />)
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: '播放' }))
+    await flush()
+
+    // 第一句还在读:下一章两句已经预热合成,每章只读一次下一章文本,
+    // 跳章本身尚未发生。
+    expect(props.jumpSection).not.toHaveBeenCalled()
+    expect(props.getNextSectionText).toHaveBeenCalledTimes(1)
+    expect(synthTexts()).toContain('第二章的第一句。')
+    expect(synthTexts()).toContain('第二章的第二句。')
+  })
+
   it('关掉「连读下一章」:章末停止而不是跳章', async () => {
     localStorage.setItem('deepread.tts.settings', JSON.stringify({ autoNext: false }))
     const props = makeProps()

@@ -224,12 +224,17 @@ export function useTts({ trackBoundary = false, lang, cloudConfigId }: Options =
     return cloudRef.current
   }, [])
 
-  /** The per-unit voice map the engines want, bridged from the speaker map. */
-  const perUnitVoice = useCallback((): ((index: number) => string | null) | undefined => {
-    const map = voiceOf.current
-    if (!map) return undefined
-    return (index) => map(unitsRef.current[index]?.speaker ?? 'narrator')
-  }, [])
+  /** The per-unit voice map the engines want, bridged from the speaker map.
+   *  `units` defaults to the queue in force (the current chapter); priming the
+   *  next chapter passes its own units, since `unitsRef` still holds this one. */
+  const perUnitVoice = useCallback(
+    (units?: readonly SpeechUnit[]): ((index: number) => string | null) | undefined => {
+      const map = voiceOf.current
+      if (!map) return undefined
+      return (index) => map((units ?? unitsRef.current)[index]?.speaker ?? 'narrator')
+    },
+    [],
+  )
 
   /** The platform engine: its own queue, one utterance per unit. */
   const speakSystem = useCallback(
@@ -386,6 +391,18 @@ export function useTts({ trackBoundary = false, lang, cloudConfigId }: Options =
     [edgeEngine, cloudEngine, perUnitVoice, speakSystem],
   )
 
+  /** Warms the provider's cache for the next chapter's first units (see
+   *  `clipEngine.prime`). The platform engine has nothing to warm — its queue
+   *  synthesises on the fly — so it is skipped silently. */
+  const prime = useCallback(
+    (units: readonly SpeechUnit[]) => {
+      const texts = units.map((entry) => entry.text)
+      if (engine.current === 'edge') edgeEngine().prime(texts, perUnitVoice(units))
+      else if (engine.current === 'cloud') cloudEngine()?.prime(texts, perUnitVoice(units))
+    },
+    [edgeEngine, cloudEngine, perUnitVoice],
+  )
+
   /** Applies a new rate; a session in progress is restarted from where the
    *  voice is, since the utterance being spoken was already synthesised — the
    *  network engines stretch on the way to the speaker instead, so the next
@@ -477,6 +494,7 @@ export function useTts({ trackBoundary = false, lang, cloudConfigId }: Options =
       loading,
       systemVoices: system,
       play,
+      prime,
       stop,
       pause,
       resume,
@@ -495,6 +513,7 @@ export function useTts({ trackBoundary = false, lang, cloudConfigId }: Options =
       loading,
       system,
       play,
+      prime,
       stop,
       pause,
       resume,

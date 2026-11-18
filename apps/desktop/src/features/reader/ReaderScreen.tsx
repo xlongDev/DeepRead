@@ -1472,6 +1472,17 @@ export function ReaderScreen({
     return true
   }, [])
 
+  /** TTS 听书:下一章的纯文本(章末预热合成用,不动阅读位置);越界返回
+   *  null。与 ttsGetSectionText 同一数据面,只是按索引读下一节。 */
+  const ttsGetNextSectionText = useCallback(async (): Promise<string | null> => {
+    const adapter = adapterRef.current
+    if (!adapter) return null
+    const count = (await adapter.readableText?.getSectionCount()) ?? 0
+    const next = sectionIndexRef.current + 1
+    if (next >= count) return null
+    return (await adapter.readableText?.getSectionText(next)) ?? null
+  }, [])
+
   // 当前章字数:切章时后台取一次纯文本计数(与 TTS 同一数据面,廉价)。切章
   // 信号来自内核 onRelocate,这里只负责进入阅读态时的首次计算。
   useEffect(() => {
@@ -2549,6 +2560,7 @@ export function ReaderScreen({
               themeVars={readerVars}
               onPlayingChange={setTtsActive}
               getSectionText={ttsGetSectionText}
+              getNextSectionText={ttsGetNextSectionText}
               jumpSection={ttsJumpSection}
               exportChapters={async () => {
                 // 整书导出原料:逐章取纯文本(内核域方法),标题 v1 用序号名。

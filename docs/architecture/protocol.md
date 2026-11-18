@@ -172,10 +172,10 @@
 
 ### `opds.*`(书源,plan B9.2)
 
-| 命令            | 请求 → 响应                                                                                                                         | 说明                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `opds.fetch`    | `{ url, username?, password? }` → `{ title, entries[{title,author?,summary?,coverUrl?,downloads[{href,kind?}]}], nextUrl? }`          | OPDS 1.2(Atom)目录解析在 Rust(quick-xml 按局部名,命名空间无关);Basic 认证可选;翻页经 `nextUrl` |
-| `opds.download` | `{ url, username?, password? }` → `{ path }`                                                                                          | 下载落 `opds-downloads/`(temp+rename 原子提交,512MB 上限),上层拿路径走 `library.import`        |
+| 命令            | 请求 → 响应                                                                                                                  | 说明                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `opds.fetch`    | `{ url, username?, password? }` → `{ title, entries[{title,author?,summary?,coverUrl?,downloads[{href,kind?}]}], nextUrl? }` | OPDS 1.2(Atom)目录解析在 Rust(quick-xml 按局部名,命名空间无关);Basic 认证可选;翻页经 `nextUrl` |
+| `opds.download` | `{ url, username?, password? }` → `{ path }`                                                                                 | 下载落 `opds-downloads/`(temp+rename 原子提交,512MB 上限),上层拿路径走 `library.import`        |
 
 约定:v1 不做 OpenSearch 检索模板与 OPDS 2(JSON);扩展名/类型偏好排序在前端(epub > mobi > fb2 > cbz > pdf > text)。
 

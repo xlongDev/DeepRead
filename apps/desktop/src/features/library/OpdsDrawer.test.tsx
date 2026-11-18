@@ -67,7 +67,9 @@ describe('OpdsDrawer', () => {
     expect(invokeMock).toHaveBeenCalledWith('opds.download', { url: '/files/night.epub' })
     expect(invokeMock).toHaveBeenCalledWith('library.import', { path: '/tmp/night.epub' })
     expect(onImported).toHaveBeenCalledTimes(1)
-    expect((screen.getByRole('button', { name: '已导入' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '已导入' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
   })
 
   it('目录打不开时错误有终态,不留在「浏览中」', async () => {
@@ -81,6 +83,8 @@ describe('OpdsDrawer', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '浏览目录' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('连不上'))
-    expect((screen.getByRole('button', { name: '浏览目录' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '浏览目录' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    )
   })
 })

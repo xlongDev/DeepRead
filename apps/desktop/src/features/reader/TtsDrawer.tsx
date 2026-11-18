@@ -103,6 +103,11 @@ type HighlightMode = 'off' | 'sentence' | 'word'
 
 const SETTINGS_KEY = 'deepread.tts.settings'
 
+/** 章末预热下一章合成的两个量:本章只剩这么多句时触发;预热下一章前这么
+ *  多句(与引擎内 AHEAD 同量级,两三句 ≈ 十几秒语料,足够盖住一次往返)。 */
+const PRIME_WHEN = 3
+const PRIME_CLIPS = 2
+
 interface TtsSettings {
   engine: Engine
   rate: number
@@ -192,6 +197,9 @@ interface TtsDrawerProps {
   readonly onPlayingChange: (playing: boolean) => void
   /** Plain text of the section currently on screen. */
   readonly getSectionText: () => Promise<string>
+  /** 下一章的纯文本(章末预热下一章合成用);越界或缺失返回 null。测试替身
+   *  可不接 —— 不接就跳过预热,滚章行为不变。 */
+  readonly getNextSectionText?: () => Promise<string | null>
   /** 跳转章节(±1);返回 false 表示越界。 */
   readonly jumpSection: (delta: number) => Promise<boolean>
   /** 有声书导出的整书原料(章节序号/标题/纯文本),父层经内核逐章取好。
@@ -272,6 +280,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     themeVars,
     onPlayingChange,
     getSectionText,
+    getNextSectionText,
     jumpSection,
     exportChapters,
     onHighlight,
@@ -410,6 +419,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
   })
   const {
     play: ttsPlay,
+    prime: ttsPrime,
     stop: ttsStop,
     pause: ttsPause,
     resume: ttsResume,
@@ -697,6 +707,33 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     },
     [getSectionText, jumpSection, armTimer, ttsPlay, stop],
   )
+
+  /** 章末预热:滚章时唯一藏不住的慢步骤是下一章首句的合成(edge 是一次网络
+   *  往返)。本章接近尾声时把下一章文本提前读出来、首几句走一遍合成 ——
+   *  Rust 侧 tts-cache 先查后合成,预热落盘后滚章时的正式请求即命中。预热
+   *  失败静默:滚章该慢还是慢,不比预热前差。「跨章上一句」(stopAtEnd)会
+   *  白暖一次,但暖出的缓存下一次真播那章时仍命中,不值得为它挂状态。 */
+  const primedRef = useRef(0)
+  const primeNextChapter = useCallback((): void => {
+    if (primedRef.current === sectionTokenRef.current) return
+    if (!settingsRef.current.autoNext || settingsRef.current.timerKind === 'section') return
+    // system 引擎的队列现场合成,没有可预热的缓存;没接下一章文本同样跳过。
+    if (settingsRef.current.engine === 'system' || !getNextSectionText) return
+    primedRef.current = sectionTokenRef.current
+    void getNextSectionText()
+      .then((text) => {
+        if (!text || text.trim() === '') return
+        const plan = buildSpeechUnits(text, knownNamesRef.current)
+        ttsPrime(plan.filter((unit) => unit.text.trim() !== '').slice(0, PRIME_CLIPS))
+      })
+      .catch(() => {})
+  }, [getNextSectionText, ttsPrime])
+
+  // 本章只剩最后几句时触发(句句查一次,primedRef 保证每章只预热一遍)。
+  useEffect(() => {
+    if (tts.status !== 'playing' || tts.unit === null) return
+    if (unitsRef.current.length - tts.unit <= PRIME_WHEN) primeNextChapter()
+  }, [tts.status, tts.unit, primeNextChapter])
 
   /** 划词工具的「朗读此处」:从选区所在的那一句起连播整章。起点优先用
    *  内核随选区报来的字符偏移(unitAtOffset,exact);编辑模式没有选区,

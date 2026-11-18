@@ -75,6 +75,9 @@ export interface PlayOptions {
 
 export interface ClipEngine {
   play: (units: readonly string[], from: number, options: PlayOptions) => void
+  /** Synthesises texts into the provider's on-disk cache without playing them
+   *  (the next chapter's first clips, paid while the current chapter speaks). */
+  prime: (texts: readonly string[], voiceOf?: (index: number) => string | null) => void
   stop: () => void
   pause: () => void
   resume: () => void
@@ -270,6 +273,21 @@ export function createClipEngine(
     for (let index = from + 1; index <= from + AHEAD; index += 1) void ensure(index, current)
   }
 
+  /** Warms the provider's on-disk cache for the first clips of the *next*
+   *  chapter: synthesis is the one slow step a chapter roll cannot hide (a
+   *  network round trip), so it is paid while the current chapter still speaks
+   *  and the roll-time request comes back a hit. Payloads are discarded — the
+   *  cache lives behind the IPC — and failures are swallowed: a failed warm
+   *  costs the roll the same wait it would have paid anyway. `voiceOf` maps the
+   *  *next* chapter's units; the instance map is still the current one's. */
+  function prime(next: readonly string[], nextVoiceOf?: (index: number) => string | null): void {
+    for (let index = 0; index < next.length; index += 1) {
+      const text = next[index]
+      if (text === undefined || text.trim() === '') continue
+      void synthesize(text, nextVoiceOf?.(index) ?? voice).catch(() => {})
+    }
+  }
+
   /** Tracks the cue list against the context's clock, reporting only when the
    *  word actually changes — a reader must not re-render sixty times a second
    *  to redraw the same highlight.
@@ -412,6 +430,7 @@ export function createClipEngine(
 
   return {
     play,
+    prime,
     stop,
     pause,
     resume,

@@ -4,14 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const { invokeMock, listenMock, FakeChannel } = vi.hoisted(() => {
   const invoke = vi.fn()
   const listen = vi.fn()
-  class FakeChannel {
-    static readonly instances: FakeChannel[] = []
+  // 类名避开外层解构出的 FakeChannel:遮蔽报错,装饰语义不变。
+  class ChannelStub {
+    static readonly instances: ChannelStub[] = []
     onmessage: (message: Record<string, unknown>) => void = () => {}
     constructor() {
-      FakeChannel.instances.push(this)
+      ChannelStub.instances.push(this)
     }
   }
-  return { invokeMock: invoke, listenMock: listen, FakeChannel }
+  return { invokeMock: invoke, listenMock: listen, FakeChannel: ChannelStub }
 })
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock, Channel: FakeChannel }))

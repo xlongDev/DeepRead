@@ -1697,7 +1697,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
       {/* 有声书导出任务(plan B8):Rust 后台合成,书架用一行浮条跟进进度。
           只在有任务时占位;终态保留到下次任务,便于看清刚才那次的结果。 */}
       {exportTasks.length > 0 && (
-        <div className="tts-export-bar" role="status">
+        <output className="tts-export-bar">
           {exportTasks.map((task) => (
             <div key={task.bookHash} className="tts-export-bar-row">
               <span>
@@ -1720,7 +1720,7 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
               )}
             </div>
           ))}
-        </div>
+        </output>
       )}
 
       <input
