@@ -64,6 +64,7 @@ import {
   FONT_SIZES,
   HIGHLIGHT_COLOR,
   layoutOverrides,
+  loadBookTypography,
   loadPageTurnStyle,
   loadRulerSettings,
   loadStatsSettings,
@@ -73,6 +74,7 @@ import {
   type LayoutPatch,
   PAGE_MARGIN_BLOCK_DEFAULT,
   PAGE_MARGIN_INLINE_DEFAULT,
+  persistBookTypography,
   persistPageTurnStyle,
   persistRulerSettings,
   persistStatsSettings,
@@ -83,7 +85,6 @@ import {
   type ReadingRulerSettings,
   type StatsSettings,
   type TypographySettings,
-  type ViewMode,
 } from './reader-options'
 import { isEditableTarget, readerKeyAction } from './reader-keys'
 import { reportReadingTime } from '../../lib/reading-stats'
@@ -149,6 +150,33 @@ function readerLayout(settings: TypographySettings): ReaderLayout {
     margin: settings.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
     marginInline: settings.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
     ...layoutOverrides(settings),
+  }
+}
+
+/**
+ * 存储 blob(全局层或本书覆盖层)→ 视图排版态。挂载初值与「本书单独设置」
+ * 关掉时的复原共用同一条路:缺省兜底语义必须一致,不然关掉覆盖的瞬间,同一
+ * 份全局 blob 在两个入口表现出两种排版。
+ */
+function normalizeStored(
+  stored: TypographySettings,
+  scrollModeSupported: boolean,
+): TypographySettings {
+  return {
+    originalLayout: stored.originalLayout ?? true,
+    viewMode:
+      stored.viewMode === 'scroll' && !scrollModeSupported
+        ? 'single'
+        : (stored.viewMode ?? 'single'),
+    fontSize: stored.fontSize,
+    lineHeight: stored.lineHeight,
+    fontFamily: stored.fontFamily,
+    fontWeight: stored.fontWeight,
+    pageMargin: stored.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
+    pageMarginBlock: stored.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
+    paragraphMargin: stored.paragraphMargin,
+    textIndent: stored.textIndent,
+    writingMode: stored.writingMode,
   }
 }
 
@@ -320,29 +348,21 @@ export function ReaderScreen({
   const openPanelRef = useRef<OpenPanel | null>(null)
   const storedTypography = loadTypography()
   /**
+   * 本书排版覆盖层:「本书单独设置」开着时整层优先于全局(只覆盖排版轴;
+   * 阅读背景与简繁仍是全局口味)。null = 本书跟随全局。
+   */
+  const bookStoredTypography = loadBookTypography(book.hash)
+  const effectiveTypography = bookStoredTypography ?? storedTypography
+  /**
    * 滚动形态只对可重排书籍与 PDF 存在(见 reader-adapter 的 isFixedLayoutFormat):
    * CBZ 等固定排版没有可预排的页尺寸,「滚动」档对它们是空操作。存量的
    * 「滚动」偏好在这类书上按单页起 —— 否则 UI 勾着滚动、画面却既不动也没
    * 翻页动画。只改内存里的档位,不写回用户的全局偏好(换本书就恢复)。
    */
   const scrollModeSupported = book.format === 'pdf' || !isFixedLayoutFormat(book.format)
-  const initialViewMode: ViewMode =
-    storedTypography.viewMode === 'scroll' && !scrollModeSupported
-      ? 'single'
-      : (storedTypography.viewMode ?? 'single')
   const settingsRef = useRef<TypographySettings>({
-    originalLayout: storedTypography.originalLayout ?? true,
-    viewMode: initialViewMode,
-    fontSize: storedTypography.fontSize,
-    lineHeight: storedTypography.lineHeight,
-    fontFamily: storedTypography.fontFamily,
-    fontWeight: storedTypography.fontWeight,
+    ...normalizeStored(effectiveTypography, scrollModeSupported),
     themeIndex: storedTypography.themeIndex ?? 0,
-    pageMargin: storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
-    pageMarginBlock: storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
-    paragraphMargin: storedTypography.paragraphMargin,
-    textIndent: storedTypography.textIndent,
-    writingMode: storedTypography.writingMode,
     zhConvert: storedTypography.zhConvert ?? ('none' as ZhConvertVariant),
   })
   /** True while the progress slider is being dragged or key-stepped. */
@@ -397,30 +417,17 @@ export function ReaderScreen({
    * 显式 undefined = 复位到原书排版)。themeIndex(即时换色)与
    * zhConvert(切档重开书)生命周期不同,仍是独立 state。
    */
-  const [typography, setTypography] = useState<TypographySettings>(() => ({
-    originalLayout: storedTypography.originalLayout ?? true,
-    viewMode: initialViewMode,
-    /** undefined = 读者还没动过(切到自定义排版时才会落到 18px,见
-        `materializeCustomDefaults`);面板显示与下发仍按 16 兜底。 */
-    fontSize: storedTypography.fontSize,
-    lineHeight: storedTypography.lineHeight,
-    fontFamily: storedTypography.fontFamily,
-    /**
-     * 页边距 · 左右(px)。内核没有横向边距属性,这一路由栏宽上限模拟(见
-     * reader-adapter 的 #maxInlineSize):数字越大留白越宽、栏越窄。
-     */
-    pageMargin: storedTypography.pageMargin ?? PAGE_MARGIN_INLINE_DEFAULT,
-    /** 页边距 · 上下(px):直接是 paginator 的 margin 属性。 */
-    pageMarginBlock: storedTypography.pageMarginBlock ?? PAGE_MARGIN_BLOCK_DEFAULT,
-    paragraphMargin: storedTypography.paragraphMargin,
-    textIndent: storedTypography.textIndent,
-    fontWeight: storedTypography.fontWeight,
-    writingMode: storedTypography.writingMode,
-  }))
+  const [typography, setTypography] = useState<TypographySettings>(() =>
+    normalizeStored(effectiveTypography, scrollModeSupported),
+  )
   const [zhConvert, setZhConvert] = useState<ZhConvertVariant>(
     () => storedTypography.zhConvert ?? 'none',
   )
   const [themeIndex, setThemeIndex] = useState(() => storedTypography.themeIndex ?? 0)
+  /** 本书覆盖开关:开 = 排版改动只写本书层(全局保持别的书的样子);
+      关 = 清层逃生,全局设置灌回当前视图。 */
+  const [bookOverride, setBookOverride] = useState(bookStoredTypography !== null)
+  const bookOverrideRef = useRef(bookOverride)
   const [rulerSettings, setRulerSettings] = useState<ReadingRulerSettings>(loadRulerSettings)
   /**
    * 阅读尺只吃可重排的横排正文:固定排版(PDF/CBZ)的「行」是画布上的影子
@@ -1325,10 +1332,30 @@ export function ReaderScreen({
         merged.originalLayout === false && typography.originalLayout !== false
       const next = switchingToCustom ? materializeCustomDefaults(merged) : merged
       setTypography(next)
-      persistTypography(next)
+      // 本书覆盖开着:改动只写本书层,全局偏好保持别的书的样子。
+      if (bookOverrideRef.current) persistBookTypography(book.hash, next)
+      else persistTypography(next)
       void adapterRef.current?.setLayout(readerLayout(next))
     },
-    [typography],
+    [typography, book.hash],
+  )
+
+  /** 「本书单独设置」开关:开 = 当前排版快照成本书基线;关 = 清层逃生,
+      全局设置灌回当前视图(阅读背景与简繁本来就是全局,不动)。 */
+  const setBookOverrideEnabled = useCallback(
+    (enabled: boolean): void => {
+      bookOverrideRef.current = enabled
+      setBookOverride(enabled)
+      if (enabled) {
+        persistBookTypography(book.hash, typography)
+        return
+      }
+      persistBookTypography(book.hash, null)
+      const reverted = normalizeStored(loadTypography(), scrollModeSupported)
+      setTypography(reverted)
+      void adapterRef.current?.setLayout(readerLayout(reverted))
+    },
+    [typography, book.hash, scrollModeSupported],
   )
 
   /** 屏幕常亮开关:落库 + state(生命周期 effect 即刻申请/释放)。 */
@@ -1374,7 +1401,13 @@ export function ReaderScreen({
       const option = READER_THEMES[index]
       if (option === undefined) return
       setThemeIndex(index)
-      persistTypography({ ...typography, themeIndex: index })
+      // 本书覆盖开着时,实况排版是本书层;全局 blob 以全局存储为底,只动主题
+      // —— 否则本书的排版会顺着主题切换污染全局。
+      persistTypography(
+        bookOverrideRef.current
+          ? { ...loadTypography(), themeIndex: index }
+          : { ...typography, themeIndex: index },
+      )
       void adapterRef.current?.setTheme(option.theme)
     },
     [typography],
@@ -2287,6 +2320,8 @@ export function ReaderScreen({
             {settingsTab === 'type' ? (
               <SettingsPanel
                 typography={typography}
+                bookOverride={bookOverride}
+                onBookOverrideChange={setBookOverrideEnabled}
                 themeIndex={themeIndex}
                 onThemeChange={changeTheme}
                 updateLayout={updateLayout}

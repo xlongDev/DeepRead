@@ -380,6 +380,29 @@ describe('面板开合', () => {
     expect(within(panel).getByText('第二章 灯塔')).toBeInTheDocument()
   })
 
+  it('本书单独设置:开着时排版只写本书层、全局层零写入;关掉清层回全局', async () => {
+    await renderReader()
+    fireEvent.click(screen.getByTitle('阅读设置(排版 / 显示)'))
+    const panel = await screen.findByRole('region', { name: '阅读设置' })
+    const toggle = within(panel).getByRole('switch', { name: '本书单独设置' })
+
+    // 开覆盖 → 当前排版快照进本书层;加字号落在本书层,全局键从头到尾没写过。
+    fireEvent.click(toggle)
+    fireEvent.click(within(panel).getByTitle('增大字号'))
+    const bookBlob = JSON.parse(
+      localStorage.getItem(`deepread.reader.typography.book.${BOOK.hash}`) ?? '{}',
+    ) as { fontSize?: number }
+    expect(bookBlob.fontSize).toBe(18)
+    expect(localStorage.getItem('deepread.reader.typography')).toBeNull()
+
+    // 逃生口:关开关 → 本书层删除,视图回到全局(空 = 默认 16px)。
+    fireEvent.click(toggle)
+    await waitFor(() =>
+      expect(localStorage.getItem(`deepread.reader.typography.book.${BOOK.hash}`)).toBeNull(),
+    )
+    expect(within(panel).getByText('16px')).toBeInTheDocument()
+  })
+
   it('搜索成功后把命中处交给内核画高亮,关面板后高亮保留(点命中跳页要看落点)', async () => {
     const { adapter } = await renderReader({
       searchResults: [

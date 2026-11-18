@@ -3,6 +3,7 @@ import {
   CUSTOM_TYPOGRAPHY_DEFAULTS,
   DEFAULT_STATS_SETTINGS,
   layoutOverrides,
+  loadBookTypography,
   loadPageTurnStyle,
   loadStatsSettings,
   loadTypography,
@@ -12,6 +13,7 @@ import {
   PAGE_MARGIN_BLOCK_OPTIONS,
   PAGE_MARGIN_INLINE_DEFAULT,
   PAGE_MARGIN_INLINE_OPTIONS,
+  persistBookTypography,
   persistPageTurnStyle,
   persistStatsSettings,
   persistTypography,
@@ -271,5 +273,30 @@ describe('阅读背景分组', () => {
     for (const index of indices) {
       expect(READER_THEMES[index]?.theme.name).toBeTruthy()
     }
+  })
+})
+
+describe('本书排版覆盖', () => {
+  const HASH = 'b'.repeat(64)
+
+  it('整层存取;没有覆盖层时是 null,不落全局缓存', () => {
+    expect(loadBookTypography(HASH)).toBeNull()
+    persistBookTypography(HASH, { viewMode: 'scroll', fontSize: 22 })
+    expect(loadBookTypography(HASH)).toEqual({ viewMode: 'scroll', fontSize: 22 })
+    // 两层互不串:本书层不进全局层,全局缓存也不认这本书。
+    expect(loadTypography().fontSize).toBeUndefined()
+  })
+
+  it('逃生口:persist(null) 删层,回到跟随全局且全局层原样', () => {
+    persistTypography({ fontSize: 18 })
+    persistBookTypography(HASH, { fontSize: 24 })
+    persistBookTypography(HASH, null)
+    expect(loadBookTypography(HASH)).toBeNull()
+    expect(loadTypography().fontSize).toBe(18)
+  })
+
+  it('坏 JSON 不炸,视作没有覆盖层', () => {
+    localStorage.setItem('deepread.reader.typography.book.' + HASH, '{ 这不是 json')
+    expect(loadBookTypography(HASH)).toBeNull()
   })
 })

@@ -34,6 +34,9 @@ import {
 
 interface SettingsPanelProps {
   readonly typography: TypographySettings
+  /** 本书排版覆盖:开 = 排版改动只写本书层;关 = 跟随全局。 */
+  readonly bookOverride: boolean
+  readonly onBookOverrideChange: (enabled: boolean) => void
   readonly themeIndex: number
   /** 换阅读背景:落库与内核 setTheme 在宿主回调里。 */
   readonly onThemeChange: (index: number) => void
@@ -57,6 +60,8 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({
   typography,
+  bookOverride,
+  onBookOverrideChange,
   themeIndex,
   onThemeChange,
   updateLayout,
@@ -129,6 +134,29 @@ export function SettingsPanel({
           {typography.originalLayout
             ? '行距、段间距、缩进、字重与方向都用书自己的;字体仍可自选。'
             : '按下面的档位重写这本书的排版;任一档位还能单独选回「原书」。'}
+        </p>
+      </div>
+
+      {/* 本书单独设置:引进版漫画、扫描书等确实需要另一套排版的书,单独调
+          而不动全局;关掉开关是逃生口 —— 清掉本书层,回到跟随全局。 */}
+      <div className="settings-group">
+        <button
+          type="button"
+          className={`settings-toggle${bookOverride ? ' is-on' : ''}`}
+          role="switch"
+          aria-checked={bookOverride}
+          onClick={() => onBookOverrideChange(!bookOverride)}
+          title={bookOverride ? '关闭后这本书回到跟随全局排版' : '排版改动只写进这本书'}
+        >
+          <span className="settings-toggle-label">本书单独设置</span>
+          <span className="settings-toggle-track" aria-hidden>
+            <span className="settings-toggle-thumb" />
+          </span>
+        </button>
+        <p className="settings-hint">
+          {bookOverride
+            ? '这本书的排版改动不再影响其他书(字号、边距、字体都存进本书)。'
+            : '排版跟随全局;特殊书可开启,单独调一套而不动其他书。'}
         </p>
       </div>
 

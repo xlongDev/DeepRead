@@ -416,6 +416,29 @@ export function persistTypography(patch: TypographySettings): void {
   cachedTypography = next
 }
 
+/* ---------- 本书排版覆盖(整层;关开关 = 删层逃生,回到跟随全局)。 ---------- */
+
+const BOOK_TYPOGRAPHY_PREFIX = 'deepread.reader.typography.book.'
+
+/** 本书排版覆盖;null = 本书没有覆盖层(跟随全局)。**整层**存储,不做字段
+ *  级混合:覆盖层里的「未设置」就该解释成原书值,和全局并在一起算会让两层
+ *  的 undefined 互相污染。 */
+export function loadBookTypography(bookHash: string): TypographySettings | null {
+  try {
+    const raw = localStorage.getItem(BOOK_TYPOGRAPHY_PREFIX + bookHash)
+    return raw === null ? null : (JSON.parse(raw) as TypographySettings)
+  } catch {
+    return null
+  }
+}
+
+/** null = 删除覆盖(逃生口),本书此后跟随全局。 */
+export function persistBookTypography(bookHash: string, settings: TypographySettings | null): void {
+  const key = BOOK_TYPOGRAPHY_PREFIX + bookHash
+  if (settings === null) localStorage.removeItem(key)
+  else localStorage.setItem(key, JSON.stringify(settings))
+}
+
 /* ---------- 划选翻译的目标语言(只落 localStorage)。 ---------- */
 
 const TRANSLATE_KEY = 'deepread.translate.target'
