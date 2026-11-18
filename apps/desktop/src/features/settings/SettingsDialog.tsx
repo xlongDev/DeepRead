@@ -638,6 +638,8 @@ export function SettingsDialog({
 
           {settingsTab === 'keys' && <KeybindingsSettings />}
 
+          {settingsTab === 'keys' && <PrivacySettings />}
+
           {settingsTab === 'ai' && (
             <section className="modal-section">
               <p className="modal-section-label">AI 服务(OpenAI 兼容)</p>
@@ -830,5 +832,58 @@ export function SettingsDialog({
         }}
       />
     </div>
+  )
+}
+
+/** 隐蔽阅读模式(ADR-0014):全局热键 ⌥⌘H 隐藏/恢复窗口,开关落 Rust 侧
+ *  app_settings —— 注册与注销都在 Rust,webview 只有开关语义。 */
+function PrivacySettings() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    invokeCommand('privacy.hotkey.get', undefined)
+      .then((response) => setEnabled(response.enabled))
+      .catch(() => setEnabled(false))
+  }, [])
+
+  const toggle = async (): Promise<void> => {
+    const next = !(enabled ?? false)
+    setError(null)
+    try {
+      const response = await invokeCommand('privacy.hotkey.set', { enabled: next })
+      setEnabled(response.enabled)
+    } catch (toggleError) {
+      // 注册冲突等错误如实上屏:开关状态必须等于真实生效状态。
+      setError(toAppError(toggleError).message)
+      setEnabled(false)
+    }
+  }
+
+  return (
+    <section className="modal-section">
+      <p className="modal-section-label">隐蔽阅读模式</p>
+      <div className="settings-group">
+        {isTauriRuntime() ? (
+          <label className="sync-auto-row">
+            <input
+              type="checkbox"
+              checked={enabled ?? false}
+              disabled={enabled === null}
+              onChange={() => void toggle()}
+            />
+            全局热键 ⌥⌘H 隐藏 / 恢复整个窗口(任意应用前台时都生效)
+          </label>
+        ) : (
+          <p className="ai-privacy">全局热键仅在桌面版提供。</p>
+        )}
+        {error !== null && (
+          <p className="ai-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </section>
   )
 }

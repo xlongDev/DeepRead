@@ -18,6 +18,7 @@ mod events;
 mod fonts;
 pub mod library;
 mod opds;
+mod privacy;
 mod secrets;
 pub mod state;
 pub mod storage;
@@ -74,7 +75,17 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state() == ShortcutState::Pressed {
+                        privacy::toggle_hide(app);
+                    }
+                })
+                .build(),
+        );
     // single-instance 按官方要求最先注册:第二个进程的 argv 在这里转交给
     // 首实例,进程自身随即退出(ADR-0013)。
     #[cfg(desktop)]
@@ -125,6 +136,8 @@ pub fn run() {
             app.manage(storage::Db(std::sync::Mutex::new(conn)));
             // TTS 缓存只增不减会慢慢吃满磁盘:启动 + 每 24h 按 mtime LRU 收敛。
             tts::spawn_cache_pruner(app.handle().clone());
+            // 隐蔽阅读模式(ADR-0014):库里开着就在 setup 注册全局热键。
+            privacy::register_if_enabled(app.handle());
 
             let payload = events::AppReadyPayload {
                 started_at: timestamps::rfc3339_now(),
@@ -141,8 +154,9 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
                 let show = MenuItem::with_id(app, "show", "显示 DeepRead", true, None::<&str>)?;
+                let hide = MenuItem::with_id(app, "hide", "隐藏 / 恢复窗口", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "退出 DeepRead", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&show, &quit])?;
+                let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
                 TrayIconBuilder::with_id("deepread-tray")
                     .icon(app.default_window_icon().expect("window icon").clone())
                     .tooltip("DeepRead")
@@ -150,6 +164,7 @@ pub fn run() {
                     .show_menu_on_left_click(false)
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "show" => show_main(app),
+                        "hide" => privacy::toggle_hide(app),
                         "quit" => app.exit(0),
                         _ => {}
                     })
@@ -250,6 +265,8 @@ pub fn run() {
             tts_export::tts_export_cancel,
             opds::opds_fetch,
             opds::opds_download,
+            privacy::privacy_hotkey_set,
+            privacy::privacy_hotkey_get,
             fonts::command_fonts_list,
             fonts::command_fonts_import,
             fonts::command_fonts_remove,
