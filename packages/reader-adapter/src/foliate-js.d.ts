@@ -78,7 +78,9 @@ declare module 'foliate-js/view.js' {
   export interface ViewLocation {
     reason?: string
     range?: Range
-    index: number
+    /** ⚠️ SectionProgress.getProgress 产出的 detail **没有**顶层 index —— 真实
+     *  节号在 section.current。这里声明成可选以反映运行时现实。 */
+    index?: number
     fraction?: number
     cfi?: string
     tocItem?: FoliateTocItem | null

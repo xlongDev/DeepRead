@@ -201,7 +201,8 @@ function makeProps(overrides: Partial<TtsDrawerProps> = {}): TtsDrawerProps {
     minimized: false,
     onPlayingChange: vi.fn(),
     getSectionText: vi.fn(async () => SECTION_1),
-    jumpSection: vi.fn(async () => true),
+    // 滚章返回落点节号(0 = 第二本演示书只有一节时的落点由用例覆写)
+    jumpSection: vi.fn(async () => 0),
     onHighlight: vi.fn(),
     onExpand: vi.fn(),
     onMinimize: vi.fn(),

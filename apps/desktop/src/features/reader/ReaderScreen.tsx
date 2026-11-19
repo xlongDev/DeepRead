@@ -1507,23 +1507,26 @@ export function ReaderScreen({
     goToTocItem(item)
   }
 
-  /** TTS 听书:当前 section 的纯文本(朗读起点为章首)。 */
-  const ttsGetSectionText = useCallback(async (): Promise<string> => {
+  /** TTS 听书:当前 section 的纯文本(朗读起点为章首)。`index` 缺省读当前
+   *  节号;**滚章链必须显式传** —— ref 由 relocate 更新,与 goToSection 的
+   *  返回存在竞态,读旧值会让 getSectionText 白等 2 秒挂载超时。 */
+  const ttsGetSectionText = useCallback(async (index?: number): Promise<string> => {
     const adapter = adapterRef.current
     if (!adapter) return ''
-    return (await adapter.readableText?.getSectionText(sectionIndexRef.current)) ?? ''
+    return (await adapter.readableText?.getSectionText(index ?? sectionIndexRef.current)) ?? ''
   }, [])
 
-  /** TTS 听书:按 ±1 跳转章节;越界返回 false。 */
-  const ttsJumpSection = useCallback(async (delta: number): Promise<boolean> => {
+  /** TTS 听书:按 ±1 跳转章节。返回**落点节号**(滚章链显式传递,消除 ref
+   *  竞态);null = 未动(越界 / 无适配器)。 */
+  const ttsJumpSection = useCallback(async (delta: number): Promise<number | null> => {
     const adapter = adapterRef.current
-    if (!adapter) return false
+    if (!adapter) return null
     const count = (await adapter.readableText?.getSectionCount()) ?? 0
     const next = sectionIndexRef.current + delta
-    if (next < 0 || next >= count) return false
+    if (next < 0 || next >= count) return null
     await adapter.readableText?.goToSection(next)
     sectionIndexRef.current = next
-    return true
+    return next
   }, [])
 
   /** TTS 听书:下一章的纯文本(章末预热合成用,不动阅读位置);越界返回

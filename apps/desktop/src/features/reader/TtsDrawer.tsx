@@ -199,13 +199,14 @@ interface TtsDrawerProps {
       播放交给宿主的配音条(与 TTS 会话互斥由宿主管)。 */
   readonly narrationAvailable?: boolean
   readonly onStartNarration?: () => void
-  /** Plain text of the section currently on screen. */
-  readonly getSectionText: () => Promise<string>
+  /** Plain text of the section currently on screen。`index` 是滚章后的落点
+   *  节号:滚章链必须显式传(节号 ref 与 goToSection 存在竞态)。 */
+  readonly getSectionText: (index?: number) => Promise<string>
   /** 下一章的纯文本(章末预热下一章合成用);越界或缺失返回 null。测试替身
    *  可不接 —— 不接就跳过预热,滚章行为不变。 */
   readonly getNextSectionText?: () => Promise<string | null>
-  /** 跳转章节(±1);返回 false 表示越界。 */
-  readonly jumpSection: (delta: number) => Promise<boolean>
+  /** 跳转章节(±1);返回**落点节号**,null 表示越界(未动)。 */
+  readonly jumpSection: (delta: number) => Promise<number | null>
   /** 有声书导出的整书原料(章节序号/标题/纯文本),父层经内核逐章取好。
    *  测试替身可不接 —— 导出入口对缺席自报错,不静默。 */
   readonly exportChapters?: () => Promise<readonly ExportChapterSource[]>
@@ -661,9 +662,12 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       let fromStart = opts.fromStart ?? null
       let stopAtEnd = opts.stopAtChapterEnd ?? false
       let previous = ''
-      const step = async (): Promise<void> => {
+      /** `index` 是滚章后的落点节号(jumpSection 的返回值):显式传递 ——
+       *  节号 ref 由 relocate 更新,与 goToSection 的返回存在竞态,读 ref
+       *  可能拿到上一章的旧值(读错章 + 白等 2s 挂载超时)。 */
+      const step = async (index?: number): Promise<void> => {
         if (stopFlagRef.current || sectionTokenRef.current !== token) return
-        const text = await getSectionText()
+        const text = await getSectionText(index)
         if (stopFlagRef.current || sectionTokenRef.current !== token) return
         if (text.trim() === '' || text === previous) {
           setBooting(false)
@@ -700,12 +704,12 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             stop()
             return
           }
-          void jumpSection(1).then((moved) => {
-            if (!moved) return
+          void jumpSection(1).then((next) => {
+            if (next === null) return
             if (stopFlagRef.current || sectionTokenRef.current !== token) return
             fromUnit = 0
             stopAtEnd = false
-            void step()
+            void step(next)
           })
         })
       }
@@ -938,7 +942,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       const target = current + delta
       if (target < 0) {
         void jumpSection(-1).then((moved) => {
-          if (moved) {
+          // 落点节号可以为 0(回到第一节)—— 判断必须是显式的 null 比较。
+          if (moved !== null) {
             sectionTokenRef.current += 1
             stopFlagRef.current = true
             ttsStop()
@@ -963,7 +968,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
       // 在这次点击里补上,否则 WebKit 里「点了切章没声,再点一下才有」。
       primeTtsAudio()
       void jumpSection(delta).then((moved) => {
-        if (moved && wasActive) void run({ fromUnit: 0 })
+        // 同上:落点可以为 0,不能用 truthy 判断。
+        if (moved !== null && wasActive) void run({ fromUnit: 0 })
       })
     },
     [stop, jumpSection, run],

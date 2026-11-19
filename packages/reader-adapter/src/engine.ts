@@ -120,6 +120,22 @@ export function ensureMediaOverlayActiveStyle(doc: Document, activeClass: string
 }
 
 /**
+ * relocate detail → 真实节号。foliate-js 1.0.1 的 relocate detail 由
+ * SectionProgress.getProgress 产出:**只有** section:{current,total},顶层
+ * index 运行时不存在 —— 曾经只读 detail.index,恒 undefined,TTS 的
+ * sectionIndexRef 因此从不跟随导航,听书连读从「手动翻到的章」跳回了
+ * ref 旧值 +1(表现为「滚回书籍开头」)。
+ *
+ * @internal 导出仅为单测。
+ */
+export function sectionIndexFromLocation(detail: {
+  index?: number
+  section?: { current: number }
+}): number | undefined {
+  return detail.section?.current ?? detail.index
+}
+
+/**
  * 内核 search 的 excerpt 不是字符串,是 `{pre, match, post}` 高亮三段体
  * (search.js 的 makeExcerpt)。React 拿到对象会整树崩掉 —— 渲染层只认
  * 字符串,这里拼成一行纯文本。
@@ -1092,7 +1108,9 @@ export class FoliateAdapter implements ReaderEngine {
         fraction,
         tocLabel: detail.tocItem?.label,
         location: detail.location,
-        sectionIndex: typeof detail.index === 'number' ? detail.index : undefined,
+        // 真实节号在 section.current(见 sectionIndexFromLocation 的注释):
+        // 顶层 index 运行时不存在。
+        sectionIndex: sectionIndexFromLocation(detail),
       })
       // 固定排版的当前 section index:PDF 主题重着色要靠它把「重渲染当前
       // spread」表达成 goTo({index})(内核自己解析 section → spread 与左右
