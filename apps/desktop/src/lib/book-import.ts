@@ -14,6 +14,8 @@ export interface OpenedBook {
   readonly hash: string
   readonly name: string
   readonly url: string
+  /** 书元数据的作者(金句分享卡署名用);书里没写或来源没有就是 undefined。 */
+  readonly author?: string
   /**
    * 打开后直接落到这条 CFI(笔记页「回到原文」用)。给了它就以它为准,
    * 而不是恢复上次读到的位置 —— 用户点的是某条批注,不是「继续阅读」。
@@ -119,6 +121,7 @@ export function openedBookFromLibrary(
     hash: record.hash,
     name: record.fileName,
     url: browserUrl ?? convertFileSrc(record.path),
+    ...(record.author ? { author: record.author } : {}),
     ...(cfi === undefined ? {} : { cfi }),
     ...(sectionLabel === undefined ? {} : { sectionLabel }),
   }

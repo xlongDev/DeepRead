@@ -2647,6 +2647,7 @@ export function ReaderScreen({
             spec={{
               quote: quoteCard.quote,
               bookTitle: title,
+              author: book.author,
               accent: quoteCard.accent,
               paper: READER_THEMES[themeIndex]?.theme.background ?? '#faf7f0',
               ink: READER_THEMES[themeIndex]?.theme.foreground ?? '#2b2b2b',
