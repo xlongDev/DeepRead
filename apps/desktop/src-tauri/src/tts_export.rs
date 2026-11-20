@@ -4,8 +4,8 @@
 //! (reader-core 的 `buildSpeechUnits`)产出块清单一次交付,这里逐块走
 //! edge/provider 两条既有合成路径 —— 两者都落 `tts-cache/`,所以**听过的
 //! 句子导出秒过,中断续跑天然免费**(缓存命中即跳过合成)。输出 = 用户选定
-//! 目录下的 `chNN-章节名.mp3`(MP3 帧拼接即合法流,逐章原子提交:.part 写满
-//! 才改名)+ `manifest.json`。m4b 不做(需要 ffmpeg,违反依赖纪律,见 ADR-0009)。
+//! 目录下的 `chNN-章节名.mp3`(MP3 帧拼接即合法流,头部带 ID3v2.3 标签:
+//! 书名/作者/章节/轨号;逐章原子提交:.part 写满才改名)+ `manifest.json`。m4b 不做(需要 ffmpeg,违反依赖纪律,见 ADR-0009)。
 //!
 //! 进度/取消走轮询而非事件系统:v1 的 UI(抽屉内进度 + 书架侧栏一行)轮询
 //! `tts.export.status` 每秒一次足够,省掉 EventMap 扩展与双端事件管线的全部
@@ -252,6 +252,73 @@ pub fn chapter_file_name(index: u32, title: &str) -> String {
     format!("ch{index:02}-{name}.mp3")
 }
 
+/// 纯标点/符号块读不出声 —— Edge 对这类文本不返回音频,重试无济于事,
+/// 导出时直接跳过(成片中它本来就是留白)。
+pub fn pronounceable(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
+/// ID3v2.3 文本帧:UTF-16LE + BOM 编码。v2.3 帧长是普通 32 位大端,
+/// 只有头部长度用 syncsafe(每字节 7 位)。
+fn id3_text_frame(id: &str, value: &str) -> Vec<u8> {
+    let mut payload = vec![0x01, 0xFF, 0xFE];
+    for unit in value.encode_utf16() {
+        payload.extend_from_slice(&unit.to_le_bytes());
+    }
+    payload.extend_from_slice(&[0x00, 0x00]);
+    let mut frame = Vec::with_capacity(10 + payload.len());
+    frame.extend_from_slice(id.as_bytes());
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(&payload);
+    frame
+}
+
+/// 章节文件头部的 ID3v2.3 标签(TIT2 章节 / TALB 书名 / TPE1 作者 / TRCK 轨号),
+/// 播放器按书归组显示而不是裸文件名。空值帧整个省掉。MP3 = 帧流,
+/// ID3 前缀不破坏合法性。
+pub fn id3_tag(book: &str, author: Option<&str>, chapter: &str, track: u32, total: u32) -> Vec<u8> {
+    let values = [
+        ("TIT2", chapter.to_string()),
+        ("TALB", book.to_string()),
+        ("TPE1", author.unwrap_or("").to_string()),
+        ("TRCK", format!("{track}/{total}")),
+    ];
+    let mut body = Vec::new();
+    for (id, value) in values {
+        if !value.trim().is_empty() {
+            body.extend_from_slice(&id3_text_frame(id, &value));
+        }
+    }
+    let mut tag = Vec::with_capacity(10 + body.len());
+    tag.extend_from_slice(b"ID3\x03\x00\x00");
+    tag.push(((body.len() >> 21) & 0x7f) as u8);
+    tag.push(((body.len() >> 14) & 0x7f) as u8);
+    tag.push(((body.len() >> 7) & 0x7f) as u8);
+    tag.push((body.len() & 0x7f) as u8);
+    tag.extend_from_slice(&body);
+    tag
+}
+
+/// 续跑的旧章(本功能之前导出)没有标签:文件不以 ID3 开头就在头部补一个。
+/// 整文件重写(MB 级 IO),命中即原样返回。
+fn retag_if_needed(path: &Path, tag: &[u8]) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let mut head = [0u8; 3];
+    let read = std::fs::File::open(path)?.read(&mut head)?;
+    if read == 3 && head == *b"ID3" {
+        return Ok(());
+    }
+    let existing = std::fs::read(path)?;
+    let temp = path.with_extension("retag.part");
+    {
+        let mut out = std::fs::File::create(&temp)?;
+        out.write_all(tag)?;
+        out.write_all(&existing)?;
+    }
+    std::fs::rename(&temp, path)
+}
+
 fn validate_request(request: &TtsExportStartRequest) -> Result<(), AppError> {
     if request.voice.trim().is_empty() {
         return Err(AppError::new(ErrorCode::SystemValidation, "语音不能为空"));
@@ -385,7 +452,7 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
     let mut bytes_total: u64 = 0;
     let mut manifest_chapters: Vec<serde_json::Value> = Vec::new();
 
-    for chapter in &request.chapters {
+    for (position, chapter) in request.chapters.iter().enumerate() {
         let cancelled = state
             .tasks
             .lock()
@@ -399,8 +466,25 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
         }
         let file_name = chapter_file_name(chapter.index, &chapter.title);
         let final_path = output.join(&file_name);
+        let tag = id3_tag(
+            &request.title,
+            request.author.as_deref(),
+            &chapter.title,
+            (position + 1) as u32,
+            request.chapters.len() as u32,
+        );
         let chapter_bytes = if final_path.exists() {
-            // 续跑:上一轮已提交的章按现稿计,不再重合成。
+            // 续跑:上一轮已提交的章按现稿计,不再重合成;旧文件缺标签就补上。
+            if let Err(err) = retag_if_needed(&final_path, &tag) {
+                finish(
+                    state,
+                    &book_hash,
+                    TtsExportPhase::Error,
+                    Some(format!("补写章节标签失败:{err}")),
+                )
+                .await;
+                return;
+            }
             std::fs::metadata(&final_path)
                 .map(|meta| meta.len())
                 .unwrap_or(0)
@@ -422,6 +506,9 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
                     return;
                 }
             };
+            // 标签打头:小于 BufWriter 缓冲,write 只进内存必成;磁盘真坏了
+            // 音频写入会再次报错走既有 chapter_failed 路径。
+            let _ = std::io::Write::write_all(&mut out, &tag);
             for (done, block) in chapter.blocks.iter().enumerate() {
                 if state
                     .tasks
@@ -435,21 +522,27 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
                     finish(state, &book_hash, TtsExportPhase::Cancelled, None).await;
                     return;
                 }
-                if block.trim().is_empty() {
+                if block.trim().is_empty() || !pronounceable(block) {
                     update_status(state, &book_hash, |status| status.block = (done + 1) as u32)
                         .await;
                     continue;
                 }
                 let mut audio = None;
                 let mut last_error: Option<AppError> = None;
-                for attempt in 0..2 {
+                for attempt in 0..3 {
                     match synthesize_block(&app, &base, &request, block).await {
                         Ok(bytes) => {
                             audio = Some(bytes);
                             break;
                         }
-                        Err(err) if attempt == 0 => last_error = Some(err),
-                        Err(err) => last_error = Some(err),
+                        Err(err) => {
+                            last_error = Some(err);
+                            // Edge 免费端点对整书突发会抖:退避再试,零间隔连打只会连败。
+                            if attempt + 1 < 3 {
+                                let backoff = if attempt == 0 { 1 } else { 3 };
+                                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                            }
+                        }
                     }
                 }
                 match audio {
@@ -678,6 +771,76 @@ mod tests {
                       /dev/disk1s1 482456720 402113440 80343280 84% /\n";
         assert_eq!(parse_df_available(output), Some(80_343_280 * 1024));
         assert_eq!(parse_df_available("no mount lines"), None);
+    }
+
+    #[test]
+    fn punctuation_only_blocks_are_not_pronounceable() {
+        assert!(!pronounceable("——"));
+        assert!(!pronounceable("……"));
+        assert!(!pronounceable("　"));
+        assert!(pronounceable("第496—499页。"));
+        assert!(pronounceable("单纯的概率计算其实是非常简单的。"));
+    }
+
+    /// 解出文本帧内容(0x01 旗标 + BOM + UTF-16LE + 终止符)。
+    fn decode_text_frame(payload: &[u8]) -> String {
+        assert_eq!(payload[0], 0x01, "UTF-16 编码旗标");
+        assert_eq!(&payload[1..3], &[0xFF, 0xFE], "BOM");
+        let units: Vec<u16> = payload[3..payload.len() - 2]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        String::from_utf16(&units).unwrap()
+    }
+
+    /// 走完全部帧,锁定头部 syncsafe 尺寸与帧边界。
+    fn walk_frames(tag: &[u8]) -> Vec<(String, String)> {
+        assert_eq!(&tag[..5], b"ID3\x03\x00", "v2.3 头");
+        let size = ((tag[6] as usize) << 21)
+            | ((tag[7] as usize) << 14)
+            | ((tag[8] as usize) << 7)
+            | (tag[9] as usize);
+        assert_eq!(size, tag.len() - 10, "头部尺寸与实际一致");
+        let mut frames = Vec::new();
+        let mut pos = 10;
+        while pos + 10 <= tag.len() {
+            let id = std::str::from_utf8(&tag[pos..pos + 4]).unwrap().to_string();
+            let len = u32::from_be_bytes(tag[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            frames.push((id, decode_text_frame(&tag[pos + 10..pos + 10 + len])));
+            pos += 10 + len;
+        }
+        assert_eq!(pos, tag.len(), "帧走完应正好到标签尾");
+        frames
+    }
+
+    #[test]
+    fn id3_tag_carries_book_author_and_track() {
+        let tag = id3_tag("刘嘉概率论通识讲义", Some("刘嘉"), "第1章", 1, 20);
+        let frames = walk_frames(&tag);
+        let get = |id: &str| frames.iter().find(|(k, _)| k == id).map(|(_, v)| v.clone());
+        assert_eq!(get("TIT2").as_deref(), Some("第1章"));
+        assert_eq!(get("TALB").as_deref(), Some("刘嘉概率论通识讲义"));
+        assert_eq!(get("TPE1").as_deref(), Some("刘嘉"));
+        assert_eq!(get("TRCK").as_deref(), Some("1/20"));
+        // 作者缺位:TPE1 帧整个省掉,不写空值
+        let no_author = id3_tag("书", None, "一", 1, 2);
+        assert!(walk_frames(&no_author).iter().all(|(k, _)| k != "TPE1"));
+    }
+
+    #[test]
+    fn retag_prepends_only_once() {
+        let dir = std::env::temp_dir().join(format!("deepread-retag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ch00-x.mp3");
+        std::fs::write(&path, b"\xff\xfb\x90\x00audio-bytes").unwrap();
+        let tag = id3_tag("书", None, "第一章", 1, 1);
+        retag_if_needed(&path, &tag).unwrap();
+        let tagged = std::fs::read(&path).unwrap();
+        assert!(tagged.starts_with(b"ID3"));
+        assert!(tagged.ends_with(b"audio-bytes"), "原音频一字不动跟在标签后");
+        retag_if_needed(&path, &tag).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), tagged, "已带标签不再重复加");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
