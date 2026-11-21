@@ -787,8 +787,10 @@ mod tests {
         assert_eq!(payload[0], 0x01, "UTF-16 编码旗标");
         assert_eq!(&payload[1..3], &[0xFF, 0xFE], "BOM");
         let units: Vec<u16> = payload[3..payload.len() - 2]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         String::from_utf16(&units).unwrap()
     }
