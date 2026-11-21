@@ -492,7 +492,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
     if (elapsedClockRef.current)
       elapsedClockRef.current.textContent = formatClock(total > 0 ? pos / cps : 0)
     if (remainingClockRef.current)
-      remainingClockRef.current.textContent = formatClock(total > 0 ? (total - pos) / cps : 0)
+      remainingClockRef.current.textContent = `-${formatClock(total > 0 ? (total - pos) / cps : 0)}`
   }, [])
 
   useEffect(() => {
@@ -869,6 +869,14 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
 
   const totalChars = useMemo(() => queuePosition(units, null).total, [units])
 
+  // 挂载/换章时把滑杆与时钟带到起点(0):此后唯一写手是 60ms ticker。
+  // 滑杆与时钟因此**非受控** —— 任何 React 重渲染(跨句提交、导出轮询)
+  // 都不再回盖实时值,那正是滑杆来回闪的根因:重渲染盖回句首旧值,ticker
+  // 60ms 后写回实时值,一句一闪。
+  useEffect(() => {
+    paintProgress(0)
+  }, [totalChars, paintProgress])
+
   /** TTS 高亮广播:声音移到新位置(跨句或跨词)时,把要洗的字符区间发给
    *  父层。词级等引擎报回第一个词再洗 —— 先洗整句再缩成一个词读起来
    *  是闪一下而不是高亮。
@@ -995,7 +1003,6 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
 
   const sentenceProgress = totalChars > 0 ? Math.min(1, progress / totalChars) : 0
   const cps = CHARS_PER_SECOND * settings.rate
-  const elapsed = totalChars > 0 ? progress / cps : 0
   const remaining = totalChars > 0 ? (totalChars - progress) / cps : 0
 
   // ---------- 桌面悬浮条(主窗口不在眼前时的听书界面) ----------
@@ -1460,7 +1467,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
             <p className="tts-voices-sub">
               {settings.engine === 'system'
                 ? '系统语音不支持导出;换 Edge 或云引擎后按当前音色逐句合成。'
-                : '按当前引擎与音色合成整书,输出分章 MP3 与 manifest 到所选目录;听过的句子走缓存,秒级续跑。'}
+                : '按当前引擎与音色合成整书,输出分章 MP3 与 manifest 到所选目录下按书名建的文件夹;听过的句子走缓存,秒级续跑。'}
             </p>
             {exportError !== null && <p className="tts-voices-sub">{exportError}</p>}
           </div>
@@ -1546,16 +1553,15 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
           </div>
 
           <div className="tts-progress">
-            <span ref={elapsedClockRef} className="tts-clock">
-              {formatClock(elapsed)}
-            </span>
+            <span ref={elapsedClockRef} className="tts-clock" />
+            {/* 滑杆与时钟非受控:唯一写手是 60ms ticker(见 paintProgress),
+                React 渲染不回盖实时值。 */}
             <input
               ref={seekInputRef}
               type="range"
               className="tts-seek"
               min={0}
               max={1000}
-              value={Math.round(sentenceProgress * 1000)}
               aria-label="本章播放进度"
               disabled={totalChars === 0}
               onChange={(event) => {
@@ -1563,9 +1569,7 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 seekToChar(Math.round(fraction * totalChars))
               }}
             />
-            <span ref={remainingClockRef} className="tts-clock">
-              -{formatClock(remaining)}
-            </span>
+            <span ref={remainingClockRef} className="tts-clock" />
           </div>
 
           <div className="tts-transport">

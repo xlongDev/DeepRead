@@ -231,8 +231,9 @@ pub fn estimate_bytes(chapters: &[TtsExportChapter]) -> u64 {
     chars * ESTIMATED_BYTES_PER_CHAR
 }
 
-/// 章文件名:`chNN-章节名.mp3`。清洗文件系统不安全字符,同名落空标题回退。
-pub fn chapter_file_name(index: u32, title: &str) -> String {
+/// 文件系统安全的名字:非法字符换空格、压空白、截 60 字符(章节文件与
+/// 书文件夹共用同一套清洗)。
+fn sanitize_name(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| match c {
@@ -244,12 +245,38 @@ pub fn chapter_file_name(index: u32, title: &str) -> String {
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     let cleaned = cleaned.chars().take(60).collect::<String>();
     let cleaned = cleaned.trim();
-    let name = if cleaned.is_empty() {
-        "未命名"
+    if cleaned.is_empty() {
+        "未命名".to_string()
     } else {
-        cleaned
-    };
-    format!("ch{index:02}-{name}.mp3")
+        cleaned.to_string()
+    }
+}
+
+/// 章文件名:`chNN-章节名.mp3`(书名在书文件夹与 ID3 专辑上,文件名只管排序)。
+pub fn chapter_file_name(index: u32, title: &str) -> String {
+    format!("ch{index:02}-{}.mp3", sanitize_name(title))
+}
+
+/// 书文件夹名 = 清洗后的书名;同书重导(文件夹里 manifest 的 bookHash 一致或
+/// 尚无 manifest)沿用原文件夹续跑,异书撞名才加 hash 前 6 位分家。
+fn book_folder_name(title: &str, book_hash: &str, existing_manifest: Option<&str>) -> String {
+    let base = sanitize_name(title);
+    let same_book = existing_manifest
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|manifest| {
+            manifest
+                .get("bookHash")
+                .and_then(|v| v.as_str())
+                .map(|s| s == book_hash)
+        })
+        .unwrap_or(false);
+    if same_book || existing_manifest.is_none() {
+        base
+    } else {
+        let take = book_hash.chars().count().min(6);
+        let suffix: String = book_hash.chars().take(take).collect();
+        format!("{base} ({suffix})")
+    }
 }
 
 /// 纯标点/符号块读不出声 —— Edge 对这类文本不返回音频,重试无济于事,
@@ -449,6 +476,35 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
         }
     };
     let output = std::path::PathBuf::from(&request.output_dir);
+    // 书文件夹:选中的目录下按书名再落一层,多本书不再混一地。异书撞名
+    // (文件夹里 manifest 的 bookHash 不同)才加 hash 后缀分家,同书重导
+    // 沿用原文件夹续跑。
+    let existing_manifest = std::fs::read_to_string(
+        output
+            .join(sanitize_name(&request.title))
+            .join("manifest.json"),
+    )
+    .ok();
+    let book_dir = output.join(book_folder_name(
+        &request.title,
+        &book_hash,
+        existing_manifest.as_deref(),
+    ));
+    if let Err(err) = std::fs::create_dir_all(&book_dir) {
+        finish(
+            state,
+            &book_hash,
+            TtsExportPhase::Error,
+            Some(format!("无法创建书文件夹 {}:{err}", book_dir.display())),
+        )
+        .await;
+        return;
+    }
+    // 状态里的 output_dir 从所选目录改为真实落盘的书文件夹,通知行直接可定位。
+    update_status(state, &book_hash, |status| {
+        status.output_dir = Some(book_dir.display().to_string())
+    })
+    .await;
     let mut bytes_total: u64 = 0;
     let mut manifest_chapters: Vec<serde_json::Value> = Vec::new();
 
@@ -465,7 +521,7 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
             return;
         }
         let file_name = chapter_file_name(chapter.index, &chapter.title);
-        let final_path = output.join(&file_name);
+        let final_path = book_dir.join(&file_name);
         let tag = id3_tag(
             &request.title,
             request.author.as_deref(),
@@ -489,7 +545,7 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
                 .map(|meta| meta.len())
                 .unwrap_or(0)
         } else {
-            let part_path = output.join(format!("{file_name}.part"));
+            let part_path = book_dir.join(format!("{file_name}.part"));
             let mut chapter_bytes: u64 = 0;
             let mut chapter_failed: Option<String> = None;
             let file = std::fs::File::create(&part_path);
@@ -639,6 +695,8 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
 
     let manifest = serde_json::json!({
         "version": 1,
+        // 书文件夹的归属判据:同书名异书导出时靠它分家。
+        "bookHash": book_hash,
         "book": { "title": request.title, "author": request.author },
         "engine": request.engine,
         "voice": request.voice,
@@ -646,8 +704,8 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
         "createdAt": crate::timestamps::rfc3339_now(),
         "chapters": manifest_chapters,
     });
-    let manifest_path = output.join("manifest.json");
-    let temp = output.join("manifest.json.part");
+    let manifest_path = book_dir.join("manifest.json");
+    let temp = book_dir.join("manifest.json.part");
     let manifest_bytes = serde_json::to_vec_pretty(&manifest);
     match manifest_bytes
         .map_err(|err| err.to_string())
@@ -938,4 +996,26 @@ mod tests {
         };
         assert!(validate_request(&bad_speed).is_err());
     }
+}
+
+#[test]
+fn book_folders_derive_from_title_and_split_on_collision() {
+    // 无 manifest(新目录/中断过没写到 manifest)→ 纯书名,续跑落在原地。
+    assert_eq!(
+        book_folder_name("刘嘉概率论通识讲义", "abc123def", None),
+        "刘嘉概率论通识讲义"
+    );
+    // 同书重导(manifest 同 hash)→ 沿用原文件夹,不换地方。
+    assert_eq!(
+        book_folder_name("书", "abc123def", Some(r#"{"bookHash":"abc123def"}"#)),
+        "书"
+    );
+    // 异书撞名 → hash 前 6 位分家。
+    assert_eq!(
+        book_folder_name("书", "deadbeefcafe", Some(r#"{"bookHash":"abc123def"}"#)),
+        "书 (deadbe)"
+    );
+    // 清洗规则与章节文件名同源:非法字符、空标题。
+    assert_eq!(book_folder_name("a/b:c", "h1", None), "a b c");
+    assert_eq!(book_folder_name("  ", "h1", None), "未命名");
 }
