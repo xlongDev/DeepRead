@@ -17,11 +17,13 @@
   gap: 2px;
   padding: 4px 8px 4px 6px;
   border-radius: var(--radius-full);
-  background: var(--reader-panel, var(--color-surface-glass));
+  /* 液态玻璃,与导出浮条同家族:sheen 高光叠半透纸色底,--glass-blur-heavy
+     采背后内容(桌面悬浮条采的是真实桌面),--glass-wallpaper-edge 八层 rim
+     代替 border + 投影。纸色仍随阅读主题走,深夜桌面不顶白灯。 */
+  background: var(--glass-wallpaper-sheen), var(--reader-panel, var(--color-surface-glass));
   backdrop-filter: var(--glass-blur-heavy);
   -webkit-backdrop-filter: var(--glass-blur-heavy);
-  border: 1px solid color-mix(in srgb, var(--reader-fg, var(--color-text-primary)) 12%, transparent);
-  box-shadow: var(--shadow-floating);
+  box-shadow: var(--glass-wallpaper-edge);
   color: var(--reader-fg, var(--color-text-primary));
   overflow: hidden;
 }
@@ -31,6 +33,8 @@
     background: var(--color-surface);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    /* 玻璃退场但边界留一条发丝(reduced-transparency 的既定语义)。 */
+    box-shadow: inset 0 0 0 1px var(--color-border);
   }
 }
 
@@ -94,9 +98,8 @@
   gap: var(--space-8);
   min-height: 44px;
   padding: 5px;
-  /* 边缘交给 --glass-edge 画(内含 0 0 0 1px 发丝),不再叠一层 border box。 */
-  border: 0;
-  box-shadow: var(--glass-edge);
+  /* 边线/rim 由 .tts-mini 基座统一画(液态玻璃 rim),这里不再覆盖 ——
+     两个宿主的胶囊必须长得一样。 */
   max-width: min(560px, calc(100vw - 32px));
   animation: scale-pop var(--duration-base) var(--ease-emphasized);
 }

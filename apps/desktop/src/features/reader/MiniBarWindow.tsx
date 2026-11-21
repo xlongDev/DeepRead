@@ -61,6 +61,9 @@ export function MiniBarWindow() {
   useEffect(() => {
     if (colorScheme === undefined) return
     document.documentElement.dataset.theme = colorScheme
+    // 壁纸玻璃 token(sheen/rim)挂在 data-app-theme 世界里:暗色阅读主题
+    // 不补这颗,rim/sheen 会永远用亮色世界的字面量,暗玻璃上白边发亮。
+    document.documentElement.dataset.appTheme = colorScheme === 'dark' ? 'dark' : 'pure-white'
   }, [colorScheme])
 
   useEffect(
@@ -87,10 +90,13 @@ export function MiniBarWindow() {
       })
   }
 
-  /** 拖动窗口:按在按钮上不算,且要挪过 4px 才交棒。 */
+  /** 拖动窗口:控制键(上一句/播放/书内跳转/收起/关闭)不算把手,挪过 4px
+   *  才交棒。信息区(tts-mini-open)虽是 button 但就是把手 —— 否则整条胶囊
+   *  几乎全是按钮,无处可拖;按住没挪过的松手仍是 click(回到阅读)。 */
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0) return
-    if ((event.target as HTMLElement).closest('button') !== null) return
+    const hit = (event.target as HTMLElement).closest('button')
+    if (hit !== null && !hit.classList.contains('tts-mini-open')) return
     const from = { x: event.clientX, y: event.clientY }
     let dragging = false
     const cleanup = (): void => {
