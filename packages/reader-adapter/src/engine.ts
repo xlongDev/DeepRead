@@ -1822,6 +1822,22 @@ export class FoliateAdapter implements ReaderEngine {
   }
 
   /**
+   * 离线整节纯文本:内核 createDocument 直接解析节资源,不经渲染器挂载。
+   * 渲染器只挂当前阅读位置附近一两节,逐节 {@link getSectionText} 会让
+   * 挂载窗口外的章节白等 2s 再回退成在屏文本(整书导出曾因此把全书导成
+   * 同一段音频)—— 导出原料必须走这里。四种格式(TXT/MD/PDF/EPUB/MOBI)
+   * 的 sections 都有 createDocument;个别没有时退回挂载读取。
+   */
+  async getSectionTextOffline(index: number): Promise<string> {
+    const section = this.#requireView().book.sections[index]
+    if (typeof section?.createDocument !== 'function') {
+      return this.getSectionText(index)
+    }
+    const doc = await section.createDocument()
+    return doc?.body ? walkSectionText(doc.body).text : ''
+  }
+
+  /**
    * 已有划线的选区框(宿主窗口坐标系)—— 编辑模式划词工具的锚点。
    *
    * 点中的划线没有伴随文本选区(内核只报 `show-annotation` 的 CFI),工具条

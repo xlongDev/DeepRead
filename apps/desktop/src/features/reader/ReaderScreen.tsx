@@ -2712,7 +2712,9 @@ export function ReaderScreen({
               getNextSectionText={ttsGetNextSectionText}
               jumpSection={ttsJumpSection}
               exportChapters={async () => {
-                // 整书导出原料:逐章取纯文本(内核域方法),标题 v1 用序号名。
+                // 整书导出原料:逐章**离线**取纯文本(createDocument 解析,
+                // 不经渲染器挂载)—— 挂载窗口外的节用 getSectionText 只会
+                // 读到在屏那章,全书会导成同一段音频。
                 const adapter = adapterRef.current
                 const readable = adapter?.readableText
                 if (!readable) return []
@@ -2722,7 +2724,7 @@ export function ReaderScreen({
                   chapters.push({
                     index,
                     title: `第${index + 1}章`,
-                    text: await readable.getSectionText(index),
+                    text: await readable.getSectionTextOffline(index),
                   })
                 }
                 return chapters

@@ -177,6 +177,11 @@ export interface EngineReadableText {
   getSectionText(index?: number): Promise<string>
   /** 按章节序号跳转,并等目标 section 实际挂载(后续 getSectionText 读到对的章)。 */
   goToSection(index: number): Promise<void>
+  /** 离线整节纯文本(内核 createDocument 解析节资源,不经渲染器挂载)。
+   *  渲染器只挂当前阅读位置附近一两节,逐节 getSectionText 会让挂载窗口外的
+   *  章节白等超时再回退成在屏文本 —— 整书导出原料必须走这里。
+   *  个别格式没有离线解析时实现退回 getSectionText(慢,但对在屏节仍正确)。 */
+  getSectionTextOffline(index: number): Promise<string>
 }
 
 /** TXT/MD 直修数据面。 */

@@ -69,6 +69,9 @@ export class FakeFoliateAdapter {
   readonly getSourceText = vi.fn<() => string | null>()
   readonly getSectionCount = vi.fn<() => Promise<number>>()
   readonly getSectionText = vi.fn<(index?: number) => Promise<string>>()
+  /** 离线整节取文(真内核 createDocument):假件里与 getSectionText 同源,
+   *  但独立成 mock,测试可分辨导出走的哪条路。 */
+  readonly getSectionTextOffline = vi.fn<(index: number) => Promise<string>>()
   readonly getBookCharStats = vi.fn<() => Promise<BookCharStats | null>>()
   readonly goTo = vi.fn<(location: ReadingLocation) => Promise<void>>()
   readonly goToSection = vi.fn<(index: number) => Promise<void>>()
@@ -155,6 +158,7 @@ export class FakeFoliateAdapter {
     this.getSourceText.mockReturnValue(options.sourceText ?? null)
     this.getSectionCount.mockResolvedValue(sections.length)
     this.getSectionText.mockImplementation(async (index = 0) => sections[index] ?? '')
+    this.getSectionTextOffline.mockImplementation(async (index) => sections[index] ?? '')
     this.getBookCharStats.mockResolvedValue(options.charStats ?? null)
     this.goTo.mockResolvedValue(undefined)
     this.goToSection.mockResolvedValue(undefined)
