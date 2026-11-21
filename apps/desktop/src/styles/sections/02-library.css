@@ -36,7 +36,9 @@
 }
 
 .library.is-sidebar-hidden {
-  grid-template-columns: 64px minmax(0, 1fr);
+  /* 收起宽度走同一变量:导出浮条等内容列居中的 fixed 元素与网格同源,
+     不会在侧栏收起时中心错位。 */
+  --sidebar-w: 64px;
 }
 
 /* 深色世界把浅色带压到 38%:同一块浅色叠在暗底上放大得比亮底厉害,52% 在

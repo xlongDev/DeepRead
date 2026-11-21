@@ -1311,28 +1311,189 @@
   flex-shrink: 0;
 }
 
-/* 有声书导出任务的浮条(plan B8):任务在 Rust 后台跑,书架跟进进度。 */
+/* 有声书导出任务的浮条(plan B8):任务在 Rust 后台跑,书架用玻璃胶囊跟进。
+   与 .shelf-bulk 同一家族(同配方、同胶囊几何),默认锚在内容列**右下角**
+   (--sidebar-w 由 .library 网格定义、收起态 64px、窄屏 0px,三处同源)。
+   运行中默认收成一行(百分比 + 底边发丝进度),目录/错误等长信息在折叠区,
+   终态默认展开。可最小化成芯片、可拖拽记位,终态可关闭。 */
 .tts-export-bar {
   position: fixed;
-  left: 50%;
-  bottom: 20px;
-  transform: translateX(-50%);
+  /* 右缘对齐内容列,留 20px 呼吸:胶囊宽随状态变(芯片↔展开),右缘不动、
+     左缘伸缩 —— 角落语义稳定。 */
+  right: calc(var(--sidebar-w, 0px) + 20px);
+  bottom: max(20px, env(safe-area-inset-bottom));
+  /* 拖拽偏移走 --bar-dx/--bar-dy(JSX 内联):拖拽只动变量,不动布局属性。
+     translate 独立属性与 scale-pop 的 transform 互不覆盖
+     (同 .tts-mini-float 的教训)。 */
+  translate: var(--bar-dx, 0px) var(--bar-dy, 0px);
   z-index: var(--z-overlay, 60);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 14px;
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-lg, 0 8px 30px rgb(0 0 0 / 0.18));
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(640px, calc(100vw - var(--sidebar-w, 0px) - 48px));
   font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
 }
 
-.tts-export-bar-row {
+.tts-export-pill {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 100%;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-floating);
+  color: var(--color-text-primary);
+  cursor: grab;
+  user-select: none;
+  animation: scale-pop var(--duration-base) var(--ease-emphasized);
+}
+
+.tts-export-pill:active {
+  cursor: grabbing;
+}
+
+/* 最小化芯片:一颗玻璃药丸,点开还原;位置仍受整条 bar 的拖拽偏移。 */
+.tts-export-pill.is-mini {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 8px;
+  cursor: pointer;
+}
+
+.tts-export-pill.is-mini:active {
+  cursor: grabbing;
+}
+
+.tts-export-pill-mini-text {
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.tts-export-pill-row {
   display: flex;
   align-items: center;
-  gap: var(--space-8);
+  gap: 8px;
+  min-height: 26px;
+}
+
+.tts-export-pill-state {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+
+/* 运行中的信号是安静的实心点 + 底边发丝进度,不是转圈(仓库先例:
+   06-annotations 的「安静进度信号」)。 */
+.tts-export-pill-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
+.tts-export-pill[data-phase='error'] .tts-export-pill-state {
+  color: var(--color-danger);
+}
+
+.tts-export-pill[data-phase='cancelled'] .tts-export-pill-state {
+  color: var(--color-text-tertiary);
+}
+
+.tts-export-pill-text {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tts-export-pill-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.tts-export-pill-toggle:hover {
+  background: color-mix(in srgb, var(--color-text-tertiary) 12%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.tts-export-pill-toggle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tts-export-pill-toggle:disabled:hover {
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.tts-export-pill-toggle svg {
+  transition: rotate var(--duration-base) var(--ease-emphasized);
+}
+
+/* 展开态箭头朝上(收上去),收起态朝下(下面还有内容)—— 标准手风琴语义。 */
+.tts-export-pill:not([data-collapsed]) .tts-export-pill-toggle svg {
+  rotate: 180deg;
+}
+
+/* 折叠区:grid 0fr/1fr 收放高度(内容 overflow hidden),不动画布局属性;
+   data-motion=reduce 时 --duration-base 已是 0ms,折叠照常瞬时可达。 */
+.tts-export-pill-detail-clip {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--duration-base) var(--ease-emphasized);
+}
+
+.tts-export-pill[data-collapsed] .tts-export-pill-detail-clip {
+  grid-template-rows: 0fr;
+}
+
+.tts-export-pill-detail {
+  overflow: hidden;
+  min-height: 0;
+  /* 竖向间距放 margin 不放 padding:0fr 收起时 padding 会以 ~2px 残留在
+     轨道里(探针实测),margin 不参与轨道最小尺寸,收到才是真的 0。 */
+  margin-top: 2px;
+  padding: 0 8px 0 38px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-2xs);
+  word-break: break-all;
+  opacity: 1;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.tts-export-pill[data-collapsed] .tts-export-pill-detail {
+  opacity: 0;
+  margin-top: 0;
+}
+
+/* 运行中的底边发丝进度:与 .tts-mini 家族同一签名,accent 填充。 */
+.tts-export-pill-track {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+.tts-export-pill-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width var(--duration-slow) var(--ease-emphasized);
 }
 
 /* OPDS 书源抽屉(plan B9.2):沿用 sync-drawer 骨架,条目列表是增量。 */

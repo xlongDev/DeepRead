@@ -1437,7 +1437,8 @@ export const TtsDrawer = forwardRef<TtsDrawerHandle, TtsDrawerProps>(function Tt
                 <span>
                   {exportStatus.phase === 'running' &&
                     `导出中:第 ${exportStatus.chapter + 1} 章 · ${exportStatus.block}/${exportStatus.totalBlocks} 块 · ${(exportStatus.bytes / 1024 / 1024).toFixed(1)} MB`}
-                  {exportStatus.phase === 'done' && '导出完成,manifest 已写入所选目录。'}
+                  {exportStatus.phase === 'done' &&
+                    `导出完成,manifest 已写入 ${exportStatus.outputDir ?? '所选目录'}。`}
                   {exportStatus.phase === 'error' && `导出失败:${exportStatus.error ?? '未知错误'}`}
                   {exportStatus.phase === 'cancelled' && '已取消:已完成章节保留,再点导出即续跑。'}
                 </span>

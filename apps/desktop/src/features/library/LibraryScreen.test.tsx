@@ -19,7 +19,8 @@ import {
   type LibrarySearchResponse,
   type NoteEntry,
 } from '@deepread/shared'
-import { LibraryScreen } from './LibraryScreen'
+import { exportBarClampShift, LibraryScreen } from './LibraryScreen'
+import type { TtsExportTaskEntry, TtsExportTaskStatus } from '../../lib/tts-export'
 import { APP_THEME_CHOICES } from './shelf-view'
 import { invokeCommand, listenEvent } from '../../lib/ipc'
 import { readCachedCover } from '../../lib/cover-store'
@@ -2132,5 +2133,205 @@ describe('自定义集合', () => {
     })
     // 集合是组织视图:书还在架上。
     expect(document.querySelectorAll('.book-card')).toHaveLength(BOOKS.length)
+  })
+})
+
+describe('LibraryScreen 有声书导出浮条', () => {
+  function exportTask(overrides: Partial<TtsExportTaskStatus> = {}): TtsExportTaskEntry {
+    return {
+      bookHash: 'hash-1',
+      status: {
+        phase: 'done',
+        chapter: 19,
+        block: 20,
+        totalBlocks: 20,
+        bytes: 3_100_000,
+        error: null,
+        outputDir: '/Users/x/Downloads',
+        finishedAt: '2026-11-21T12:00:00Z',
+        ...overrides,
+      },
+    }
+  }
+
+  function seedExportTask(task: TtsExportTaskEntry): void {
+    const standard = invokeCommandMock.getMockImplementation()!
+    invokeCommandMock.mockImplementation((command, request) =>
+      command === 'tts.export.status'
+        ? Promise.resolve({ tasks: [task] })
+        : standard(command, request),
+    )
+  }
+
+  it('终态浮条可关闭,重跑(新 finishedAt)自动回来', async () => {
+    seedExportTask(exportTask())
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} />)
+    const pill = await waitFor(() => {
+      const el = document.querySelector('.tts-export-pill')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(pill.textContent).toContain('导出完成')
+    expect(pill.textContent).toContain('/Users/x/Downloads')
+
+    // 关闭 → 胶囊离场( Rust 注册表还在,前端不再渲染 )。
+    fireEvent.click(screen.getByRole('button', { name: '关闭导出通知' }))
+    await waitFor(() => expect(document.querySelector('.tts-export-pill')).toBeNull())
+
+    // 重跑完成:新 finishedAt → 通知回来,不受旧关闭影响。
+    seedExportTask(exportTask({ finishedAt: '2026-11-21T13:00:00Z' }))
+    await waitFor(() => expect(document.querySelector('.tts-export-pill')).not.toBeNull(), {
+      timeout: 4000,
+    })
+  })
+
+  it('可最小化成芯片、点芯片还原;运行中芯片带百分比', async () => {
+    seedExportTask(
+      exportTask({
+        phase: 'running',
+        block: 3,
+        totalBlocks: 10,
+        bytes: 500_000,
+        outputDir: null,
+        finishedAt: null,
+      }),
+    )
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} />)
+    const pill = await waitFor(() => {
+      const el = document.querySelector('.tts-export-pill:not(.is-mini)')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    // 运行中默认收起(折叠区 0 高由 CSS 管),但「缩小」按钮在场。
+    expect(pill.textContent).toContain('导出中 · 30%')
+
+    fireEvent.click(screen.getByRole('button', { name: '缩小导出通知条' }))
+    const chip = await screen.findByRole('button', { name: '恢复导出进度显示(当前 30%)' })
+    expect(document.querySelector('.tts-export-pill:not(.is-mini)')).toBeNull()
+    expect(chip.textContent).toContain('30%')
+
+    // 点芯片还原成完整胶囊。
+    fireEvent.click(chip)
+    expect(document.querySelector('.tts-export-pill:not(.is-mini)')).not.toBeNull()
+
+    // 最小化令牌随 finishedAt:终态到达后芯片自动让位给完整通知。
+    fireEvent.click(screen.getByRole('button', { name: '缩小导出通知条' }))
+    seedExportTask(exportTask())
+    await waitFor(
+      () => expect(document.querySelector('.tts-export-pill:not(.is-mini)')).not.toBeNull(),
+      { timeout: 4000 },
+    )
+  })
+
+  it('芯片可拖动:偏移写入 CSS 变量,拖完松手不误触还原', async () => {
+    seedExportTask(
+      exportTask({
+        phase: 'running',
+        block: 4,
+        totalBlocks: 10,
+        bytes: 400_000,
+        outputDir: null,
+        finishedAt: null,
+      }),
+    )
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: '缩小导出通知条' }))
+    const chip = await screen.findByRole('button', { name: /恢复导出进度显示/ })
+    const bar = document.querySelector('.tts-export-bar') as HTMLElement
+
+    // 拖 60px:偏移落到 --bar-dx(chip 是 button 自己就是把手)。
+    fireEvent.pointerDown(chip, { pointerId: 1, clientX: 100, clientY: 100, button: 0 })
+    fireEvent.pointerMove(chip, { pointerId: 1, clientX: 160, clientY: 100 })
+    fireEvent.pointerUp(chip, { pointerId: 1 })
+    expect(bar.style.getPropertyValue('--bar-dx')).toBe('60px')
+
+    // 松手后的 click 是拖拽的余波,不是「点开还原」。
+    fireEvent.click(chip)
+    expect(document.querySelector('.tts-export-pill.is-mini')).not.toBeNull()
+
+    // 纯点击(无拖拽位移)才还原。
+    fireEvent.pointerDown(chip, { pointerId: 2, clientX: 160, clientY: 100, button: 0 })
+    fireEvent.pointerUp(chip, { pointerId: 2 })
+    fireEvent.click(chip)
+    expect(document.querySelector('.tts-export-pill.is-mini')).toBeNull()
+  })
+
+  it('点取消立即显示「取消中…」并禁用按钮,轮询见到终态后落为「已取消」', async () => {
+    // 先落标准后端,否则 X 触发的 tts.export.cancel 会打进空 mock 的 undefined。
+    mockBackend(BOOKS)
+    seedExportTask(
+      exportTask({
+        phase: 'running',
+        block: 3,
+        totalBlocks: 10,
+        bytes: 300_000,
+        outputDir: null,
+        finishedAt: null,
+      }),
+    )
+    render(<LibraryScreen onOpenBook={vi.fn()} onOpenParallel={vi.fn()} />)
+    await screen.findByRole('button', { name: '取消导出' })
+    expect(document.querySelector('.tts-export-pill-text')).toHaveTextContent('导出中 · 30%')
+
+    // 点击即乐观反馈:文字换「取消中…」,X 禁用防连点。
+    fireEvent.click(screen.getByRole('button', { name: '取消导出' }))
+    const x = screen.getByRole('button', { name: '取消导出' })
+    expect(document.querySelector('.tts-export-pill-text')).toHaveTextContent('取消中…')
+    expect(x).toBeDisabled()
+
+    // 轮询带回 cancelled 终态 → 落为「已取消」,取消标记被摘(关闭键可用)。
+    seedExportTask(
+      exportTask({
+        phase: 'cancelled',
+        block: 6,
+        totalBlocks: 10,
+        bytes: 600_000,
+        outputDir: null,
+        finishedAt: '2026-11-21T23:00:00Z',
+      }),
+    )
+    await waitFor(
+      () =>
+        expect(document.querySelector('.tts-export-pill-text')).toHaveTextContent('已取消(可续跑)'),
+      { timeout: 4000 },
+    )
+    expect(screen.getByRole('button', { name: '关闭导出通知' })).not.toBeDisabled()
+  })
+})
+
+describe('exportBarClampShift(浮条夹回视口)', () => {
+  const vw = 1280
+  const vh = 900
+
+  it('界内不动', () => {
+    expect(exportBarClampShift({ left: 600, right: 900, top: 800, bottom: 860 }, vw, vh)).toEqual({
+      dx: 0,
+      dy: 0,
+    })
+  })
+
+  it('芯片贴右缘后展开变宽:右越界向左拉回', () => {
+    // 芯片 68px 贴到右缘(右边距 8),展开成 400px 胶囊 → 右越界 140px。
+    expect(exportBarClampShift({ left: 1012, right: 1412, top: 800, bottom: 860 }, vw, vh)).toEqual(
+      { dx: -140, dy: 0 },
+    )
+  })
+
+  it('左/上越界向右下推回,双轴各自独立', () => {
+    expect(exportBarClampShift({ left: 2, right: 200, top: 4, bottom: 40 }, vw, vh)).toEqual({
+      dx: 6,
+      dy: 4,
+    })
+    expect(exportBarClampShift({ left: 0, right: 100, top: 0, bottom: 30 }, vw, vh)).toEqual({
+      dx: 8,
+      dy: 8,
+    })
+  })
+
+  it('底越界向上收', () => {
+    expect(exportBarClampShift({ left: 600, right: 900, top: 880, bottom: 920 }, vw, vh)).toEqual({
+      dx: 0,
+      dy: -28,
+    })
   })
 })

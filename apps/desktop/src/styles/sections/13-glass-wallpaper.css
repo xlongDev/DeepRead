@@ -162,8 +162,9 @@ html[data-background]:not([data-background='none']) .command-input {
   background: var(--surface-sunk);
 }
 
-/* 批量操作条:浮在书架上的一条玻璃。 */
-html[data-background]:not([data-background='none']) .shelf-bulk:not(.is-hidden) {
+/* 批量操作条 / 有声书导出条:浮在书架上的玻璃胶囊(同一家族同一配方)。 */
+html[data-background]:not([data-background='none'])
+  :is(.shelf-bulk:not(.is-hidden), .tts-export-pill) {
   background: var(--glass-wallpaper-sheen), var(--glass-wallpaper-bg);
   backdrop-filter: var(--glass-wallpaper-filter);
   -webkit-backdrop-filter: var(--glass-wallpaper-filter);

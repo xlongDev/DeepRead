@@ -529,6 +529,7 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
                 }
                 let mut audio = None;
                 let mut last_error: Option<AppError> = None;
+                let mut block_cancelled = false;
                 for attempt in 0..3 {
                     match synthesize_block(&app, &base, &request, block).await {
                         Ok(bytes) => {
@@ -539,11 +540,40 @@ async fn run_export(app: tauri::AppHandle, book_hash: String, request: TtsExport
                             last_error = Some(err);
                             // Edge 免费端点对整书突发会抖:退避再试,零间隔连打只会连败。
                             if attempt + 1 < 3 {
+                                // 取消旗标在重试空档同样生效:退避 + 再合成的
+                                // 空档里被点取消,不该等下一次网络往返才看见。
+                                let cancelled = state
+                                    .tasks
+                                    .lock()
+                                    .await
+                                    .get(&book_hash)
+                                    .map(|task| task.flag.load(Ordering::Relaxed))
+                                    .unwrap_or(false);
+                                if cancelled {
+                                    block_cancelled = true;
+                                    break;
+                                }
                                 let backoff = if attempt == 0 { 1 } else { 3 };
                                 tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                                let cancelled = state
+                                    .tasks
+                                    .lock()
+                                    .await
+                                    .get(&book_hash)
+                                    .map(|task| task.flag.load(Ordering::Relaxed))
+                                    .unwrap_or(false);
+                                if cancelled {
+                                    block_cancelled = true;
+                                    break;
+                                }
                             }
                         }
                     }
+                }
+                if block_cancelled {
+                    // 与块间取消同待遇:终态落 Cancelled,.part 留盘无害。
+                    finish(state, &book_hash, TtsExportPhase::Cancelled, None).await;
+                    return;
                 }
                 match audio {
                     Some(bytes) => {

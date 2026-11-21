@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { flushSync } from 'react-dom'
-import { BookOpenText, Plus } from '@phosphor-icons/react'
+import { BookOpenText, CaretDown, Check, Minus, Pause, Plus, X } from '@phosphor-icons/react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
@@ -89,6 +97,41 @@ const coverAttempted = new Set<string>()
 /** 元数据已处理过的书:格式不带元数据(txt/md/fb2/cbz)、或已经解析并回写完毕。 */
 const metaAttempted = new Set<string>()
 const META_FORMATS: readonly string[] = ['epub', 'mobi', 'azw3', 'pdf']
+
+/** 导出浮条拖拽位置的记位键(plan B8 浮条)。 */
+const EXPORT_BAR_POS_KEY = 'deepread.library.exportBarPos'
+
+/** 把浮条矩形夹回视口(8px 边距)所需的位移;已在界内则两轴都不动。
+ *  纯函数:@internal 导出仅为单测。芯片贴边后点开还原时,胶囊以同一锚点
+ *  变宽——靠它把越界拉回来(拖拽时的钳制只对当时尺寸负责)。 */
+export function exportBarClampShift(
+  r: { left: number; right: number; top: number; bottom: number },
+  vw: number,
+  vh: number,
+): { dx: number; dy: number } {
+  const dx = r.left < 8 ? 8 - r.left : r.right > vw - 8 ? vw - 8 - r.right : 0
+  const dy = r.top < 8 ? 8 - r.top : r.bottom > vh - 8 ? vh - 8 - r.bottom : 0
+  return { dx, dy }
+}
+
+/** 读回浮条拖拽偏移;越界/坏 JSON 一律回默认居中。 */
+function readExportBarPos(): { x: number; y: number } {
+  try {
+    const raw = localStorage.getItem(EXPORT_BAR_POS_KEY)
+    if (raw === null) return { x: 0, y: 0 }
+    const pos = JSON.parse(raw) as { x?: number; y?: number }
+    const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    return {
+      // 右下角锚点:x 负 = 向左拖;拖拽时另有视口钳制,这里只防坏数据。
+      x: clamp(pos.x ?? 0, -(vw - 120), 12),
+      y: clamp(pos.y ?? 0, -vh + 80, 8),
+    }
+  } catch {
+    return { x: 0, y: 0 }
+  }
+}
 
 /** 这本书还欠元数据:判据是「还有字段空着」,用户手改过的字段不该被覆盖。 */
 function needsMetaFor(book: ShelfBook): boolean {
@@ -398,12 +441,134 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
   /** 有声书导出任务(plan B8):任务在 Rust 后台跑,回书架后仍要看到进度,
    *  所以书架侧常驻轮询;终端态留在 Rust 注册表里,结果一直可查。 */
   const [exportTasks, setExportTasks] = useState<readonly TtsExportTaskEntry[]>([])
+  /** 乐观取消:点 X 即显示「取消中…」,不等下一次轮询见到终态;
+   *  轮询带回终态时由 tick 清标记,任务重跑不会被旧标记污染。 */
+  const [exportCancelling, setExportCancelling] = useState<Record<string, boolean>>({})
+  /** 导出胶囊折叠覆盖:不写走默认(运行中收起、终态展开),点 chevron 写死。 */
+  const [exportCollapse, setExportCollapse] = useState<Record<string, boolean>>({})
+  /** 终态关闭 / 最小化:hash → 当时的运行令牌(finishedAt,运行中为
+   *  'running')。重跑产生新令牌,旧关闭/芯片自动失效、通知自然回来。 */
+  const [exportDismissed, setExportDismissed] = useState<Record<string, string>>({})
+  const [exportMinimized, setExportMinimized] = useState<Record<string, string>>({})
+  /** 浮条拖拽偏移(相对默认居中锚点),localStorage 记位。 */
+  const [exportBarPos, setExportBarPosState] = useState(readExportBarPos)
+  const exportBarPosRef = useRef(exportBarPos)
+  const setExportBarPos = (pos: { x: number; y: number }): void => {
+    exportBarPosRef.current = pos
+    setExportBarPosState(pos)
+  }
+  const exportBarRef = useRef<HTMLOutputElement | null>(null)
+  const exportDragRef = useRef<{
+    px: number
+    py: number
+    ox: number
+    oy: number
+    xMin: number
+    xMax: number
+    yMin: number
+    yMax: number
+  } | null>(null)
+  const exportDragMoved = useRef(false)
+
+  /** 浮条拖拽:按下记起点与视口钳制边界,移动更新共享偏移,抬起记位。
+   *  事件挂在各 pill 上,但移动的是整条 bar(一个偏移,多 pill 同步)。 */
+  const onExportBarPointerDown = (e: ReactPointerEvent<HTMLElement>): void => {
+    if (e.button !== 0) return
+    // 只放过内部的动作按钮;芯片(is-mini)本身是 button 且就是拖拽把手,
+    // closest 命中自己时必须继续,否则缩小后永远拖不动。
+    const button = (e.target as HTMLElement).closest('button')
+    if (button !== null && button !== e.currentTarget && e.currentTarget.contains(button)) {
+      return
+    }
+    const bar = exportBarRef.current
+    if (!bar) return
+    const r = bar.getBoundingClientRect()
+    const { x, y } = exportBarPosRef.current
+    exportDragRef.current = {
+      px: e.clientX,
+      py: e.clientY,
+      ox: x,
+      oy: y,
+      xMin: x + (8 - r.left),
+      xMax: x + (window.innerWidth - 8 - r.right),
+      yMin: y + (8 - r.top),
+      yMax: y + (window.innerHeight - 8 - r.bottom),
+    }
+    exportDragMoved.current = false
+    // jsdom 没有 PointerEvent 的 capture API,?. 让拖拽在测试里也可达。
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+
+  const onExportBarPointerMove = (e: ReactPointerEvent<HTMLElement>): void => {
+    const d = exportDragRef.current
+    if (!d) return
+    const dx = e.clientX - d.px
+    const dy = e.clientY - d.py
+    if (Math.abs(dx) + Math.abs(dy) > 4) exportDragMoved.current = true
+    setExportBarPos({
+      x: Math.min(Math.max(d.ox + dx, d.xMin), d.xMax),
+      y: Math.min(Math.max(d.oy + dy, d.yMin), d.yMax),
+    })
+  }
+
+  const onExportBarPointerUp = (): void => {
+    if (exportDragRef.current === null) return
+    exportDragRef.current = null
+    try {
+      localStorage.setItem(EXPORT_BAR_POS_KEY, JSON.stringify(exportBarPosRef.current))
+    } catch {
+      /* 记位失败无害:下一次会话回默认居中。 */
+    }
+  }
+
+  /** 尺寸一变就把浮条夹回视口:芯片贴边后点开还原、终态展开长目录、
+   *  窗口缩放——都以当时的真实矩形为准,与拖拽时的钳制互补。 */
+  const clampExportBar = useCallback(() => {
+    const bar = exportBarRef.current
+    if (!bar) return
+    const r = bar.getBoundingClientRect()
+    if (r.width === 0 && r.height === 0) return
+    const { dx, dy } = exportBarClampShift(r, window.innerWidth, window.innerHeight)
+    if (dx !== 0 || dy !== 0) {
+      const { x, y } = exportBarPosRef.current
+      setExportBarPos({ x: x + dx, y: y + dy })
+    }
+  }, [])
+
+  const exportBarMounted = exportTasks.some(
+    (t) => exportDismissed[t.bookHash] !== (t.status.finishedAt ?? 'running'),
+  )
+  useLayoutEffect(() => {
+    const bar = exportBarRef.current
+    if (!bar) return
+    // ResizeObserver 只对尺寸变化开火(拖拽改位置不触发,互不干扰);
+    // 侧栏开合会平移默认锚点,也在这里夹一次。
+    const ro = new ResizeObserver(clampExportBar)
+    ro.observe(bar)
+    window.addEventListener('resize', clampExportBar)
+    clampExportBar()
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', clampExportBar)
+    }
+  }, [exportBarMounted, sidebarOpen, clampExportBar])
   useEffect(() => {
     let cancelled = false
     const tick = (): void => {
       void fetchExportStatuses()
         .then((tasks) => {
-          if (!cancelled) setExportTasks(tasks)
+          if (cancelled) return
+          setExportTasks(tasks)
+          // 「取消中」标记跟着轮询结算:见到终态就摘,防重跑被旧标记污染。
+          if (tasks.some((t) => t.status.phase !== 'running')) {
+            setExportCancelling((prev) => {
+              const next = { ...prev }
+              for (const t of tasks) {
+                if (t.status.phase !== 'running') delete next[t.bookHash]
+              }
+              return Object.keys(next).length === Object.keys(prev).length ? prev : next
+            })
+          }
         })
         .catch(() => {})
     }
@@ -1771,32 +1936,173 @@ export function LibraryScreen({ onOpenBook, onOpenParallel }: LibraryScreenProps
         />
       )}
 
-      {/* 有声书导出任务(plan B8):Rust 后台合成,书架用一行浮条跟进进度。
-          只在有任务时占位;终态保留到下次任务,便于看清刚才那次的结果。 */}
-      {exportTasks.length > 0 && (
-        <output className="tts-export-bar">
-          {exportTasks.map((task) => (
-            <div key={task.bookHash} className="tts-export-bar-row">
-              <span>
-                {task.status.phase === 'running' &&
-                  `有声书导出中 · ${task.status.block}/${task.status.totalBlocks} 块`}
-                {task.status.phase === 'done' && '有声书导出完成'}
-                {task.status.phase === 'error' && `有声书导出失败:${task.status.error ?? ''}`}
-                {task.status.phase === 'cancelled' && '有声书导出已取消(可续跑)'}
-              </span>
-              {task.status.phase === 'running' && (
+      {/* 有声书导出任务(plan B8):任务在 Rust 后台跑,书架用玻璃胶囊跟进。
+          与 .shelf-bulk 同家族;运行中默认收成一行(百分比 + 底边发丝进度),
+          目录/错误等长信息放折叠区,终态默认展开。可最小化成芯片、可拖拽
+          记位;终态可关闭(重跑自动回来)。 */}
+      {exportTasks.some(
+        (t) => exportDismissed[t.bookHash] !== (t.status.finishedAt ?? 'running'),
+      ) && (
+        <output
+          ref={exportBarRef}
+          className="tts-export-bar"
+          style={
+            {
+              '--bar-dx': `${exportBarPos.x}px`,
+              '--bar-dy': `${exportBarPos.y}px`,
+            } as React.CSSProperties
+          }
+        >
+          {exportTasks.map((task) => {
+            const { status } = task
+            const runToken = status.finishedAt ?? 'running'
+            if (exportDismissed[task.bookHash] === runToken) return null
+            const pct =
+              status.totalBlocks > 0 ? Math.round((status.block / status.totalBlocks) * 100) : 0
+            const minimized = exportMinimized[task.bookHash] === runToken
+            const collapsed = exportCollapse[task.bookHash] ?? status.phase === 'running'
+            const cancelling =
+              exportCancelling[task.bookHash] === true && status.phase === 'running'
+            const glyph = (
+              <>
+                {status.phase === 'running' && <span className="tts-export-pill-glyph" />}
+                {status.phase === 'done' && <Check size={14} weight="bold" />}
+                {status.phase === 'error' && <X size={14} weight="bold" />}
+                {status.phase === 'cancelled' && <Pause size={14} weight="bold" />}
+              </>
+            )
+            const dragProps = {
+              onPointerDown: onExportBarPointerDown,
+              onPointerMove: onExportBarPointerMove,
+              onPointerUp: onExportBarPointerUp,
+            }
+            if (minimized) {
+              return (
                 <button
+                  key={task.bookHash}
                   type="button"
-                  className="btn"
-                  onClick={() =>
-                    void invokeCommand('tts.export.cancel', { bookHash: task.bookHash })
+                  className="tts-export-pill is-mini"
+                  data-phase={status.phase}
+                  aria-label={
+                    status.phase === 'running'
+                      ? `恢复导出进度显示(当前 ${pct}%)`
+                      : '恢复导出通知显示'
                   }
+                  onClick={() => {
+                    // 拖拽松手后的 click 不算「点开」。
+                    if (exportDragMoved.current) return
+                    setExportMinimized((prev) => {
+                      const next = { ...prev }
+                      delete next[task.bookHash]
+                      return next
+                    })
+                  }}
+                  {...dragProps}
                 >
-                  取消
+                  <span className="tts-export-pill-state" aria-hidden>
+                    {glyph}
+                  </span>
+                  {status.phase === 'running' && (
+                    <span className="tts-export-pill-mini-text">{pct}%</span>
+                  )}
                 </button>
-              )}
-            </div>
-          ))}
+              )
+            }
+            const detail =
+              status.phase === 'running'
+                ? `${status.block}/${status.totalBlocks} 块 · ${(status.bytes / 1024 / 1024).toFixed(1)} MB`
+                : status.phase === 'done'
+                  ? status.outputDir
+                    ? `→ ${status.outputDir}`
+                    : null
+                  : status.phase === 'error'
+                    ? (status.error ?? '未知错误')
+                    : null
+            return (
+              <div
+                key={task.bookHash}
+                className="tts-export-pill"
+                data-phase={status.phase}
+                data-collapsed={collapsed || undefined}
+                {...dragProps}
+              >
+                <div className="tts-export-pill-row">
+                  <span className="tts-export-pill-state" aria-hidden>
+                    {glyph}
+                  </span>
+                  <span className="tts-export-pill-text">
+                    {status.phase === 'running' && (cancelling ? '取消中…' : `导出中 · ${pct}%`)}
+                    {status.phase === 'done' && '导出完成'}
+                    {status.phase === 'error' && '导出失败'}
+                    {status.phase === 'cancelled' && '已取消(可续跑)'}
+                  </span>
+                  <button
+                    type="button"
+                    className="tts-export-pill-toggle"
+                    aria-label="缩小导出通知条"
+                    onClick={() =>
+                      setExportMinimized((prev) => ({ ...prev, [task.bookHash]: runToken }))
+                    }
+                  >
+                    <Minus size={12} weight="bold" aria-hidden />
+                  </button>
+                  {detail !== null && (
+                    <button
+                      type="button"
+                      className="tts-export-pill-toggle"
+                      aria-expanded={!collapsed}
+                      aria-label={collapsed ? '展开导出详情' : '收起导出详情'}
+                      onClick={() =>
+                        setExportCollapse((prev) => ({ ...prev, [task.bookHash]: !collapsed }))
+                      }
+                    >
+                      <CaretDown size={12} weight="bold" aria-hidden />
+                    </button>
+                  )}
+                  {/* 尾位一颗 X 双语义:运行中 = 取消任务(缓存保留可续跑),
+                      终态 = 关闭通知。点击即乐观进入「取消中…」。 */}
+                  <button
+                    type="button"
+                    className="tts-export-pill-toggle"
+                    aria-label={status.phase === 'running' ? '取消导出' : '关闭导出通知'}
+                    title={
+                      status.phase === 'running' ? '取消导出(已完成章节保留,可续跑)' : '关闭通知'
+                    }
+                    disabled={cancelling}
+                    onClick={() => {
+                      if (status.phase === 'running') {
+                        setExportCancelling((prev) => ({ ...prev, [task.bookHash]: true }))
+                        void invokeCommand('tts.export.cancel', { bookHash: task.bookHash }).catch(
+                          () => {
+                            // IPC 失败就退回运行态显示,别把「取消中…」挂死。
+                            setExportCancelling((prev) => {
+                              const next = { ...prev }
+                              delete next[task.bookHash]
+                              return next
+                            })
+                          },
+                        )
+                      } else {
+                        setExportDismissed((prev) => ({ ...prev, [task.bookHash]: runToken }))
+                      }
+                    }}
+                  >
+                    <X size={12} weight="bold" aria-hidden />
+                  </button>
+                </div>
+                {detail !== null && (
+                  <div className="tts-export-pill-detail-clip">
+                    <div className="tts-export-pill-detail">{detail}</div>
+                  </div>
+                )}
+                {status.phase === 'running' && status.totalBlocks > 0 && (
+                  <div className="tts-export-pill-track" aria-hidden>
+                    <div className="tts-export-pill-fill" style={{ width: `${pct}%` }} />
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </output>
       )}
 

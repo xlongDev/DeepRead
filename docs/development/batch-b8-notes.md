@@ -7,7 +7,7 @@
 - 磁盘预检:`df -k -P`(unix)/ `wmic`(windows)拿剩余空间,按 1.5KB/字估算,不足即拒并给两个数;拿不到剩余空间就放行(fail-open)。
 - 失败块退避重试(3 次尝试,间隔 1s/3s —— 零间隔连打在整书长跑中被 Edge 连续抖动打穿过);纯标点/符号块(Edge 不返回音频,重试无济于事)直接跳过;取消 = 块间旗标,已完成章节保留。
 - **ID3v2.3 标签**(手搓 ~60 行,零新依赖):每个 MP3 头部写 TIT2 章节 / TALB 书名 / TPE1 作者 / TRCK 轨号,播放器按书归组;UTF-16LE+BOM 编码,空值帧省掉。续跑时对无标签旧章整文件补写(读 3 字节判 ID3,MB 级 IO 一次性)。
-- **前端**:块清单构建(`lib/tts-export.ts` 的 `planExportChapters`)与听书同一套 `buildSpeechUnits` 句级单元;TtsDrawer 语音面板"导出有声书"入口(选目录 → 提交 → 可关抽屉);进度走**轮询**(抽屉内 1.2s、书架浮条 2s),书架常驻浮条展示任务进度/取消。
+- **前端**:块清单构建(`lib/tts-export.ts` 的 `planExportChapters`)与听书同一套 `buildSpeechUnits` 句级单元;TtsDrawer 语音面板"导出有声书"入口(选目录 → 提交 → 可关抽屉);进度走**轮询**(抽屉内 1.2s、书架浮条 2s)。书架浮条 = 玻璃胶囊(与 .shelf-bulk 同家族、锚在**内容列右下角**,`--sidebar-w` 与网格同源):运行中默认收成一行 + 底边发丝进度,折叠区放目录/错误,**可最小化芯片、可拖拽记位(`deepread.library.exportBarPos`,右下角锚点语义)、终态可关闭**——关闭/最小化以「当时的 finishedAt」为令牌,重跑自动恢复显示;取消有乐观反馈(点 X 即「取消中…」,Rust 重试空档也响应旗标)。
 - **取文走离线解析**(真书验证撞出的严重 bug 修复):导出原料最初用 `getSectionText(index)` 逐章取文,但渲染器只挂当前阅读位置附近一两节 —— 挂载窗口外的章节白等 2s 再回退成**在屏那章的文本**,表现为整书各章 mp3 尺寸雷同(同一段音频重复 N 次)、大书点导出后「准备中」挂死(每节 2s × N)。修复:契约新增 `readableText.getSectionTextOffline(index)`,走内核 `createDocument()` 离线解析(TXT/MD/PDF/EPUB/MOBI 全支持),不依赖挂载、秒级完成。
 
 ## 与计划的偏离(有意为之)
